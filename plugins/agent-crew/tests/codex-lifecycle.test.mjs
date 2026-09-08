@@ -17,12 +17,12 @@
  * Run: node tests/codex-lifecycle.test.mjs
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, symlinkSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { addJob, claimRunSlot, createRun, readManifest } from "../lib/manifest.mjs";
 import { resolveLogDir } from "../adapters/codex.mjs";
 import {
-  CREW_CLI, installFakeCodex, makeChecker, runRel, tmpWorkspace, under, writeFile,
+  CREW_CLI, installFakeCodex, makeChecker, runRel, tmpWorkspace, under, writeFile, trySymlink
 } from "./helpers.mjs";
 
 const t = makeChecker("codex-lifecycle");
@@ -161,10 +161,18 @@ const idleRun = openRun(ws, "idle", { evidence: "idle.md" });
   writeFile(join(logDir, ".keep"), "");
   // A dangling link: existsSync() follows it and answers "free", so the sidecar
   // guard lets the run start -- and then every append fails.
-  symlinkSync("/nonexistent/dir/x", join(logDir, "broken-log.codex-stream.jsonl"));
-  const brokenLog = dispatch(ws, run, { mode: "ok" });
-  t.check("an unwritable log does not fail a finished job", brokenLog.json?.status, "done");
-  t.check("...and the reason is recorded", String(brokenLog.json?.streamBroken).includes("ENOENT"), "true");
+  const noSymlink = trySymlink(
+    join(ws, "nonexistent-dir", "x"),
+    join(logDir, "broken-log.codex-stream.jsonl"),
+  );
+  if (noSymlink) {
+    t.skip("an unwritable log does not fail a finished job", noSymlink);
+    t.skip("...and the reason is recorded", noSymlink);
+  } else {
+    const brokenLog = dispatch(ws, run, { mode: "ok" });
+    t.check("an unwritable log does not fail a finished job", brokenLog.json?.status, "done");
+    t.check("...and the reason is recorded", String(brokenLog.json?.streamBroken).includes("ENOENT"), "true");
+  }
 }
 
 // --- M5: a job that needs a human must not ping as a clean success --------

@@ -309,6 +309,19 @@ export function codexRun(options) {
           context: `codex run, ${events} stream events, log at ${streamPath}`,
         });
       } catch (err) {
+        // A job that produced no usable evidence is the case these facts exist
+        // for: without them the ledger says "failed" and nothing about the
+        // runtime that failed. `stream` matters most -- it is the path to the
+        // raw log, and nothing else records it on this path.
+        err.runtimeFacts = {
+          codexVersion: version,
+          stream: streamPath,
+          streamEvents: events,
+          exitCode: code,
+          signal,
+          killedFor,
+          bin: bin.path,
+        };
         rejectRun(err);
         return;
       }
@@ -379,10 +392,14 @@ export function codexRun(options) {
       if (settled) return;
       settled = true;
       clearTimers();
-      rejectRun(new CodexRunError(
+      const failure = new CodexRunError(
         `could not run codex: ${err.message}`,
         `resolved to ${bin.path}; check the install, or set AGENT_CREW_CODEX_BIN`,
-      ));
+      );
+      // Nothing ran, so there is no version to report -- but which binary was
+      // tried is the whole question when a spawn fails.
+      failure.runtimeFacts = { bin: bin.path, stream: streamPath };
+      rejectRun(failure);
     });
 
     // exit, not close: see the header. The drain window gives stdout a bounded

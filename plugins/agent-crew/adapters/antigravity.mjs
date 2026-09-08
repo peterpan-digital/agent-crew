@@ -143,11 +143,27 @@ function runHeadless({
       + " a tool it needed was probably blocked -- check the brief and permissions";
   }
 
-  const verdict = judgeJob(evidenceAbs, {
-    runtimeOk: runtimeDetail === null,
-    runtimeDetail,
-    context: `agy conversation ${parsed?.conversation_id ?? "unknown"}`,
-  });
+  let verdict;
+  try {
+    verdict = judgeJob(evidenceAbs, {
+      runtimeOk: runtimeDetail === null,
+      runtimeDetail,
+      context: `agy conversation ${parsed?.conversation_id ?? "unknown"}`,
+    });
+  } catch (err) {
+    // A job with no usable evidence is exactly where these facts are wanted:
+    // otherwise the ledger records "failed" and nothing about what ran. Which
+    // binary, which prompt mode, and the conversation id are the three things a
+    // person needs to go look, and none of them survive the message alone.
+    err.runtimeFacts = {
+      bin: bin.path,
+      promptMode: mode,
+      conversationId: parsed?.conversation_id ?? null,
+      exitCode: proc.status ?? null,
+      usage: parsed?.usage ?? null,
+    };
+    throw err;
+  }
 
   return {
     worker: "antigravity",

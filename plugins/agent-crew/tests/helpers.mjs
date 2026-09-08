@@ -6,7 +6,7 @@
  * the process boundary -- exit codes, files on disk, manifest contents. A runner
  * that can spawn a process and compare strings is the whole requirement.
  */
-import { chmodSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -30,6 +30,7 @@ export const under = (root, ...parts) => [root, ...parts].join("/");
 
 export function makeChecker(title) {
   let pass = 0;
+  let skipped = 0;
   const failures = [];
   return {
     check(name, got, want) {
@@ -40,12 +41,44 @@ export function makeChecker(title) {
       if (!ok) console.log(`        got  ${got}\n        want ${want}`);
       return ok;
     },
+    /**
+     * A case the platform cannot run. Printed, counted, and never silent: a
+     * skip that looks like a pass is how a suite reports green on a machine
+     * where half of it never executed.
+     */
+    skip(name, why) {
+      skipped += 1;
+      console.log(`  SKIP  ${name}\n        ${why}`);
+    },
     /** Exit code doubles as the CI signal, so a runner needs nothing else. */
     finish() {
-      console.log(`\n${title}: ${pass} passed, ${failures.length} failed`);
+      const tail = skipped ? `, ${skipped} skipped` : "";
+      console.log(`\n${title}: ${pass} passed, ${failures.length} failed${tail}`);
       return failures.length === 0;
     },
   };
+}
+
+/**
+ * Create a symlink, or report that this machine will not allow it.
+ *
+ * Windows needs Developer Mode or an elevated shell to create one, so a suite
+ * that calls `symlinkSync` directly fails there for a reason that has nothing
+ * to do with the code under test -- and the plugin targets Windows. The three
+ * cases that need a symlink are testing real behaviour (a report path or a run
+ * directory that is a link, and a log path that dangles), so they are kept and
+ * skipped rather than rewritten into something weaker.
+ */
+export function trySymlink(target, path, type) {
+  try {
+    symlinkSync(target, path, type);
+    return null;
+  } catch (err) {
+    if (err.code === "EPERM" || err.code === "EACCES") {
+      return `symlink không tạo được (${err.code}) — Windows cần Developer Mode hoặc shell admin`;
+    }
+    throw err;
+  }
 }
 
 /**

@@ -41,6 +41,31 @@ const RECORDED_FIELDS = [
   "promptMode", "killedFor", "bin",
 ];
 
+/**
+ * Diagnostic facts an adapter attaches to the error it throws.
+ *
+ * The failure path used to record only status, timestamps and the message,
+ * which lost the facts collected specifically to explain a failure -- the codex
+ * version is captured before the run precisely so that "a flag changed under
+ * us" is diagnosable, and after this lifecycle moved into a shared module it
+ * survived only on the success path. Exactly backwards.
+ *
+ * Filtered through the same whitelist as a success, so an error object cannot
+ * write arbitrary keys into the ledger.
+ */
+function factsFrom(err) {
+  const facts = err?.runtimeFacts;
+  if (!facts || typeof facts !== "object") return {};
+  const out = {};
+  for (const field of RECORDED_FIELDS) {
+    // `status` and the timestamps belong to the failure record being built, not
+    // to whatever the adapter observed; they are set explicitly by the caller.
+    if (field === "status" || field === "startedAt" || field === "endedAt") continue;
+    if (facts[field] !== undefined) out[field] = facts[field];
+  }
+  return out;
+}
+
 /** Exit 3: the job finished but a human has to look before it counts. */
 export function needsHuman(result) {
   return Boolean(result.runtimeVerdict)
@@ -137,6 +162,7 @@ export async function runJob({ name, adapter, opts, log = console }) {
       try {
         const record = claimed ? updateJob : recordUnclaimedFailure;
         record(manifestPath, seq, {
+          ...factsFrom(err),
           status: "failed",
           startedAt: dispatchedAt,
           endedAt: new Date().toISOString(),

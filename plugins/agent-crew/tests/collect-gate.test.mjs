@@ -11,14 +11,14 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import {
-  existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync,
+  existsSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRun, addJob, updateJob, readManifest } from "../lib/manifest.mjs";
 import { collectRun, abandonJob, writeRunReport } from "../lib/collect.mjs";
 import {
-  CREW_CLI, RUN_ID, RUN_REL, makeChecker, runRel, tmpWorkspace, under, writeFile,
+  CREW_CLI, RUN_ID, RUN_REL, makeChecker, runRel, tmpWorkspace, under, writeFile, trySymlink
 } from "./helpers.mjs";
 
 /** The CLI, not the library: a flag that silently disables a check is only visible here. */
@@ -1114,12 +1114,17 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   // target -- a file outside the run, or outside the repo. Exclusive create
   // refuses, because the kernel looks at the link itself.
   const linked = ev("260825-0002-linked.md");
-  symlinkSync(join(green.ws, "escaped-target.md"), join(green.ws, linked));
-  let viaLink = null;
-  try { writeRunReport(ok, readManifest(green.manifestPath), { path: linked, workspace: green.ws }); }
-  catch (err) { viaLink = err.message; }
-  t.check("a dangling symlink at the report path is refused", /đã có report/.test(viaLink ?? ""), true);
-  t.check("...and nothing is written through it", existsSync(join(green.ws, "escaped-target.md")), false);
+  const noLink = trySymlink(join(green.ws, "escaped-target.md"), join(green.ws, linked));
+  if (noLink) {
+    t.skip("a dangling symlink at the report path is refused", noLink);
+    t.skip("...and nothing is written through it", noLink);
+  } else {
+    let viaLink = null;
+    try { writeRunReport(ok, readManifest(green.manifestPath), { path: linked, workspace: green.ws }); }
+    catch (err) { viaLink = err.message; }
+    t.check("a dangling symlink at the report path is refused", /đã có report/.test(viaLink ?? ""), true);
+    t.check("...and nothing is written through it", existsSync(join(green.ws, "escaped-target.md")), false);
+  }
 
   // The confinement check compares strings, so it cannot see that the run
   // directory itself is a link. Resolving it on disk is what stops the escape.
@@ -1137,12 +1142,17 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   mkdirSync(outside, { recursive: true });
   const realRunDir = join(escape.ws, ".crew", "runs", RUN_ID);
   renameSync(realRunDir, `${realRunDir}-real`);
-  symlinkSync(outside, realRunDir);
-  let symDir = null;
-  try { writeRunReport(okEscape, escapeManifest, { path: reportRel, workspace: escape.ws }); }
-  catch (err) { symDir = err.message; }
-  t.check("a symlinked run directory is refused", /không thật nằm ở/.test(symDir ?? ""), true);
-  t.check("...and nothing lands outside the run", existsSync(join(outside, "260825-0000-nghiem-thu.md")), false);
+  const noDirLink = trySymlink(outside, realRunDir, "dir");
+  if (noDirLink) {
+    t.skip("a symlinked run directory is refused", noDirLink);
+    t.skip("...and nothing lands outside the run", noDirLink);
+  } else {
+    let symDir = null;
+    try { writeRunReport(okEscape, escapeManifest, { path: reportRel, workspace: escape.ws }); }
+    catch (err) { symDir = err.message; }
+    t.check("a symlinked run directory is refused", /không thật nằm ở/.test(symDir ?? ""), true);
+    t.check("...and nothing lands outside the run", existsSync(join(outside, "260825-0000-nghiem-thu.md")), false);
+  }
 }
 
 // --- the cost-gate line is the one place evidence text reaches stdout -------
