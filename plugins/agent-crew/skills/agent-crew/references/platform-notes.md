@@ -28,8 +28,29 @@ Không cần MCP, không cần credential, không cần dịch vụ ngoài.
 | 3 | Brief đi qua argv là không an toàn với shim `.cmd` | Codex nhận brief qua **stdin** nên không đụng argv. `agy` chỉ nhận qua `-p`, nên khi gặp shim, adapter tự chuyển sang `file-pointer`: argv chỉ mang đường dẫn, worker tự đọc brief từ file. Việc chuyển được **ghi vào manifest** (`promptMode`), không làm im lặng |
 | 4 | Windows không có process group âm, nên `kill(-pid)` của watchdog không chạy | `killTree` dùng `taskkill /PID x /T /F` trên Windows, `kill(-pid)` trên POSIX. Không có bậc "polite" trên Windows — `/F` là bắt buộc vì một CLI đang chờ stdin không đáp lời đóng nhẹ nhàng |
 | 5 | `git status` in dấu `/`, `node:path` in dấu `\` trên Windows | Mọi so sánh đường dẫn đi qua `comparablePath`/`pathStartsWith`: chuẩn về `/`, và **lowercase trên Windows** vì Windows không phân biệt hoa thường. Không làm bước này thì cổng phạm vi ghi khớp **không gì cả** — và "không khớp gì" đọc ra thành "không có vi phạm nào" |
-| 6 | `if (import.meta.url === \`file://${process.argv[1]}\`)` **luôn false** trên Windows (`file:///C:/...` vs `C:\...`) | Chỉ còn một entrypoint (`bin/crew.mjs`) và nó dùng `pathToFileURL`. Bản gốc có 4 file mang lỗi này — mỗi file sẽ load, không làm gì, và exit 0 |
+| 6 | `if (import.meta.url === \`file://${process.argv[1]}\`)` **luôn false** trên Windows (`file:///C:/...` vs `C:\...`) | Chỉ còn một entrypoint (`bin/crew.mjs`) và nó **không có guard nào cả** — xem mục dưới. Bản gốc có 4 file mang lỗi này; mỗi file sẽ load, không làm gì, và exit 0 |
 | 7 | Skill cũ dùng `date +%y%m%d`, `mkdir -p`, `tail -f`, và `${f/a/b}` của bash | Không còn dòng shell nào trong `SKILL.md`. Mọi thứ đi qua `crew new-run`, `crew retry-log`, `crew watch` |
+
+## Vì sao entrypoint không có guard "am I main"
+
+Viết lại bằng `pathToFileURL` thay vì ghép chuỗi **chỉ sửa được cách viết trên
+Windows**, và vẫn trả lời sai mọi khi hai đường dẫn là hai cách viết của cùng một file:
+`import.meta.url` đã resolve qua symlink, còn `process.argv[1]` là đúng cái người gọi gõ.
+
+Đo được: chạy `bin/crew.mjs` từ `/tmp/...` trên macOS — `/tmp` là symlink tới
+`/private/tmp` — so `file:///private/tmp/...` với `file:///tmp/...`, guard false, lệnh
+**exit 0 mà không in gì**. Đó là kiểu hỏng tệ nhất một tool như này có thể có: thành công
+im lặng. Windows còn ba cách viết nữa gây đúng chuyện đó: hoa/thường của ký tự ổ đĩa, tên
+8.3, và đường UNC.
+
+Không file nào import `bin/crew.mjs` — mọi caller đều spawn nó, test cũng spawn — nên
+điều kiện đó không có việc gì để làm. File **là** chương trình: nạp là chạy.
+`tests/cli-entrypoint.test.mjs` khoá tính chất này, gồm một ca chạy qua đường symlink.
+
+Cùng lý do, entrypoint đặt `process.exitCode` thay vì gọi `process.exit(code)`:
+`exit()` bỏ những gì stdout còn đang xếp hàng, mà trên pipe — cách mọi caller đọc nó,
+kể cả Bash tool — `console.log` **có** xếp hàng. Gọi `exit()` làm output rỗng ngẫu nhiên
+theo độ dài.
 
 ## Chưa verify trên Windows
 

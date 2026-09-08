@@ -11,11 +11,24 @@
  *     scripts would have loaded, done nothing, and exited 0. Four silent no-ops.
  *   - Argument parsing was duplicated per script and had already drifted.
  *
+ * There is no "am I the main module" guard here at all, and that is deliberate.
+ * Writing it with `pathToFileURL` instead of string concatenation fixes the
+ * Windows spelling and still gets the answer wrong whenever the two paths are
+ * spellings of the same file: `import.meta.url` is resolved through symlinks
+ * while `process.argv[1]` is whatever the caller typed. Measured -- running
+ * this file from `/tmp/...` on macOS, where `/tmp` is a symlink to
+ * `/private/tmp`, compared `file:///private/tmp/...` against `file:///tmp/...`,
+ * so the guard was false and the command exited 0 having printed nothing. That
+ * is the worst failure this tool can have: a silent success. Windows has the
+ * same hazard in three more spellings (drive-letter case, 8.3 short names, UNC).
+ *
+ * Nothing imports this file -- every caller spawns it, and the tests spawn it
+ * too -- so the condition has no job to do. The file is the program: it runs.
+ *
  * Exit codes are the interface. A crew job is dispatched into the background, so
  * the exit code is the only ping the dispatcher gets, and each subcommand
  * documents its own.
  */
-import { pathToFileURL } from "node:url";
 import { findWorkspace } from "../lib/config.mjs";
 
 const USAGE = `crew — dispatch and verify parallel agent jobs
@@ -73,15 +86,17 @@ export async function main(argv) {
   return run(rest, { cwd: findWorkspace() });
 }
 
-// pathToFileURL, not string concatenation: the naive comparison is the Windows
-// bug described in the header.
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2))
-    .then((code) => process.exit(code ?? 0))
-    .catch((err) => {
-      // `detail` is where the guards put the "→ do this instead" line, and it
-      // is the half that makes an error actionable.
-      console.error(`crew: ${err.message}`);
-      process.exit(2);
-    });
-}
+main(process.argv.slice(2))
+  .then((code) => {
+    // `exitCode`, not `process.exit(code)`: exit() drops stdout writes that are
+    // still queued, and on a pipe -- which is how every caller reads this, the
+    // Bash tool included -- console.log is queued rather than synchronous.
+    // Setting the code lets Node flush and then exit with it.
+    process.exitCode = code ?? 0;
+  })
+  .catch((err) => {
+    // `detail` is where the guards put the "→ do this instead" line, and it is
+    // the half that makes an error actionable.
+    console.error(`crew: ${err.message}`);
+    process.exitCode = 2;
+  });
