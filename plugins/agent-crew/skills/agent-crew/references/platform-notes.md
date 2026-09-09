@@ -52,6 +52,39 @@ Cùng lý do, entrypoint đặt `process.exitCode` thay vì gọi `process.exit(
 kể cả Bash tool — `console.log` **có** xếp hàng. Gọi `exit()` làm output rỗng ngẫu nhiên
 theo độ dài.
 
+## Transport `app`: chỗ khác nhau nhiều nhất
+
+`headless` chỉ spawn một CLI. `app` phải **đọc trạng thái máy đang chạy**, và đó là chỗ
+hai platform không dùng chung một dòng code nào:
+
+| Việc | POSIX | Windows |
+| --- | --- | --- |
+| Liệt kê process + argv đầy đủ | `ps -Ao pid,command` | `Get-CimInstance Win32_Process` (JSON) |
+| Cổng loopback của một pid | `lsof -nP -a -p <pid> -i` | `Get-NetTCPConnection -State Listen -OwningProcess` |
+| Đọc snapshot conversation DB | `sqlite3` (macOS có sẵn) | **không có** — fallback tự tắt |
+
+Cả ba nằm trong `lib/os-probe.mjs`. Không có implementation chung để gộp: hai bên không
+thống nhất thứ gì ngoài **hình dạng câu trả lời**, nên seam đặt ở giá trị trả về.
+
+Ba điều đáng biết:
+
+1. **Không hardcode đường dẫn cài đặt Antigravity.** Bản gốc lấy `agentapi` từ
+   `~/.gemini/antigravity/bin/agentapi`, mà trên macOS file đó là wrapper 100 byte
+   `#!/bin/sh` exec sang `/Applications/Antigravity.app/.../language_server agentapi "$@"`
+   — vừa là shebang POSIX vừa là đường dẫn macOS, tức hai lý do riêng biệt để không bao
+   giờ chạy trên Windows. Bản này lấy binary từ **argv của chính process đang chạy**. Đó
+   không phải cách lách: nó là câu trả lời đúng hơn trên cả hai platform, vì nó chỉ có thể
+   trỏ vào binary đang thật sự phục vụ app này, thay vì một install nào đó mà đường dẫn
+   tình cờ trỏ tới.
+2. **Khớp process phải khớp trên token executable, không phải substring cả dòng.** Đo lúc
+   dựng: tìm substring trả về 3 process trên máy chỉ chạy **một** app — hai cái kia là
+   chính process probe và shell của nó, vì argv của chúng chứa đúng những chuỗi đang tìm.
+   Trên Windows còn thêm một biến thể: `CommandLine` bọc executable trong dấu ngoặc kép
+   khi đường dẫn có dấu cách, tức ca `C:\Program Files\...` là ca bình thường.
+3. **`sqlite3` là tuỳ chọn, không phải điều kiện.** Nó chỉ phục vụ một fallback (worker
+   xong mà không ghi dòng `Status:`). Bắt Windows cài sqlite3 để mở được cả transport,
+   cho một tín hiệu mà transport không dùng để quyết định gì, là đổi sai.
+
 ## Chưa verify trên Windows
 
 Nói thẳng chỗ này vì nó quyết định mức tin cậy:
@@ -64,6 +97,16 @@ Nói thẳng chỗ này vì nó quyết định mức tin cậy:
 - **`codex` trên Windows là `.cmd` hay `.exe`**: chưa kiểm. Cả hai đường đều có code.
 - **Đường dẫn có dấu cách** (`C:\Users\Ten Nguoi Dung\...`): quoting đã viết theo luật
   CreateProcess nhưng chưa chạy thật.
+- **`Get-CimInstance` / `Get-NetTCPConnection`**: viết theo cmdlet chuẩn, chưa chạy thật.
+  Cả hai có sẵn trên Windows 10/Server 2016 trở lên; máy cũ hơn thì transport `app` của
+  Antigravity không dùng được, `headless` vẫn chạy.
+- **Antigravity app trên Windows**: process của nó có mang `--subclient_type hub` và
+  `--app_data_dir antigravity` như trên macOS hay không — chưa kiểm. Nếu không, discovery
+  báo "app không chạy" trong khi app đang chạy. Đường thoát: `AGENT_CREW_AGENTAPI` trỏ
+  thẳng vào `language_server.exe`.
+- **`CommandLine` là `null` khi process thuộc user khác.** Dòng đó bị bỏ chứ không bị báo
+  là process không có argv — nhưng nếu Antigravity chạy dưới user khác thì nó sẽ vô hình
+  với discovery.
 
 Gặp lỗi ở một trong các chỗ này thì đường thoát nhanh nhất là trỏ thẳng vào binary:
 
@@ -77,6 +120,14 @@ set AGENT_CREW_AGY_BIN=C:\full\path\to\agy.exe
 # macOS / Linux
 export AGENT_CREW_CODEX_BIN=/usr/local/bin/codex
 ```
+
+Transport `app` có ba env var riêng, cùng luật:
+
+| Env var | Trỏ vào |
+| --- | --- |
+| `AGENT_CREW_AGENTAPI` | `language_server` (hoặc `.exe`) của app Antigravity, hoặc một entrypoint agentapi |
+| `AGENT_CREW_CODEX_COMPANION` | `codex-companion.mjs` của plugin `openai-codex` |
+| `AGENT_CREW_SQLITE` | `sqlite3`, chỉ để bật lại fallback step-status |
 
 Env var được ưu tiên tuyệt đối. Trỏ vào một đường dẫn không tồn tại thì đó **là** lỗi —
 nó không âm thầm quay về tra PATH, vì như vậy là trao cho người dùng một binary khác cái

@@ -26,7 +26,15 @@ const LOCK_POLL_MS = 50;
  * "written before that field existed". The version is still recorded, and the
  * gate still reads it, so a future field can be introduced the same way.
  */
-export const MANIFEST_VERSION = 1;
+/**
+ * 2 added `transport` to every job.
+ *
+ * The bump exists so `assertTransport` can tell "this manifest predates the
+ * field" from "this job has no transport", which are different answers with the
+ * same shape. A version 1 run stays readable; it just cannot be asked a
+ * question it never recorded.
+ */
+export const MANIFEST_VERSION = 2;
 
 class ManifestError extends Error {
   constructor(message) {
@@ -295,6 +303,41 @@ export const ROLES = new Set(["owner", "assist"]);
 export const WORKERS = new Set(["antigravity", "codex", "claude"]);
 
 /**
+ * How the harness reaches the worker. Two axes, not one:
+ *
+ *   role       who answers for the job's acceptance. The reason.
+ *   transport  what the harness can see while it runs. The consequence.
+ *
+ * They were briefly the same field, and that conflated two questions with
+ * different answers: the same job is judged by its role no matter which pipe it
+ * travelled down. Keeping them apart is also what makes an old run still
+ * readable -- you can ask what a past dispatch was based on.
+ */
+export const TRANSPORTS = new Set(["app", "headless"]);
+
+/**
+ * Headless is the default for both roles, and it is a measured default rather
+ * than a convenience.
+ *
+ * Measured 2026-08-25 across six real app-transport jobs: the Antigravity app
+ * reports success unconditionally with no usage, no response text and no turn
+ * count -- losing the silent-failure detection headless has, where SUCCESS plus
+ * an empty response is how a blocked permission prompt shows up. The Codex app
+ * path returns no exit code. And the app thread does not even render live: the
+ * rollout was on disk 8 seconds in but only visible after quitting and
+ * reopening the app.
+ *
+ * So `app` buys less observability, not more, and the thing it is usually
+ * reached for -- "I will watch it to be sure" -- is the thing it does not
+ * deliver. It stays available because three cases genuinely need it (a job that
+ * will hit a permission prompt a human must answer; open-ended work with no
+ * acceptance criteria written yet; and a thread to resume in a later session),
+ * and every one of those is a reason someone can write down. Hence the note
+ * requirement below.
+ */
+const DEFAULT_TRANSPORT = { owner: "headless", assist: "headless" };
+
+/**
  * `role` is required, and there is no default.
  *
  * It is the one field that cannot be derived from anything else: two jobs with
@@ -316,15 +359,43 @@ function resolveRouting(job) {
       `  → test: who answers for this job's acceptance?`,
     );
   }
-  if ("mode" in job || "transport" in job) {
-    // There is one transport now. Accepting the field silently would let a
-    // caller believe it selected something.
+  if ("mode" in job) {
+    // `mode` was this field's name for one release. Accepting it silently would
+    // let a caller believe it selected a transport that nothing read.
     throw new ManifestError(
-      "`mode`/`transport` are gone: every job runs headless\n" +
-      "  → the app transports were removed because nothing could observe them",
+      "`mode` is gone; pass `transport: \"app\" | \"headless\"` instead",
     );
   }
-  return { role: job.role };
+
+  // A claude job has no transport, and null is the honest record: nothing is
+  // spawned for it, so writing "headless" would put a process in the ledger
+  // that never existed, and writing "app" would put a chat box there.
+  if (job.worker === "claude") {
+    if (job.transport != null) {
+      throw new ManifestError(
+        `a claude job has no transport (got ${JSON.stringify(job.transport)})\n` +
+        "  → nothing is spawned for it; the dispatcher does the work in this session",
+      );
+    }
+    return { role: job.role, transport: null };
+  }
+
+  const fallback = DEFAULT_TRANSPORT[job.role];
+  const transport = job.transport ?? fallback;
+  if (!TRANSPORTS.has(transport)) {
+    throw new ManifestError(
+      `transport must be "app" or "headless", got ${JSON.stringify(transport)}`,
+    );
+  }
+  if (transport !== fallback && !job.note) {
+    throw new ManifestError(
+      `job overrides the ${job.role} default transport (${fallback} → ${transport}) with no reason\n` +
+      `  → pass note: "<why>"; an override without one is transport picked by feel\n` +
+      "  → app is worth it for: a permission prompt a human must answer, open-ended\n" +
+      "    work with no acceptance criteria yet, or a thread to resume next session",
+    );
+  }
+  return { role: job.role, transport };
 }
 
 /**
@@ -340,7 +411,7 @@ function resolveRouting(job) {
  * editing the ones that were just checked.
  */
 const SEALED_JOB_FIELDS = new Set([
-  "seq", "worker", "role", "evidence", "status", "filesMayModify",
+  "seq", "worker", "role", "transport", "evidence", "status", "filesMayModify",
 ]);
 
 /**
@@ -388,7 +459,7 @@ export function addJob(manifestPath, job) {
       );
     }
     const seq = m.jobs.length + 1;
-    const { role } = resolveRouting(job);
+    const { role, transport } = resolveRouting(job);
     assertEvidencePath(job.evidence, m.evidenceRoot);
     // A string here reaches `.map` in the scope gate and throws mid-collect,
     // which turns a bad declaration into a dead gate.
@@ -413,6 +484,9 @@ export function addJob(manifestPath, job) {
       seq,
       worker: job.worker,
       role,
+      // `role` says why this job was dispatched the way it was; `transport`
+      // says which way that is. Neither answers the other's question.
+      transport,
       model: job.model ?? null,
       // Codex takes its tier as a reasoning effort rather than a model name, so
       // recording only `model` would leave every Codex job looking unset.
@@ -469,11 +543,12 @@ export function updateJob(manifestPath, seq, patch) {
   updateManifest(manifestPath, (m) => {
     const job = m.jobs.find((j) => j.seq === seq);
     if (!job) throw new ManifestError(`no job with seq ${seq} in ${manifestPath}`);
-    // A free-form patch used to reach `seq` and `evidence`. Two jobs sharing a
-    // seq makes this very `find` pick the wrong one, and a rewritten evidence
+    // A free-form patch used to reach `seq`, `transport` and `evidence`. Two
+    // jobs sharing a seq makes this very `find` pick the wrong one; a rewritten
+    // transport makes `assertTransport` stop checking; a rewritten evidence
     // path re-points the proof after the fact. Progress fields are patchable,
     // identity is not.
-    for (const field of ["seq", "worker", "role", "evidence"]) {
+    for (const field of ["seq", "worker", "role", "transport", "evidence"]) {
       if (field in patch && patch[field] !== job[field]) {
         throw new ManifestError(
           `updateJob không được đổi "${field}" của job ${seq}\n` +
@@ -555,6 +630,36 @@ export function recordUnclaimedFailure(manifestPath, seq, patch) {
     return m;
   });
   return wrote;
+}
+
+/**
+ * Refuses to dispatch a job down a transport the manifest did not record.
+ *
+ * The failure this closes is a ledger that disagrees with reality: the manifest
+ * says `app`, the adapter ran headless, and the run's own record of what
+ * happened is wrong in the one place anybody would look to find out. It is
+ * cheap to check and it has to happen before the slot is claimed, because a
+ * refusal after the claim leaks the slot.
+ *
+ * Returns the recorded transport, or null when there is nothing to check
+ * against -- a claude job, which has none by design, or a manifest written
+ * before the field existed, which cannot be asked. Those two are told apart by
+ * whether the key is present at all, not by its value.
+ */
+export function assertTransport(manifestPath, seq, transport) {
+  const m = readManifest(manifestPath);
+  const job = m.jobs.find((j) => j.seq === seq);
+  if (!job) throw new ManifestError(`no job with seq ${seq} in ${manifestPath}`);
+  if (!("transport" in job)) return null;
+  if (job.transport == null) return null;
+  if (job.transport !== transport) {
+    throw new ManifestError(
+      `job ${seq} is recorded as transport "${job.transport}" but was dispatched as "${transport}"\n` +
+      "  → dispatch it the way the manifest says, or add a new job; a run whose\n" +
+      "    ledger disagrees with what ran cannot be audited afterwards",
+    );
+  }
+  return job.transport;
 }
 
 export { ManifestError };

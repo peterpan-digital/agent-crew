@@ -12,7 +12,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "../config.mjs";
-import { readManifest } from "../manifest.mjs";
+import { assertTransport, readManifest } from "../manifest.mjs";
 import { GuardError } from "../guards.mjs";
 import { runJob } from "../job-runner.mjs";
 import { antiRun } from "../../adapters/antigravity.mjs";
@@ -29,7 +29,7 @@ export async function dispatch(argv, { cwd }) {
   const parsed = parse(argv, {
     manifest: "value", job: "value", timeout: "value",
     "idle-timeout": "value", "prompt-mode": "value", "agy-mode": "value",
-    brief: "value",
+    brief: "value", transport: "value", title: "value",
   });
   const config = loadConfig({ workspace: cwd });
   const manifestPath = parsed.values.get("manifest") ?? defaultManifest(config);
@@ -46,6 +46,14 @@ export async function dispatch(argv, { cwd }) {
   }
   const adapter = ADAPTERS[job.worker];
   if (!adapter) throw new GuardError(`no adapter for worker "${job.worker}"`);
+
+  // The transport is read off the record like everything else, and then checked
+  // against the record. That looks circular and is not: `--transport` exists so
+  // a caller can be explicit, and this is where an explicit value that
+  // contradicts the ledger is refused. It has to happen before the slot is
+  // claimed -- a refusal after the claim leaks the slot for the rest of the run.
+  const transport = parsed.values.get("transport") ?? job.transport ?? "headless";
+  assertTransport(manifestPath, seq, transport);
 
   const briefPath = parsed.values.get("brief")
     ?? join(manifest.workspace, manifest.evidenceRoot, `brief-${job.worker}-${seq}.md`);
@@ -71,6 +79,11 @@ export async function dispatch(argv, { cwd }) {
     idle: parsed.values.get("idle-timeout") ?? config.defaultIdleTimeout,
     promptMode: parsed.values.get("prompt-mode") ?? "auto",
     agyMode: parsed.values.get("agy-mode") ?? undefined,
+    transport,
+    // App mode puts a real conversation in front of a person, so it gets a
+    // human-readable name. The job title is already that, and defaulting to it
+    // means nobody has to type the same string twice.
+    title: parsed.values.get("title") ?? job.title ?? undefined,
   };
 
   return runJob({ name: adapter.name, adapter: adapter.fn, opts });

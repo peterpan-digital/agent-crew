@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRun, addJob, updateJob, readManifest } from "../lib/manifest.mjs";
+import { MANIFEST_VERSION, createRun, addJob, updateJob, readManifest } from "../lib/manifest.mjs";
 import { collectRun, abandonJob, writeRunReport } from "../lib/collect.mjs";
 import {
   CREW_CLI, RUN_ID, RUN_REL, makeChecker, runRel, tmpWorkspace, under, writeFile, trySymlink
@@ -627,11 +627,13 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   t.check("a job given neither is explicit about it", `${saved[0].effort}`, "null");
 }
 
-// --- role is required, and the retired transport fields are refused ---
+// --- role is required; transport is recorded next to it ---
 {
-  // "app when the user wants to watch" was never a checkable rule, and nothing
-  // could observe an app job anyway, so there is one transport now and the
-  // fields that used to select one are rejected rather than ignored.
+  // "app when the user wants to watch" was never a checkable rule -- so the
+  // rule is not who wants to watch, it is whether a reason can be written
+  // down. Role is that reason, transport is its consequence, and both are on
+  // the record. `mode`, the name transport had for one release, is refused
+  // rather than ignored.
   const ws = tmpWorkspace("role-");
   execFileSync("git", ["init", "-q"], { cwd: ws });
   const { manifestPath } = createRun({
@@ -639,7 +641,11 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
     workspace: ws, evidenceRoot: RUN_REL, depth: 0,
   });
 
-  t.check("a manifest is stamped with the current version", readManifest(manifestPath).version, 1);
+  // Compared against the constant, not a literal: the point is that a fresh
+  // run is stamped with whatever version this build writes, and a literal here
+  // is a second place to remember to bump.
+  t.check("a manifest is stamped with the current version", readManifest(manifestPath).version, MANIFEST_VERSION);
+  t.check("...which is the version that added transport", MANIFEST_VERSION, 2);
 
   const noted = addJob(manifestPath, {
     worker: "antigravity", role: "owner", model: "flash",
@@ -674,14 +680,22 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   refuses("a bogus role is refused", { worker: "codex", role: "boss" }, 'needs role "owner" or "assist"');
   refuses("a bogus worker is refused", { worker: "carrier-pigeon", role: "owner" }, "worker must be one of");
   refuses("the retired `mode` field is refused loudly",
-    { worker: "codex", role: "assist", mode: "headless" }, "`mode`/`transport` are gone");
-  refuses("...and so is `transport`",
-    { worker: "codex", role: "assist", transport: "app" }, "`mode`/`transport` are gone");
+    { worker: "codex", role: "assist", effort: "low", mode: "headless" }, "`mode` is gone");
+  // The reason requirement is the whole gate: without it, `transport: "app"`
+  // is transport picked by feel again, which is what left 34 historical jobs
+  // with no recoverable explanation for any single one of them.
+  refuses("...and app with no reason is refused too",
+    { worker: "codex", role: "assist", effort: "low", transport: "app" },
+    "overrides the assist default transport");
 
   const saved = readManifest(manifestPath).jobs;
   t.check("every job on disk carries a role", saved.every((j) => j.role), "true");
   t.check("...and none kept the old mode field", saved.some((j) => "mode" in j), "false");
-  t.check("...nor the old transport field", saved.some((j) => "transport" in j), "false");
+  // Present on every job, including the claude one, where the value is null.
+  // "Absent" and "null" are told apart by assertTransport, so a job that
+  // simply lacks the key would read as a pre-v2 record nobody can check.
+  t.check("...while every job carries a transport key", saved.every((j) => "transport" in j), "true");
+  t.check("...and the claude job's is null", saved.find((j) => j.worker === "claude").transport, "null");
 }
 
 // --- a job with only a thread id is still vouched for -----------------------

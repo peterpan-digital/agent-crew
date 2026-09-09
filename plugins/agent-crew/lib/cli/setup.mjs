@@ -73,7 +73,70 @@ export function init(argv, { cwd }) {
   return 0;
 }
 
-export function doctor(argv, { cwd }) {
+/**
+ * What transport `app` needs, reported but never fatal.
+ *
+ * Fatal would be wrong: `app` is a documented exception with three named
+ * use-cases, and a machine that cannot run it is a perfectly healthy machine
+ * for everything else. So these lines are informational and `doctor` still
+ * exits 0 -- the refusal belongs at `add-job`/dispatch time, where it can name
+ * the job that wanted it.
+ *
+ * Everything here is loaded dynamically and every failure is caught. The app
+ * modules reach outside the plugin -- into a running desktop app, and into
+ * another project's plugin install -- so "not available" is an ordinary answer,
+ * and a `doctor` that crashes while reporting an optional dependency is worse
+ * than one that says it could not tell.
+ */
+async function appReadiness(workspace) {
+  const lines = [];
+
+  // --- Antigravity: a running app, and this folder known to it -------------
+  try {
+    const { resolveAntiEnv } = await import("../app/antigravity-env.mjs");
+    const env = resolveAntiEnv(workspace);
+    lines.push(`  antigravity  sẵn sàng — app pid ${env.pid}, ${env.address}`);
+    lines.push(`               agentapi: ${env.invocation.file} ${env.invocation.prefixArgs.join(" ")}`);
+  } catch (err) {
+    lines.push("  antigravity  KHÔNG dùng được transport app");
+    for (const line of String(err.message).split("\n")) lines.push(`               ${line.trim()}`);
+  }
+
+  // The step-status fallback, which is the one piece that genuinely differs by
+  // platform. Absent is fine and has to read as fine.
+  try {
+    const { resolveSqlite } = await import("../os-probe.mjs");
+    const sqlite = resolveSqlite();
+    lines.push(sqlite
+      ? `  sqlite3      ${sqlite} — fallback step-status bật`
+      : "  sqlite3      không có — fallback step-status tắt (job dựa vào evidence file + timeout)");
+  } catch (err) {
+    lines.push(`  sqlite3      không tra được: ${String(err.message).split("\n")[0]}`);
+  }
+
+  // --- Codex: another project's companion, discovered not shipped ----------
+  try {
+    const mod = await import("../app/codex-companion.mjs");
+    if (typeof mod.resolveCompanion !== "function") {
+      lines.push("  codex        KHÔNG dùng được transport app — companion module không có resolveCompanion()");
+    } else {
+      lines.push(`  codex        sẵn sàng — companion ${mod.resolveCompanion()}`);
+    }
+  } catch (err) {
+    lines.push("  codex        KHÔNG dùng được transport app");
+    for (const line of String(err.message).split("\n")) lines.push(`               ${line.trim()}`);
+    // Only when nothing was named. A failed explicit override already carries
+    // "fix it or unset it", and following that with "or set it" is a doctor
+    // contradicting itself in two consecutive lines.
+    if (!process.env.AGENT_CREW_CODEX_COMPANION) {
+      lines.push("               cài plugin openai-codex, hoặc đặt AGENT_CREW_CODEX_COMPANION=<đường dẫn>");
+    }
+  }
+
+  return lines;
+}
+
+export async function doctor(argv, { cwd }) {
   let config;
   let configError = null;
   try {
@@ -122,6 +185,10 @@ export function doctor(argv, { cwd }) {
   if (usable === 0) {
     problems.push("không có worker nào chạy được: cần ít nhất `agy` hoặc `codex`");
   }
+
+  lines.push("");
+  lines.push("transport app (tuỳ chọn — mặc định mọi job là headless):");
+  lines.push(...await appReadiness(config.workspace));
 
   console.log(lines.join("\n"));
   if (problems.length) {

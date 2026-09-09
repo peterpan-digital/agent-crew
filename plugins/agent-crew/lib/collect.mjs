@@ -541,9 +541,22 @@ export function writeRunReport(r, manifest, { path, workspace, now = new Date() 
 
   const jobs = manifest.jobs.map((j) => {
     const row = r.rows.find((x) => x.seq === j.seq) ?? {};
-    const dur = Number.isFinite(j.durationSec) ? `${Math.round(j.durationSec / 60)}p${j.durationSec % 60}s` : "—";
+    // `floor`, not `round`. With `round`, any job whose seconds part was 30 or
+    // more gained a whole minute -- a 33-second job printed as `1p33s` -- so
+    // the rows contradicted the total line below them, which floors. A table
+    // that is the run's own audit evidence does not get to disagree with its
+    // own arithmetic.
+    const dur = Number.isFinite(j.durationSec)
+      ? `${Math.floor(j.durationSec / 60)}p${j.durationSec % 60}s`
+      : "—";
     const tier = j.worker === "codex" ? (j.effort ?? "—") : (j.model ?? "—");
-    return `| ${j.seq} | ${j.worker} | ${j.role} | ${tier} | ${row.verdict ?? j.status} | ${dur} | \`${j.evidence}\` |`;
+    // `role` and `transport` are both printed because they answer different
+    // questions about the same job: role is why it was dispatched that way,
+    // transport is what the harness could see while it ran. A reader auditing
+    // an old run needs both -- one without the other turns "why is this job's
+    // record so thin?" into a guess.
+    const transport = j.transport ?? "—";
+    return `| ${j.seq} | ${j.worker} | ${j.role} | ${transport} | ${tier} | ${row.verdict ?? j.status} | ${dur} | \`${j.evidence}\` |`;
   });
   const totalSec = manifest.jobs.reduce((a, j) => a + (Number.isFinite(j.durationSec) ? j.durationSec : 0), 0);
   const body = `# Nghiệm thu run ${r.runId}${r.label ? ` — ${r.label}` : ""}
@@ -552,8 +565,8 @@ Ngày ${now.toISOString().slice(0, 10)}. Cổng \`crew collect\` trả exit 0.
 
 <!-- Khối dưới do crew collect sinh từ manifest. Đây là bằng chứng, không phải văn — đừng sửa tay. -->
 
-| # | worker | role | bậc | verdict | thời gian | evidence |
-| --- | --- | --- | --- | --- | --- | --- |
+| # | worker | role | transport | bậc | verdict | thời gian | evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 ${jobs.join("\n")}
 
 - Tổng thời gian job: **${Math.floor(totalSec / 60)} phút ${totalSec % 60} giây** (${manifest.jobs.length} job)

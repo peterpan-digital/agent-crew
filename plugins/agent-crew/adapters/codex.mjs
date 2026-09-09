@@ -24,8 +24,19 @@
  *
  * The prompt goes in on stdin rather than argv: a brief is a file, and argv has
  * a length limit that a long brief can reach.
+ *
+ * Two transports share the contract above, selected by `options.transport`:
+ *   - "headless" (the default): `codex exec`, spawned and watched directly, as
+ *     described above.
+ *   - "app": dispatched through `codex-companion.mjs` (lib/app/codex-companion.mjs)
+ *     into a real thread in the Codex desktop app -- a persisted, resumable
+ *     conversation rather than a one-shot process. Worth it for exactly three
+ *     cases: a job that will hit a permission prompt a human must answer,
+ *     open-ended work with no acceptance criteria written yet, or a thread to
+ *     resume in a later session. See lib/manifest.mjs for why headless is the
+ *     measured default for both roles regardless.
  */
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   DEFAULT_TIMEOUT,
@@ -37,6 +48,14 @@ import {
   validateEvidencePath,
 } from "../lib/guards.mjs";
 import { killTree, resolveBin, spawnTool, spawnToolSync } from "../lib/platform.mjs";
+import { updateJob } from "../lib/manifest.mjs";
+import {
+  cancelJob,
+  dispatchTask,
+  fetchResult,
+  resolveCompanion,
+  waitForSettle,
+} from "../lib/app/codex-companion.mjs";
 
 /** A job that emits no stdout event for this long is treated as dead, not as thinking. */
 const DEFAULT_IDLE_MS = 120_000;
@@ -60,6 +79,12 @@ const MAX_EVENT_BYTES = 8 * 1024;
  * silent downgrade.
  */
 const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+
+/** Transports this adapter answers to. Same two words lib/manifest.mjs records. */
+const TRANSPORTS = new Set(["headless", "app"]);
+
+/** Same reasoning as MAX_EVENT_BYTES: a truncated reply still says what happened. */
+const MAX_REPLY_BYTES = 32 * 1024;
 
 class CodexRunError extends GuardError {
   constructor(message, detail) {
@@ -204,7 +229,7 @@ function assertSidecarsAbsent(paths) {
   }
 }
 
-export function codexRun(options) {
+function runHeadless(options) {
   const {
     workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base,
   } = prepareRun(options);
@@ -329,6 +354,7 @@ export function codexRun(options) {
       resolveRun({
         worker: "codex",
         mode: "exec",
+        transport: "headless",
         model: options.model ?? null,
         effort,
         codexVersion: version,
@@ -414,6 +440,266 @@ export function codexRun(options) {
 
     child.stdin.end(promptText);
   });
+}
+
+/**
+ * Captures `codex --version` for the app transport, tolerating a missing
+ * binary.
+ *
+ * Headless needs the `codex` binary to run at all, so `resolveBin` throwing
+ * there correctly fails the job. The app transport never spawns `codex`
+ * directly -- the companion does, wherever it likes -- so a `codex` this
+ * machine cannot find is a fact worth recording, not a reason to refuse a run
+ * that does not depend on it.
+ */
+function tryCodexVersion() {
+  try {
+    return codexVersion(resolveBin("codex", { envOverride: "AGENT_CREW_CODEX_BIN" }));
+  } catch (err) {
+    // Swallowed, but not silent. This field exists to explain a run that went
+    // wrong, so `codexVersion: null` on a failed job is read as a fact -- "no
+    // codex on this machine" -- when it has several possible causes, and the
+    // likeliest one is a stale AGENT_CREW_CODEX_BIN pointing at a binary that
+    // has moved. A null with no reason next to it sends the reader looking in
+    // the wrong place.
+    process.stderr.write(`codex: could not read codex --version: ${err.message}\n`);
+    return null;
+  }
+}
+
+/**
+ * Puts the companion's job id in the manifest the moment it exists.
+ *
+ * A job whose adapter dies mid-flight -- the process killed, the machine
+ * losing power -- is exactly the job whose id nobody can look up afterwards,
+ * and without the id there is no way to ask the companion whether the work is
+ * still running or long gone. The id has to outlive the process that learned
+ * it, which is why this runs right after dispatch succeeds rather than being
+ * folded into the result written at the end.
+ *
+ * Failure here is recorded, never thrown: a manifest write that failed does
+ * not mean the dispatch failed, and the run has to keep going either way --
+ * the alternative is cancelling a job that is already running because its own
+ * bookkeeping could not be written.
+ */
+function registerCompanionJob(options, jobId) {
+  if (!options.manifest || options.job == null) return;
+  try {
+    updateJob(options.manifest, Number(options.job), { companionJobId: jobId });
+  } catch (err) {
+    process.stderr.write(`codex: could not record the companion job id: ${err.message}\n`);
+  }
+}
+
+/**
+ * The app transport: dispatches through codex-companion.mjs into a real thread
+ * in the Codex app, which is the whole point -- an owner job is one whose
+ * evidence IS the deliverable, so the person who will be judged on it gets to
+ * watch it being made, and a resumable thread survives past this process.
+ *
+ * The sequence, and why each step is where it is:
+ *   1. Resolve the companion before spending anything. Throws rather than
+ *      falling back to headless -- see resolveCompanion's own comment.
+ *   2. Dispatch, then record the jobId immediately (registerCompanionJob),
+ *      before anything else can go wrong.
+ *   3. Wait for it to settle, with the crew's own timeout enforced
+ *      independently of the companion's `--wait` (see waitForSettle). A call
+ *      this adapter can no longer follow -- broker stuck, companion gone -- is
+ *      a background job nobody is watching any more, so it is cancelled
+ *      rather than abandoned.
+ *   4. Fetch the reply text (fetchResult) and write it to disk the way
+ *      headless's `-o lastMessagePath` does. Every failure here is recorded
+ *      and swallowed: a missing reply is a thinner record, not a failed job.
+ *   5. Judge last, never first: judgeJob() reads the evidence file, and the
+ *      companion's own verdict is consulted only where guards.mjs says to.
+ */
+export async function runApp(options) {
+  const {
+    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base,
+  } = prepareRun(options);
+
+  let companion;
+  try {
+    companion = resolveCompanion();
+  } catch (err) {
+    // Never fall back to headless. A manifest that says `app` while nothing
+    // opened is exactly the silent-substitution failure this harness exists
+    // to catch, and it would be invisible until someone went looking for a
+    // thread that was never started.
+    throw new CodexRunError(err.message, err.detail);
+  }
+
+  const promptPath = join(logDir, `${base}.codex-app-prompt.md`);
+  const statusPath = join(logDir, `${base}.codex-app-status.json`);
+  const replyPath = join(logDir, `${base}.codex-app-reply.md`);
+  assertSidecarsAbsent([promptPath, statusPath, replyPath]);
+  // The companion reads the prompt from a file, so it doubles as the audit
+  // record of exactly what the worker was asked to do.
+  writeFileSync(promptPath, promptText, "utf8");
+
+  const version = tryCodexVersion();
+  const startedAt = new Date();
+
+  let jobId;
+  let dispatchLogFile = null;
+  try {
+    const dispatched = dispatchTask(companion, {
+      workspace, promptPath, model: options.model, effort,
+    });
+    jobId = dispatched.jobId;
+    dispatchLogFile = dispatched.logFile;
+  } catch (err) {
+    err.runtimeFacts = {
+      codexVersion: version, transport: "app",
+      companionJobId: null, companionStatus: null, threadId: null, companionLog: null,
+    };
+    throw err;
+  }
+
+  process.stderr.write(`codex: app job ${jobId} queued, waiting up to ${timeout}\n`);
+  // Has to survive this process dying, which is why it is written here rather
+  // than with the rest of the result at the end.
+  registerCompanionJob(options, jobId);
+
+  let settled;
+  try {
+    settled = await waitForSettle(companion, jobId, { workspace, timeoutMs });
+  } catch (err) {
+    // The cancel below used to be reachable only through a settled snapshot.
+    // So when `status --wait` itself hung or died -- broker stuck, companion
+    // gone -- the adapter would record a failed job and walk away from a
+    // background job that was still running, still writing, still burning
+    // quota, with nobody watching it. A job this adapter can no longer follow
+    // is a job it has to put down.
+    try {
+      cancelJob(companion, jobId, { workspace });
+      process.stderr.write(`codex: cancelled ${jobId} after losing track of it\n`);
+    } catch (cancelErr) {
+      process.stderr.write(`codex: cancel ${jobId} failed: ${cancelErr.message}\n`);
+    }
+    err.runtimeFacts = {
+      codexVersion: version, transport: "app", companionJobId: jobId,
+      companionStatus: null, threadId: null, companionLog: dispatchLogFile,
+    };
+    throw err;
+  }
+
+  const { snapshot, job, timedOut, settleRetries, settleRaceWhy } = settled;
+
+  try {
+    writeFileSync(statusPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  } catch { /* an audit copy must not fail a finished job */ }
+
+  let cancelled = null;
+  if (timedOut) {
+    // Cancel before judging, so a job that outlived its allowance is not left
+    // running against a workspace nobody is watching any more.
+    try {
+      cancelJob(companion, jobId, { workspace });
+      cancelled = "cancelled after timeout";
+    } catch (err) {
+      cancelled = `cancel failed: ${err.message}`;
+    }
+    process.stderr.write(`codex: ${cancelled}\n`);
+  }
+
+  // Asked for even on a job the companion calls failed, and even after a
+  // cancel: whatever the worker managed to say before it stopped is the most
+  // useful thing there is for working out why.
+  const reply = fetchResult(companion, jobId, { workspace });
+  let replyError = reply.replyError;
+  let lastMessage = null;
+  if (reply.text) {
+    const capped = Buffer.byteLength(reply.text, "utf8") > MAX_REPLY_BYTES
+      ? `${reply.text.slice(0, MAX_REPLY_BYTES)}\n…[crew: truncated the rest]\n`
+      : reply.text;
+    try {
+      writeFileSync(replyPath, capped.endsWith("\n") ? capped : `${capped}\n`, "utf8");
+      lastMessage = replyPath;
+    } catch (err) {
+      replyError = `could not write reply file: ${err.message}`;
+    }
+  }
+  if (replyError) process.stderr.write(`codex: ${replyError}\n`);
+
+  const runtimeOk = job.status === "completed" && !timedOut;
+  const runtimeDetail = runtimeOk ? null
+    : timedOut ? `companion job did not settle within ${timeout} (status ${job.status}); ${cancelled}`
+    : `companion job ${job.status}${job.errorMessage ? `: ${job.errorMessage}` : ""}`;
+
+  // Evidence gets the first word even here: a job the companion calls `failed`
+  // may still have written a complete report before it fell over. If it wrote
+  // nothing, judgeJob throws and the caller records the failure -- which is
+  // the whole reason this adapter exists.
+  let verdict;
+  try {
+    verdict = judgeJob(evidenceAbs, {
+      runtimeOk,
+      runtimeDetail,
+      context: `codex app job ${jobId}, thread ${job.threadId ?? "none"}, log at ${job.logFile ?? "unknown"}`,
+    });
+  } catch (err) {
+    err.runtimeFacts = {
+      codexVersion: version, transport: "app", companionJobId: jobId,
+      companionStatus: job.status, threadId: job.threadId ?? null, companionLog: job.logFile ?? null,
+    };
+    throw err;
+  }
+
+  const endedAt = new Date().toISOString();
+  return {
+    worker: "codex",
+    mode: "app",
+    transport: "app",
+    model: options.model ?? null,
+    effort,
+    codexVersion: version,
+    startedAt: startedAt.toISOString(),
+    endedAt,
+    durationSec: Math.round((Date.parse(endedAt) - startedAt.getTime()) / 1000),
+    // The provenance field the write-scope gate already reads for app-mode
+    // jobs on the Antigravity side. Reusing the name means no new branch in
+    // the gate to forget to update.
+    conversationId: job.threadId ?? null,
+    companionJobId: jobId,
+    companionStatus: job.status,
+    // How many times the store had to be re-asked before it would name a
+    // status, and why. Recorded rather than swallowed: see waitForSettle.
+    settleRetries: settleRetries || undefined,
+    settleRaceWhy: settleRaceWhy ?? undefined,
+    turnId: job.turnId ?? null,
+    companionLog: job.logFile ?? null,
+    statusFile: statusPath,
+    prompt: promptPath,
+    // Same field the headless path uses for the worker's final message, so a
+    // reader of the result checks one name for both transports.
+    lastMessage,
+    // The companion's own exit status for the codex run, and the files it
+    // says it wrote. Kept separate from `exitCode` because the gate reads
+    // that one, and what this holds on a failed job has not been measured.
+    companionExitStatus: reply.companionExitStatus,
+    touchedFiles: reply.touchedFiles,
+    replyError,
+    // Null, not 0: this adapter did not spawn the process that exited. A fake
+    // 0 here would claim a clean exit on behalf of something it never watched.
+    exitCode: null,
+    killedFor: timedOut ? runtimeDetail : null,
+    evidence: evidenceAbs,
+    ...verdict,
+  };
+}
+
+/**
+ * The one entrypoint dispatch.mjs calls. `options.transport` picks the
+ * transport; "headless" is the default so every existing caller that has
+ * never heard of `transport` keeps running exactly as before.
+ */
+export function codexRun(options) {
+  const transport = options.transport ?? "headless";
+  if (!TRANSPORTS.has(transport)) {
+    throw new CodexRunError(`unknown transport "${transport}"`, `use one of: ${[...TRANSPORTS].join(", ")}`);
+  }
+  return transport === "app" ? runApp(options) : runHeadless(options);
 }
 
 export { CodexRunError };

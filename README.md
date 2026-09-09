@@ -114,6 +114,36 @@ Toàn bộ run nằm trong một thư mục:
 Tiêu chí là **rule đã thành văn hay chưa**, không phải dễ/khó. Chi tiết ở
 `plugins/agent-crew/skills/agent-crew/references/dispatch-playbook.md`.
 
+## Hai transport
+
+| | `headless` | `app` |
+| --- | --- | --- |
+| Mặc định | ✔ mọi job | phải khai `--transport app` **kèm `--note` lý do** |
+| Cần gì thêm | không | app Antigravity đang chạy / companion của plugin `openai-codex` |
+| Harness thấy | usage, reply text, exit code, watchdog | ít hơn — xem bảng số đo |
+| Người thấy | không | conversation/thread thật, resume được |
+
+`headless` là mặc định vì **đo được**, không vì tiện: đo 2026-08-25 trên 6 job app thật,
+`app` quan sát **yếu hơn** ở cả hai runtime, và thứ người ta tìm đến nó để lấy — "mở ra
+ngồi xem cho chắc" — chính là thứ nó không giao được (thread không render live; rollout có
+trên đĩa ở +8s nhưng chỉ hiện sau khi tắt/mở lại app).
+
+Ba ca `app` đáng giá: job sẽ gặp **prompt permission cần người bấm**; việc **mở/khám phá**
+chưa viết nổi acceptance; cần **thread resume** buổi sau. Ngoài ba ca đó, chọn `app` là
+trả giá quan sát để lấy một thứ chưa nêu được — nên `--transport app` không kèm `--note`
+thì bị từ chối.
+
+`crew doctor` in ra transport nào chạy được trên máy này, kèm lý do nếu không:
+
+```text
+transport app (tuỳ chọn — mặc định mọi job là headless):
+  antigravity  sẵn sàng — app pid 3991, 127.0.0.1:51431
+  sqlite3      /usr/bin/sqlite3 — fallback step-status bật
+  codex        sẵn sàng — companion .../openai-codex/plugins/codex/scripts/codex-companion.mjs
+```
+
+Chi tiết: `plugins/agent-crew/skills/agent-crew/references/transport-choice.md`.
+
 ## Exit code
 
 Đây là interface — job chạy nền nên exit code là tín hiệu duy nhất.
@@ -126,10 +156,8 @@ ai đọc · `2` vi phạm phạm vi ghi hoặc trùng evidence · `3` **cả 1 
 
 ## Cái gì cố tình KHÔNG có
 
-- **Transport "app"** (mở conversation trong app Antigravity / thread trong app Codex).
-  Đã bỏ: một job app không trả token usage, không trả reply text, không có `exitCode`,
-  không có watchdog, và thread không hiện live. Một transport mà harness không quan sát
-  được thì không thể nằm trong một harness sinh ra để quan sát.
+- **`app` làm mặc định.** Transport `app` có, nhưng là ngoại lệ phải nêu lý do — xem mục
+  trên. Mặc định mọi job đi `headless`, vì đó là đường harness quan sát được.
 - **Tự commit, tự mở PR, tự đóng ticket.** Crew làm việc và viết lại việc đã làm.
 - **Worker dispatch worker.** Chặn hai lớp: `AGENT_CREW_ROLE=worker` và `depth` trong
   manifest.

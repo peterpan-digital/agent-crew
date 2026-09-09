@@ -78,7 +78,11 @@ function tierFor(worker, parsed) {
     if (model) throw new ArgError("a codex job takes --effort, not --model");
     return { effort };
   }
-  if (!model) {
+  // A claude job spawns nothing, so it has no tier to require -- the same
+  // reason its transport is null. Demanding one here asked for a fact about a
+  // process that never starts. It is still recorded when given, because naming
+  // the model that did the work is worth something to a reader later.
+  if (!model && worker !== "claude") {
     throw new ArgError(
       `--model is required for a ${worker} job`,
       "every job in the manifest used to read null, so nothing could say which tier failed",
@@ -92,7 +96,7 @@ export function addJobCmd(argv, { cwd }) {
   const parsed = parse(argv, {
     manifest: "value", worker: "value", role: "value", title: "value",
     model: "value", effort: "value", evidence: "value", note: "value",
-    allow: "list",
+    transport: "value", allow: "list",
   });
   const config = loadConfig({ workspace: cwd });
   const manifestPath = parsed.values.get("manifest") ?? defaultManifest(config);
@@ -115,10 +119,14 @@ export function addJobCmd(argv, { cwd }) {
     evidence,
     note: parsed.values.get("note") ?? null,
     filesMayModify: parsed.lists.get("allow") ?? [],
+    // Omitted rather than passed as null: a claude job must have no transport
+    // at all, and `addJob` tells "not asked for" from "explicitly nothing".
+    ...(parsed.values.has("transport") ? { transport: parsed.values.get("transport") } : {}),
     ...tierFor(worker, parsed),
   });
 
   console.log(`job      ${added.seq}`);
+  console.log(`transport ${added.transport ?? "(không có — job claude)"}`);
   console.log(`evidence ${added.evidence}`);
   console.log(`brief    ${brief}`);
   console.log(`ghi brief vào đường dẫn trên trước khi dispatch (trần ${config.briefMaxBytes} B)`);

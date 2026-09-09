@@ -1,6 +1,6 @@
 ---
 name: agent-crew
-description: "Giao việc song song cho Antigravity và Codex từ Claude Code, rồi nghiệm thu bằng bằng chứng trên đĩa. Dùng khi một request có nhiều đầu việc khác loại."
+description: "Giao việc song song cho Antigravity và Codex từ Claude Code — headless mặc định, hoặc app khi cần người ngồi nhìn — rồi nghiệm thu bằng bằng chứng trên đĩa. Dùng khi một request có nhiều đầu việc khác loại."
 user-invocable: true
 when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, nhờ Antigravity, crew, dispatch, làm nhiều task cùng lúc."
 keywords: [crew, dispatch, multi-agent, song-song, codex, antigravity, worker, parallel]
@@ -126,6 +126,35 @@ Rồi gán `role`, bằng đúng một câu hỏi:
 `role` quyết cách **chấm** output. Nó bắt buộc và không có mặc định: hai job brief y hệt
 nhau được chấm khác nhau tuỳ ai chịu trách nhiệm, nên một mặc định ở đây là tung xúc xắc.
 
+### `transport` — mặc định `headless`, đổi phải nêu lý do
+
+`role` là **lý do**, `transport` là **hệ quả**. Hai trục khác nhau: cùng một job được chấm
+theo `role` bất kể nó đi đường ống nào.
+
+**`headless` là mặc định cho cả hai role, và đây là mặc định đo được, không phải cho tiện.**
+Đo 2026-08-25 trên 6 job app thật: app **quan sát yếu hơn** headless ở cả hai runtime, và
+thứ người ta thường tìm đến app để lấy — "mở ra ngồi xem cho chắc" — lại là thứ nó không
+giao được. Chi tiết số đo: `references/transport-choice.md`.
+
+Chỉ có **ba ca** app đáng giá, và cả ba đều viết ra được thành câu:
+
+1. Job sẽ gặp **prompt permission cần người bấm**. Headless gặp prompt là silent-fail.
+2. Việc **mở/khám phá**, chưa viết nổi tiêu chí acceptance trước.
+3. Cần **thread resume** làm tiếp buổi sau.
+
+```bash
+crew add-job --worker antigravity --role owner --model pro \
+  --transport app --note "job sẽ gặp prompt permission cần người bấm" \
+  --title "..."
+```
+
+`--transport app` **không kèm `--note` thì bị từ chối**. Đây là cổng chính: không có lý do
+thành văn thì transport lại được chọn theo cảm giác — đúng chuyện đã làm 34 job lịch sử
+chia 10 app / 24 headless mà không truy được vì sao job nào đi đường nào.
+
+Job `worker: claude` **không có transport** (ghi `null`): không process nào được bắn, ghi
+`headless` vào đó là ghi một tiến trình chưa từng chạy.
+
 Trần cứng: **6 job / run**, **3 job chạy song song**. Code ép cả hai — `add-job` từ chối
 job thứ 7, dispatch từ chối adapter thứ 4. Quá thì dừng, báo user, không tự chạy tiếp.
 
@@ -138,9 +167,12 @@ crew add-job --worker codex --role owner --effort medium \
 ```
 
 - Job `codex` truyền `--effort` (`minimal|low|medium|high|xhigh|max`); Codex tự chọn model.
-- Job `antigravity` và `claude` truyền `--model`. Xem danh sách bằng `agy models`.
-- **`--model`/`--effort` là bắt buộc.** Trước đây mọi job đều để trống, nên không có
-  cách nào biết bậc nào hay fail ngoài đoán.
+- Job `antigravity` truyền `--model`. Xem danh sách bằng `agy models`. Transport `app`
+  chỉ nhận `flash_lite|flash|pro|inherit`.
+- **`--model`/`--effort` bắt buộc với worker có process thật.** Trước đây mọi job đều để
+  trống, nên không có cách nào biết bậc nào hay fail ngoài đoán. Job `claude` được miễn:
+  nó không bắn process nào, nên bậc của nó là con số nói về một tiến trình chưa từng chạy.
+- `--transport` mặc định `headless`; `app` phải kèm `--note`. Xem Bước 2.
 - `--allow` là **phạm vi ghi** của job, dạng prefix. Mặc định job **chỉ** được ghi trong
   thư mục run. Mọi chỗ khác phải khai — cổng nghiệm thu tính write không khai là vi phạm.
   Khai trước là nói ra bán kính nổ trước khi mở run, không phải sau.
@@ -182,8 +214,13 @@ Dòng đầu brief nên là title của job — vài runtime lấy nó làm tên
 crew run --job 1 --timeout 15m
 ```
 
-Worker, bậc model, và đường dẫn evidence được **đọc lại từ manifest**, không truyền lại
-— nên sổ và tiến trình không thể lệch nhau.
+Worker, bậc model, transport, và đường dẫn evidence được **đọc lại từ manifest**, không
+truyền lại — nên sổ và tiến trình không thể lệch nhau. Nếu bạn vẫn truyền `--transport`,
+nó bị **đối chiếu** với sổ và lệch thì bị từ chối trước khi claim slot.
+
+Job `--transport app` chạy khác ở một điểm phải biết trước: nó **có thể đứng chờ người**.
+Đó là mục đích (ca prompt permission), nhưng nghĩa là timeout của job phải đủ cho một
+người kịp bấm — đừng để 15m mặc định rồi bảo worker treo.
 
 **Mọi job chạy nền — không có ngoại lệ.** Dùng Bash với `run_in_background: true`.
 Process exit thì harness tự gọi lại bạn; đó chính là tín hiệu "xong". Không cần hỏi user
@@ -307,4 +344,5 @@ user. Job fail vẫn tốn token, nên fail loudly ngay lần đầu, không ret
 - `references/dispatch-playbook.md` — phân rã request thành job, chọn worker, ví dụ hai chiều
 - `references/worker-brief.md` — template brief và cách viết từng mục
 - `references/collect-contract.md` — bảng verdict đầy đủ và cách xử từng ca
+- `references/transport-choice.md` — `headless` vs `app`: số đo, ba ca app đáng giá, điều kiện chạy
 - `references/platform-notes.md` — khác biệt Windows / macOS, và cái gì chưa verify
