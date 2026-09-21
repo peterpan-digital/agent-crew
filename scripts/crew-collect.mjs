@@ -393,6 +393,15 @@ function report(r) {
     console.log("\nĐÃ BÁC BỎ CÓ LÝ DO (không tính) — lý do nằm trong manifest:");
     for (const p of r.scope.dismissed) console.log(`  ${p.path} — ${why(p)}`);
   }
+  if (r.scope.unusedDismissals.length) {
+    console.log("\nBÁC BỎ KHÔNG CHẶN GÌ — path đã khai --not-ours nhưng không phải vi phạm nào của run này:");
+    for (const p of r.scope.unusedDismissals) {
+      const base = p.slice(p.lastIndexOf("/") + 1);
+      const twin = [...r.scope.outOfScope, ...r.scope.protectedHits]
+        .find((x) => x.path !== p && x.path.slice(x.path.lastIndexOf("/") + 1) === base);
+      console.log(`  ${p}${twin ? `\n    → file đang bị tính là ${twin.path} — trùng tên, khác chỗ. Bác đúng path đó.` : ""}`);
+    }
+  }
   if (r.scope.suspect.length) {
     console.log("\nNGHI VẤN PHẠM VI (không chặn) — job không ghi được giờ kết thúc nên khoảng thời gian chỉ là suy đoán:");
     for (const p of r.scope.suspect) console.log(`  ${p.path} (có thể của job ${p.seqs.join("/")})`);

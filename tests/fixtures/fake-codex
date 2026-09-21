@@ -25,6 +25,15 @@ case "$FAKE_MODE" in
     printf '{"type":"turn.completed"}\n'
     printf 'stopped\n\nStatus: BLOCKED\nConcerns/Blockers: COST_GATE — Ahrefs\n' > "$EV"
     exit 0 ;;
+  envdump)      # reports which env vars reached the worker, never their values
+    printf '{"type":"turn.completed"}\n'
+    {
+      printf 'TOKEN=%s\n' "${GOOGLE_WORKSPACE_CLI_TOKEN:+present}${GOOGLE_WORKSPACE_CLI_TOKEN:-absent}"
+      printf 'KEYRING=%s\n' "${GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND:+present}${GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND:-absent}"
+      printf 'ROLE=%s\n' "${MWG_CREW_ROLE:-unset}"
+      printf '\nStatus: DONE\nSummary: env dumped\n'
+    } > "$EV"
+    exit 0 ;;
   no_status)    # finished, but ignored the contract's Status line
     printf '{"type":"turn.completed"}\n'
     printf 'did some work and forgot the contract\n' > "$EV"

@@ -859,6 +859,56 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
     again.scope.dismissed.filter((p) => p.protected).length, 4);
 }
 
+// --- dismissal: a waiver that suppressed nothing must say so ----------------
+{
+  // The trap, reproduced: two files of the same basename, one of them the actual
+  // violation. Dismissing the wrong one looked exactly like the flag being
+  // broken, because the report named the violation by a path that read as the
+  // dismissed one.
+  const { ws, manifestPath } = newRun({
+    jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, status: "done" }],
+  });
+  writeFile(join(ws, "worker-anti-1.md"), "stray copy at the repo root\n");
+  const innocent = join("tasks", TASK, "reports", "crew-test", "worker-anti-1.md");
+  writeFile(join(ws, innocent), "the one inside the run folder\n");
+
+  const r = collectRun(manifestPath, {
+    workspace: ws, notOurs: [innocent], reason: "bác sai path",
+  });
+  t.check("dismissing the wrong path does not clear the violation", r.exitCode, 2);
+  t.check("...the violation is still the stray copy", r.scope.outOfScope[0]?.path, "worker-anti-1.md");
+  t.check("...and the useless waiver is reported", r.scope.unusedDismissals, innocent);
+
+  const right = collectRun(manifestPath, {
+    workspace: ws, notOurs: ["worker-anti-1.md"], reason: "của session khác",
+  });
+  t.check("dismissing the charged path does clear it", right.exitCode, 0);
+  // The wrong dismissal is on disk now and keeps being called useless. That is
+  // the point: a waiver recorded against nothing stays visible until someone
+  // removes it, rather than sitting in the manifest looking like it did work.
+  t.check("...while the earlier wrong waiver stays flagged", right.scope.unusedDismissals, innocent);
+}
+
+// --- H2: a declared write in a subdirectory keeps its full path -------------
+{
+  const { ws, manifestPath } = newRun({
+    jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, filesMayModify: ["shared-workspace/"] }],
+  });
+  // Nested, not at the prefix root: the walk sliced one character too many off
+  // every subdirectory name, so `images-original` was recorded as
+  // `mages-original`. Only a nested path can catch it -- a file directly under
+  // the prefix comes out right either way.
+  writeFile(join(ws, "shared-workspace", "images-original", "acer-swift.jpg"), "jpeg\n");
+  writeFile(join(ws, "shared-workspace", "metadata", "image-metadata.csv"), "a,b\n");
+  const r = collectRun(manifestPath, { workspace: ws });
+  t.check("a nested declared write keeps its whole path",
+    r.scope.inScope.some((x) => x.path === "shared-workspace/images-original/acer-swift.jpg"), "true");
+  t.check("...for every segment depth",
+    r.scope.inScope.some((x) => x.path === "shared-workspace/metadata/image-metadata.csv"), "true");
+  t.check("...and none of it lands in unattributable", r.scope.unattributable.length, 0);
+  t.check("...so the in-scope count is the real one", r.exitCode, 0);
+}
+
 // --- a plain out-of-scope write, with nothing protected about it -------------
 {
   const { ws, manifestPath } = newRun({

@@ -205,7 +205,13 @@ function watchedPaths(workspace, manifest) {
     for (const e of entries) {
       if (!e.isFile()) continue;
       if (n += 1, n > WALK_LIMIT) break;
-      add(join(prefix, e.parentPath ? e.parentPath.slice(root.length + 1) : "", e.name));
+      // `relative`, not a slice off root's length: `prefix` ends in a separator,
+      // so `root` does too, and slicing past it ate the first character of every
+      // subdirectory name -- `images-original/x.jpg` was recorded as
+      // `mages-original/x.jpg`. Those paths then failed to stat, so a declared
+      // write landed in `unattributable` instead of `inScope` and the run's
+      // in-scope count read zero.
+      add(join(prefix, relative(root, e.parentPath), e.name));
     }
   }
   return [...found];
@@ -295,7 +301,7 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
   const result = {
     intervals, inScope: [], outOfScope: [], suspect: [],
     protectedHits: [], outsideWindow: [], unattributable: [],
-    ownedElsewhere: [], dismissed: [],
+    ownedElsewhere: [], dismissed: [], unusedDismissals: [],
   };
   const authored = authoredIndex(manifest, workspace);
   const foreign = foreignAuthors(manifest, workspace);
@@ -377,6 +383,14 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
       result.suspect.push(entry);
     }
   }
+  // A dismissal that suppressed nothing has to be said out loud. Silence here
+  // reads as "the flag does not work": a dispatcher dismissed one
+  // `worker-anti-1.md` while the charged file was a second copy of that name at
+  // the repo root, saw the identical violation again, and concluded the waiver
+  // was broken. Nothing was broken -- the two paths were different files, and
+  // only the report could have said so.
+  const suppressed = new Set(result.dismissed.map((d) => d.path));
+  result.unusedDismissals = [...waived].filter((p) => !suppressed.has(p));
   return result;
 }
 

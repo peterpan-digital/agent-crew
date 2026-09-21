@@ -62,9 +62,56 @@ có lý do, không phải mặc định.
    headless gặp prompt là silent-fail. Đây là ca app mạnh nhất còn lại.
 2. **Việc mở/khám phá, chưa viết nổi acceptance trước.** Không có tiêu chí chấm thì mất
    evidence-first cũng không mất gì; đổi lại owner nhìn được quá trình.
-3. **Cần thread resume làm tiếp buổi sau.** `codex resume <id>` chỉ có với thread app.
+3. **Cần thread resume làm tiếp buổi sau.** `codex resume <id>` cho Codex, `anti-run.mjs
+   --resume <conversationId>` cho Anti (thêm 2026-09-17) — cả hai chỉ có với thread app.
 
 Ngoài 3 ca này, chọn `app` là đang trả giá quan sát để lấy một thứ chưa nêu được.
+
+### Resume cho Anti app — `--resume <conversationId>` (thêm 2026-09-17)
+
+Trước 17/09, `anti-run.mjs --mode app` chỉ biết `agentapi new-conversation`: mỗi job app
+luôn mở một conversation mới, kể cả khi đang tiếp tục đúng việc một conversation trước đó
+vừa làm. Ca thật gây ra thay đổi: job lập kế hoạch ảnh AI (`image-ai-generate` Bước 0→4)
+dừng ở `COST_GATE`, user duyệt qua chat, và bước tiếp theo (Bước 5 generate +
+`image-seo-pipeline`) là **đúng việc của cùng conversation đó** — nó đã đọc bài, đã chọn
+archetype, đã tra product ID. Mở conversation mới bắt nó làm lại toàn bộ từ đầu, tốn token
+và có nguy cơ đổi kế hoạch đã duyệt.
+
+`agentapi` có sẵn lệnh thứ ba ngoài `new-conversation` và `get-conversation-metadata`:
+`send-message [--title=<title>] <recipient_id> <content>` — gửi tiếp một prompt vào đúng
+conversation đang có. `anti-run.mjs` giờ dùng nó khi được truyền `--resume`:
+
+```bash
+MWG_CREW_ROLE=worker node mwg-agent-crew/scripts/anti-run.mjs \
+  --mode app --resume <conversationId> --title "Generate ảnh - {bài}" \
+  --prompt-file "$RUN_DIR/brief-anti-4.md" \
+  --evidence "$RUN_DIR/worker-anti-4.md" \
+  --timeout 30m --workspace "$PWD" \
+  --manifest "$PWD/$RUN_DIR/manifest.json" --job 4
+```
+
+Bốn điều cần biết trước khi dùng:
+
+- **Transport vẫn ghi là `"app"`** trong manifest, không phải một transport thứ ba. `--resume`
+  là cờ trực giao, không phải mode riêng — `assertTransport` vẫn so `--mode app` với
+  `job.transport`, không biết gì về resume. Lý do giữ vậy: TRANSPORTS chỉ có 2 giá trị
+  (`app`/`headless`), thêm giá trị thứ ba kéo theo sửa `resolveRouting`, `addJob`, và mọi chỗ
+  đọc lại field này — trong khi bản chất resume vẫn là "mở một hộp cho user xem", chỉ khác ở
+  chỗ hộp đã mở sẵn.
+- **`conversationId` lấy từ job trước, không tự đoán.** Đọc field `conversationId` của job đã
+  xong trong manifest (`m.jobs.find(j => j.seq === N).conversationId`) — đây là id
+  `runApp()` trả về sau `new-conversation`, không phải id do dispatcher đặt tên.
+- **Không truyền `--model`.** `send-message` không có tham số model — conversation đã có model
+  từ lúc `new-conversation`. Truyền `--model` cùng `--resume` bị bỏ qua lặng lẽ ở tầng CLI
+  (không lỗi), nên đừng dựa vào nó để đổi bậc giữa chừng; đổi bậc thì phải mở conversation mới.
+- **Evidence path vẫn phải mới**, đúng rule "hai job không bao giờ nhận cùng evidence path" —
+  resume là một **job mới** (seq mới, `addJob` mới) tiếp tục một **conversation cũ**, không phải
+  sửa lại job cũ. Job cũ giữ nguyên verdict (`blocked` ở ca COST_GATE) làm bằng chứng cho quyết
+  định dừng đúng lúc; job resume ghi bằng chứng cho phần làm tiếp.
+
+Cách poll hoàn thành, cổng evidence, và `judgeJob()` giữ nguyên y hệt `new-conversation` —
+`runApp()` chỉ khác ở cách lấy `conversationId` (từ tham số thay vì từ output lệnh), phần còn
+lại của vòng đời job không đổi.
 
 ### Lịch sử: vì sao có `role`
 
@@ -81,7 +128,7 @@ ghi transport vào đó là ghi một box chat chưa từng mở.
 | Transport | Cơ chế | Có stdout? |
 | --- | --- | --- |
 | `headless` | Anti: `agy -p --output-format json`. Codex: `codex exec` | **Có** — trả về Claude |
-| `app` | Anti: `agentapi new-conversation` → session **hiện trong Antigravity 2.0**; adapter poll bằng file evidence. Codex: `codex-run.mjs --mode app` → companion `task --background` → thread **hiện trong app Codex**, tên `Codex Companion Task: {dòng đầu brief}`; chờ bằng `status --wait`. Cả hai đã kiểm bằng mắt 25/08 | Anti **không**; Codex **có** (`result <job-id>`) |
+| `app` | Anti: `agentapi new-conversation` (hoặc `send-message` khi có `--resume`, xem mục Resume ở trên) → session **hiện trong Antigravity 2.0**; adapter poll bằng file evidence. Codex: `codex-run.mjs --mode app` → companion `task --background` → thread **hiện trong app Codex**, tên `Codex Companion Task: {dòng đầu brief}`; chờ bằng `status --wait`. Cả hai đã kiểm bằng mắt 25/08 | Anti **không**; Codex **có** (`result <job-id>`) |
 
 Hai runtime lệch nhau chỗ stdout — đừng suy từ Anti sang Codex. Cả hai đều lấy **file
 evidence** làm phán quyết, stdout chỉ là tiện.

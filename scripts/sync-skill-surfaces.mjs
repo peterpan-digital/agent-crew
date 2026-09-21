@@ -19,7 +19,7 @@
  *   node mwg-agent-crew/scripts/sync-skill-surfaces.mjs --apply
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, extname, join, relative } from "node:path";
 
 const REPO_ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const CANONICAL = ".claude/skills";
@@ -31,6 +31,25 @@ const TARGETS = [".codex/skills", ".agents/skills", ".gemini/skills"];
  * installers, so copying them between surfaces would fight those installers.
  */
 const OWNED_PREFIXES = ["seo-", "content-", "image-", "onpage-", "tgdd-", "batch-"];
+
+/**
+ * Extensions read and written as UTF-8 text, where frontmatter overrides apply.
+ * Anything else is copied byte-for-byte: decoding a binary asset such as a PNG
+ * logo as UTF-8 replaces every invalid byte with U+FFFD and writes back a file
+ * that no longer opens. The allowlist is deliberate — an unlisted extension is
+ * treated as binary, so a new asset type is safe by default.
+ */
+const TEXT_EXTENSIONS = new Set([
+  ".md", ".markdown", ".txt", ".rst",
+  ".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".bash", ".zsh",
+  ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+  ".csv", ".tsv", ".html", ".htm", ".css", ".svg", ".xml", ".sql",
+]);
+
+/** True when a skill file is text and can go through the override path. */
+function isTextFile(file) {
+  return TEXT_EXTENSIONS.has(extname(file).toLowerCase());
+}
 
 /** Frontmatter keys a target surface is allowed to differ on. */
 const OVERRIDE_KEYS = ["model"];
@@ -117,6 +136,18 @@ function compare() {
         const targetFile = join(targetDir, file);
         if (!existsSync(targetFile)) {
           rows.push({ skill, surface, file, status: "MISSING", note: "" });
+          continue;
+        }
+        if (!isTextFile(file)) {
+          const canonicalBytes = readFileSync(join(canonicalDir, file));
+          const targetBytes = readFileSync(targetFile);
+          rows.push({
+            skill,
+            surface,
+            file,
+            status: canonicalBytes.equals(targetBytes) ? "SAME" : "DIFF",
+            note: "",
+          });
           continue;
         }
         const canonicalText = readFileSync(join(canonicalDir, file), "utf8");
@@ -214,10 +245,15 @@ function apply(rows) {
     const files = row.file ? [row.file] : filesUnder(canonicalDir);
     for (const file of files) {
       const targetFile = join(abs(row.surface), row.skill, file);
-      const existing = existsSync(targetFile) ? readFileSync(targetFile, "utf8") : null;
-      const next = contentForTarget(readFileSync(join(canonicalDir, file), "utf8"), existing);
       mkdirSync(dirname(targetFile), { recursive: true });
-      writeFileSync(targetFile, next);
+      if (isTextFile(file)) {
+        const existing = existsSync(targetFile) ? readFileSync(targetFile, "utf8") : null;
+        const next = contentForTarget(readFileSync(join(canonicalDir, file), "utf8"), existing);
+        writeFileSync(targetFile, next);
+      } else {
+        // Byte-for-byte: no decode, no frontmatter override on a binary asset.
+        writeFileSync(targetFile, readFileSync(join(canonicalDir, file)));
+      }
       written.push(relative(REPO_ROOT, targetFile));
     }
   }

@@ -52,6 +52,16 @@ KHÔNG ghi file nào ngoài danh sách trên.
 - Không đọc `.env`/secret/token. Không sửa Protected Files của `CLAUDE.md`.
 - Sheet read-only trừ khi brief ghi rõ. Không dispatch worker khác (`MWG_CREW_ROLE=worker`).
 - Cost gate {cost_gate}: gặp thì DỪNG, trả BLOCKED / COST_GATE.
+- **Không tự đặt biến môi trường cho Workspace CLI**, đặc biệt là
+  `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND`. Đặt `=file` làm CLI mất khoá Keychain,
+  kết luận kho credential hỏng, rồi **ra lệnh xoá nó**. Ngày 09/09 sandbox chặn
+  được; ngày 18/09 cùng thao tác đó chạy ngoài sandbox và **xoá thật**, owner
+  phải đăng nhập lại từ đầu. Adapter đã gỡ biến này khỏi env, nên đặt lại là cố
+  tình vượt rào.
+- Gặp `401` khi gọi Workspace CLI thì **DỪNG**, trả `BLOCKED` kèm nguyên văn lỗi.
+  Không đi tìm đường vòng. Job cần Workspace CLI phải được dispatch với
+  `--workspace-cli on`; thiếu nó là lỗi của người giao việc, không phải thứ
+  worker được tự vá.
 
 ## Lệnh được cấp sẵn
 - {lệnh cần env đặc biệt, cấp nguyên văn — vd chạy test module:

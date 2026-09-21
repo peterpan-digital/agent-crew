@@ -8,6 +8,11 @@
  *   app       `agentapi new-conversation` -- creates a real conversation in the
  *                         Antigravity 2.0 desktop app so the user can watch it,
  *                         then polls the conversation store until it settles.
+ *                         Pass `--resume <conversationId>` to send the prompt
+ *                         into an existing conversation instead (`agentapi
+ *                         send-message`) -- the case-3 resume from
+ *                         routing-table.md. Transport stays "app" either way;
+ *                         resume is an orthogonal flag, not a third mode.
  *
  * Why the evidence gate exists: agy has been observed returning
  * status=SUCCESS with an empty response and no work done, when a tool it needed
@@ -33,6 +38,7 @@ import {
   parseDuration,
   readPrompt,
   readWorkerStatus,
+  stripUnsafeEnv,
   validateEvidencePath,
 } from "./crew-guards.mjs";
 
@@ -64,6 +70,9 @@ function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMo
     cwd: workspace,
     encoding: "utf8",
     timeout: parseDuration(timeout) + 30_000, // let agy hit its own timeout first
+    // Was inheriting the parent env whole. Same strip as every other worker
+    // path -- this one runs unsandboxed and with --dangerously-skip-permissions.
+    env: stripUnsafeEnv(process.env),
     maxBuffer: 64 * 1024 * 1024,
   });
   const endedAt = new Date().toISOString();
@@ -130,17 +139,21 @@ function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMo
   };
 }
 
-function runApp({ promptText, workspace, evidenceAbs, model, title, timeout }) {
-  if (model && !APP_MODELS.has(model)) {
+function runApp({ promptText, workspace, evidenceAbs, model, title, timeout, resumeId }) {
+  // send-message has no --model: the conversation being resumed already has one.
+  if (model && !resumeId && !APP_MODELS.has(model)) {
     throw new AntiRunError(
       `app mode does not accept model "${model}"`,
       `pick one of: ${[...APP_MODELS].join(", ")}`,
     );
   }
   const { agentapi, env } = resolveAntiEnv(workspace);
-  const args = ["new-conversation"];
-  if (model) args.push(`--model=${model}`);
+  const args = resumeId ? ["send-message"] : ["new-conversation"];
+  if (!resumeId) {
+    if (model) args.push(`--model=${model}`);
+  }
   if (title) args.push(`--title=${title}`);
+  if (resumeId) args.push(resumeId);
   args.push(promptText);
 
   const started = new Date();
@@ -150,30 +163,35 @@ function runApp({ promptText, workspace, evidenceAbs, model, title, timeout }) {
       cwd: workspace,
       encoding: "utf8",
       timeout: 60_000,
-      env: { ...process.env, ...env },
+      // Antigravity runs unsandboxed, so it is the path where a worker setting
+      // KEYRING_BACKEND=file can actually destroy the credential store. See
+      // STRIPPED_ENV.
+      env: stripUnsafeEnv({ ...process.env, ...env }),
       maxBuffer: 16 * 1024 * 1024,
     });
   } catch (err) {
     throw new AntiRunError(
-      "agentapi new-conversation failed",
+      `agentapi ${resumeId ? "send-message" : "new-conversation"} failed`,
       String(err.stderr || err.message).trim().slice(0, 600),
     );
   }
 
-  let conversationId;
-  try {
-    const parsed = JSON.parse(raw);
-    conversationId = parsed?.response?.newConversation?.conversationId;
-  } catch { /* fall through to the regex below */ }
+  let conversationId = resumeId || undefined;
   if (!conversationId) {
-    // The prompt is echoed back in the payload, so match only a bare uuid line.
-    conversationId = raw.match(/"conversationId"\s*:\s*"([0-9a-f-]{36})"/)?.[1];
-  }
-  if (!conversationId) {
-    throw new AntiRunError(
-      "agentapi did not return a conversation id",
-      raw.trim().slice(0, 600),
-    );
+    try {
+      const parsed = JSON.parse(raw);
+      conversationId = parsed?.response?.newConversation?.conversationId;
+    } catch { /* fall through to the regex below */ }
+    if (!conversationId) {
+      // The prompt is echoed back in the payload, so match only a bare uuid line.
+      conversationId = raw.match(/"conversationId"\s*:\s*"([0-9a-f-]{36})"/)?.[1];
+    }
+    if (!conversationId) {
+      throw new AntiRunError(
+        "agentapi did not return a conversation id",
+        raw.trim().slice(0, 600),
+      );
+    }
   }
 
   // The app gives no completion callback, so poll the conversation store. A
@@ -260,7 +278,10 @@ export function antiRun(options) {
     return runHeadless({ promptText, workspace, evidenceAbs, model: options.model, timeout, agyMode: options.agyMode });
   }
   if (mode === "app") {
-    return runApp({ promptText, workspace, evidenceAbs, model: options.model, title: options.title, timeout });
+    return runApp({
+      promptText, workspace, evidenceAbs, model: options.model, title: options.title, timeout,
+      resumeId: options.resume,
+    });
   }
   throw new AntiRunError(`unknown mode "${mode}"`, "use --mode headless or --mode app");
 }
@@ -270,7 +291,7 @@ export { parseDuration, validateEvidencePath } from "./crew-guards.mjs";
 
 const KNOWN_FLAGS = new Set([
   "prompt", "promptFile", "evidence", "workspace", "timeout",
-  "mode", "agyMode", "model", "title", "manifest", "job",
+  "mode", "agyMode", "model", "title", "manifest", "job", "resume",
 ]);
 
 /**

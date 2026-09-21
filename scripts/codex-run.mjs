@@ -28,6 +28,7 @@
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { join, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import { resolveCompanion } from "./codex-companion-path.mjs";
 // Static, unlike the `await import` calls further down: a signal handler runs
 // with no chance to await, so the one write it needs has to be resolved before
@@ -41,6 +42,7 @@ import {
   parseDuration,
   readPrompt,
   validateEvidencePath,
+  workerEnv,
 } from "./crew-guards.mjs";
 
 /** A job that emits no stdout event for this long is treated as dead, not as thinking. */
@@ -68,8 +70,106 @@ const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "m
 
 const KNOWN_FLAGS = new Set([
   "prompt", "promptFile", "evidence", "workspace", "timeout", "idle",
-  "model", "effort", "manifest", "job", "mode",
+  "model", "effort", "manifest", "job", "mode", "workspaceCli",
 ]);
+
+/** `--workspace-cli` is opt-in: most jobs have no business holding a live token. */
+const WORKSPACE_CLI_VALUES = new Set(["on", "off"]);
+
+/**
+ * Opt-in rather than always-on, which is a deliberate departure from the plan's
+ * "mint before every spawn". A token read the owner's whole Workspace -- mail,
+ * Drive, Sheets -- so a job that only refactors a script has no reason to carry
+ * one. Least privilege costs the dispatcher one flag.
+ */
+function resolveWorkspaceCli(options) {
+  const raw = options.workspaceCli;
+  if (raw === undefined) return false;
+  if (!WORKSPACE_CLI_VALUES.has(raw)) {
+    throw new CodexRunError(
+      `unknown --workspace-cli value "${raw}"`,
+      `use one of: ${[...WORKSPACE_CLI_VALUES].join(", ")}`,
+    );
+  }
+  return raw === "on";
+}
+
+/** Where the Workspace CLI credential store lives; overridable for a non-default profile. */
+const WORKSPACE_CLI_CONFIG_DIR =
+  process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR || join(homedir(), ".config", "gws");
+
+/**
+ * Mints a short-lived Workspace access token for a job that asked for one.
+ *
+ * Measured 18/09: `codex exec` runs under a Seatbelt profile that denies writes
+ * outside the workspace, and the CLI rewrites its token cache on every refresh
+ * -- so a worker whose cached token had already expired hit a 401 it could not
+ * recover from, and the job read as BLOCKED. Handing it a token through the env
+ * skips the refresh entirely: the token env var outranks the cache, so the
+ * worker reads the credential store and writes nothing back to it.
+ *
+ * Only the access token crosses the boundary. The refresh token and the client
+ * secret stay in this process -- a worker holding those could mint tokens long
+ * after its job ended.
+ *
+ * Also measured that day: the token lives 3599s and the grant returns no new
+ * refresh token, so minting one per job neither rotates the owner's credential
+ * nor races the other jobs. The crew ceiling is 30m (MAX_TIMEOUT_MS), well
+ * inside that hour, which is why there is no expiry handling here.
+ */
+async function mintWorkspaceToken() {
+  let creds;
+  try {
+    const raw = execFileSync("gws", ["auth", "export", "--unmasked"], {
+      encoding: "utf8",
+      env: { ...process.env, GOOGLE_WORKSPACE_CLI_CONFIG_DIR: WORKSPACE_CLI_CONFIG_DIR },
+      timeout: 30_000,
+    });
+    // The CLI prints "Using keyring backend: ..." ahead of the JSON.
+    creds = JSON.parse(raw.slice(raw.indexOf("{")));
+  } catch (err) {
+    throw new CodexRunError(
+      "could not read the Workspace credentials needed to mint a token",
+      `${String(err.message).split("\n")[0]} -- check the store with: auth status`,
+    );
+  }
+  for (const field of ["client_id", "client_secret", "refresh_token"]) {
+    if (!creds?.[field]) {
+      throw new CodexRunError(
+        `the Workspace credential store has no ${field}`,
+        "the store looks incomplete; the owner has to re-authenticate",
+      );
+    }
+  }
+
+  let res;
+  try {
+    res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: creds.client_id,
+        client_secret: creds.client_secret,
+        refresh_token: creds.refresh_token,
+        grant_type: "refresh_token",
+      }),
+    });
+  } catch (err) {
+    throw new CodexRunError("could not reach the Google token endpoint", err.message);
+  }
+  if (!res.ok) {
+    // Status only, never the body: a refused grant echoes request fields back.
+    throw new CodexRunError(
+      `the Google token endpoint refused the refresh grant (HTTP ${res.status})`,
+      "the refresh token may have been revoked; the owner has to re-authenticate",
+    );
+  }
+  const token = (await res.json())?.access_token;
+  if (!token) {
+    throw new CodexRunError("the token endpoint returned no access_token", "nothing to hand the worker");
+  }
+  return token;
+}
 
 /** Same two words the manifest records, so the flag and the record cannot drift. */
 const MODES = new Set(["headless", "app"]);
@@ -218,6 +318,10 @@ function buildArgs({ workspace, model, effort, lastMessagePath }) {
     "--json",                        // JSONL events: the heartbeat this adapter watches
     "-C", workspace,
     "--sandbox", "workspace-write",  // a worker writes inside the workspace, nowhere else
+    // workspace-write denies network by default, and the explicit --sandbox flag
+    // above outranks sandbox_mode in config.toml. Every network-bound job (GSC,
+    // GA4, any crawl) returned BLOCKED with unresolvable DNS until this was set.
+    "-c", "sandbox_workspace_write.network_access=true",
     "-o", lastMessagePath,
     "--color", "never",
   ];
@@ -270,11 +374,19 @@ function assertSidecarsAbsent(paths) {
   }
 }
 
-export function codexRun(options) {
+export async function codexRun(options) {
   const {
     workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base,
   } = prepareRun(options);
   const idleMs = options.idle ? parseDuration(options.idle) : DEFAULT_IDLE_MS;
+
+  // Minted before anything is spawned. A job that cannot get a token must fail
+  // here with the reason, rather than spawn and let the worker walk into a 401
+  // it has no way to read as "the dispatcher could not authenticate".
+  const extraEnv = {};
+  if (resolveWorkspaceCli(options)) {
+    extraEnv.GOOGLE_WORKSPACE_CLI_TOKEN = await mintWorkspaceToken();
+  }
 
   const streamPath = join(logDir, `${base}.codex-stream.jsonl`);
   const lastMessagePath = join(logDir, `${base}.codex-last-message.txt`);
@@ -288,8 +400,9 @@ export function codexRun(options) {
     const startedAt = new Date();
     const child = spawn("codex", args, {
       cwd: workspace,
-      // The guard that stops a worker from reading the skill and dispatching.
-      env: { ...process.env, MWG_CREW_ROLE: "worker" },
+      // MWG_CREW_ROLE stops a worker reading the skill and dispatching further;
+      // workerEnv also strips the vars a worker must never carry. See STRIPPED_ENV.
+      env: workerEnv(extraEnv),
       stdio: ["pipe", "pipe", "pipe"],
       // Its own process group, so a kill reaches the shell commands codex spawns.
       // Killing only the pid leaves a grandchild holding stdout open.
@@ -471,8 +584,9 @@ function callCompanion(companion, args, { workspace, timeoutMs, what }) {
     timeout: timeoutMs,
     // Same recursion guard as the headless path: the detached worker the
     // companion spawns inherits this env, so the Codex process running the job
-    // reads the skill as a worker and refuses to dispatch further.
-    env: { ...process.env, MWG_CREW_ROLE: "worker" },
+    // reads the skill as a worker and refuses to dispatch further. workerEnv
+    // also strips the vars a worker must never carry -- see STRIPPED_ENV.
+    env: workerEnv(),
     maxBuffer: 16 * 1024 * 1024,
   });
   const stderrTail = String(proc.stderr ?? "").trim().slice(-600);
@@ -698,6 +812,19 @@ async function waitForSettle(companion, jobId, { workspace, timeoutMs }) {
 }
 
 export async function codexRunApp(options) {
+  // Refused rather than quietly ignored. Measured 18/09: ensureBrokerSession
+  // reuses a broker that is already listening, so a token injected at dispatch
+  // reaches the companion process and stops there -- the job runs inside a
+  // broker started before the env existed. Accepting the flag here would hand
+  // back a job that looks authorised and 401s anyway, which is the failure this
+  // whole plan is trying to remove.
+  if (resolveWorkspaceCli(options)) {
+    throw new CodexRunError(
+      "--workspace-cli on is not available in app mode",
+      "the app broker is reused across dispatches, so it never sees this env. Use --mode headless for jobs that call the Workspace CLI",
+    );
+  }
+
   const {
     workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base,
   } = prepareRun(options);
@@ -887,7 +1014,7 @@ function knownFlagSpellings(alias) {
 
 function parseArgv(argv) {
   const out = {};
-  const alias = { "prompt-file": "promptFile", "idle-timeout": "idle" };
+  const alias = { "prompt-file": "promptFile", "idle-timeout": "idle", "workspace-cli": "workspaceCli" };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (!arg.startsWith("--")) throw new CodexRunError(`unexpected argument "${arg}"`);

@@ -29,6 +29,41 @@ export const MAX_TIMEOUT_MS = 30 * 60_000;
  */
 export const MAX_BRIEF_BYTES = 2048;
 
+/**
+ * Env vars a worker must never inherit, and must not be able to set for itself.
+ *
+ * KEYRING_BACKEND=file is the one that matters. On 09/09 a worker set it to
+ * dodge a 401; the Workspace CLI then could not decrypt the credential store
+ * with the Keychain key, decided the file was corrupt, and issued a delete for
+ * it and the token cache. The Codex sandbox refused the writes. On 18/09 the
+ * same deletion ran from outside a sandbox and succeeded -- the store was gone
+ * and the owner had to re-authenticate from scratch.
+ *
+ * So this lives here, not in one adapter. Codex workers are sandboxed and
+ * Antigravity workers are not, which makes the unsandboxed path the more
+ * dangerous of the two; a guard that only covered Codex would cover the
+ * safer one.
+ */
+export const STRIPPED_ENV = ["GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND"];
+
+/**
+ * Removes the unsafe vars from an env object that is otherwise already built.
+ *
+ * Split from workerEnv on purpose: anti-run has never set MWG_CREW_ROLE itself
+ * (its caller does, see routing-table.md), and quietly starting to set it here
+ * would be a behaviour change smuggled in under a security fix.
+ */
+export function stripUnsafeEnv(env) {
+  const out = { ...env };
+  for (const name of STRIPPED_ENV) delete out[name];
+  return out;
+}
+
+/** The env a Codex worker gets: the recursion guard, plus the strip. */
+export function workerEnv(extra = {}) {
+  return stripUnsafeEnv({ ...process.env, MWG_CREW_ROLE: "worker", ...extra });
+}
+
 export class GuardError extends Error {
   constructor(message, detail) {
     super(detail ? `${message}\n  ${detail}` : message);
