@@ -123,6 +123,8 @@ quyết định của dispatcher, nằm trong brief để audit.
 | `scripts/crew-runtime-probe.mjs` | Đọc runtime Codex mà run đang ngồi lên: `shared`/`direct`/`unknown`, và đếm app-server **có quy chủ** (của broker mình vs của ChatGPT.app / VS Code). Không bao giờ throw — một số liệu chẩn đoán không được phép làm chết dispatch. |
 | `scripts/crew-collect.mjs` | Cổng nghiệm thu cuối run: reconcile → phán từng job → kiểm trùng `evidence_path` → kiểm phạm vi ghi → in bảng verdict. Exit 0 mới được viết report tổng. |
 | `scripts/crew-scope.mjs` | Quy file thay đổi trong working tree về từng job: ưu tiên `touchedFiles` runtime tự khai, còn lại theo mtime nằm trong khoảng job đó chạy. Tách khỏi collect vì đây là logic quy trách nhiệm, không phải logic phán quyết. |
+| `scripts/claude-session-export.mjs` | Xuất transcript của 1 session Claude thành markdown gầy để bàn giao sang agent khác. Gộp 3 nguồn (dòng chính, `subagents/`, `tool-results/`), bỏ `attachment`/`thinking`/`image`/tool output replay được, redact theo hình dạng giá trị, trần tuyệt đối 200 KB có assert. Rào chống injection mang nonce mỗi lần chạy. Thiếu module redact thì **abort**, không xuất file; `--out` trỏ vào path git đang theo dõi thì **từ chối**, không có cờ bỏ qua. |
+| `scripts/lib/redact-values.mjs` | Bộ dò bí mật **theo hình dạng giá trị**, vendored trong repo. Không phải bộ dò từ khoá — `secret-keywords.cjs` của hooks là bộ dò chủ đề prompt, nó vừa để lọt key đứng một mình vừa phá 5,9% text block nói về LLM token. |
 
 ```bash
 node mwg-agent-crew/scripts/codex-run.mjs \
@@ -444,6 +446,7 @@ nội dung manifest — nên một runner spawn được process và so được
 | `tests/judge-verdict.test.mjs` | 9 ca của bảng phán quyết `judgeJob()`: đủ tổ hợp evidence có/rỗng/thiếu × runtime ok/fail × có/không dòng `Status:`. |
 | `tests/collect-gate.test.mjs` | Cổng nghiệm thu trên các run dựng sẵn để sai đúng 1 kiểu: trùng evidence sau khi resolve, ghi ngoài phạm vi, ghi vào file được bảo vệ, ghi vào prefix bị gitignore đã khai, biên prefix, khoảng suy đoán, xoá file, `--abandon` job đã fail, `--dry-run` phủ `--abandon`, `--grace` không phải số, chạy từ cwd khác, echo template brief, provenance evidence, WARN bền qua 2 lần collect, cost gate chỉ nằm trong evidence. |
 | `tests/codex-lifecycle.test.mjs` | Vòng đời `codex-run.mjs` qua `codex` giả: grandchild giữ stdout, brief 200KB vào child không đọc stdin, watchdog trước stderr rác, retry đè sidecar cũ, log dir sai quyền, `BLOCKED` phải exit 3, và manifest phải ghi được ca bị giết. |
+| `tests/session-export.test.mjs` | Redactor trước, exporter sau. Hai ca ngược nhau: credential **không kèm từ tiếng Anh nào** phải chết sạch, và văn xuôi nói về LLM token phải còn nguyên. Rồi: gộp subagent/sidecar, từ chối path dưới `subagents/`, gỡ module redact → exit ≠ 0 và **không** sinh file, trần byte tính trên cả file chứ không riêng phần thân. |
 | `tests/fixtures/fake-codex` | `codex` giả, chọn hình dạng lỗi bằng `FAKE_MODE`. `tests/fixtures/bin/codex` là symlink trỏ vào nó — phải đúng tên `codex`, không thì PATH rơi xuống CLI thật và bộ test không đo gì cả. |
 
 5 lỗi lifecycle nặng nhất của phase 1 đều nằm ở chỗ không có script nào chạm tới, và
