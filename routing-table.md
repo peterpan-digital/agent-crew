@@ -122,8 +122,23 @@ Hệ quả cho người đọc sau:
   `--workspace-cli on`**, không có lối tắt qua app.
 - App mode còn hỏng trình duyệt: `Browser is not available: iab`. Nó **không** phải bề mặt
   "đủ quyền" như từng nghĩ.
-- Chưa đo: owner tự ngồi gõ trong app Codex. Đừng suy từ hai dòng trên — đó đúng là kiểu
-  suy rộng đã sinh ra kết luận sai này.
+- **Owner tự ngồi gõ trong app Codex là bề mặt THỨ TƯ, khác hẳn** (đo 22/09/2026, owner
+  chạy probe 3 bước và dán nguyên văn kết quả). Nó **không bị sandbox**: `date >
+  ~/codex-sandbox-probe.txt` chạy được, ghi thẳng ra ngoài repo. Trình duyệt mở được
+  example.com và trả accessibility tree; Computer Use chụp được screenshot. Cả ba thứ
+  mà crew `--mode app` đều bị chặn.
+
+  Bộ tool cũng **không phải 18 tool** của ba bề mặt dispatch, mà là bộ khác hẳn:
+  `exec_command`, `apply_patch`, `web.run`, `image_gen`, `multi_tool_use.parallel`, cộng
+  ~40 tool `mcp__codex_app.*` (`send_message_to_thread`, `list_threads`, `read_thread`,
+  `fork_thread`, `create_worktree`...).
+
+  Kết luận đúng, và nó hẹp hơn nghe tưởng: **sandbox là thuộc tính của lệnh gọi**, và
+  crew tự áp nó ở cả hai transport dispatch. Owner gõ tay không đi qua crew nên không
+  dính. Điều này **không** biến `--mode app` thành lối thoát — đường dispatch vẫn y cũ.
+
+  Ba phép đo chức năng là kết quả thật. Danh sách tool thì runtime **tự khai**, nên đọc
+  nó như lời khai, không như phép đo.
 - Bản plan cũ định thêm `[sandbox_workspace_write] network_access = true` vào `config.toml`
   cho "phiên tương tác bị chặn mạng". Tiền đề đó **sai** — phiên tương tác không bị chặn.
   Không thêm dòng đó; nó sẽ cấp quyền mạng cho mọi phiên Codex ở mọi repo trên máy.
