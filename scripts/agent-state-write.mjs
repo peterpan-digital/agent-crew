@@ -4,7 +4,9 @@
  *
  * Đăng ký (Phase 5 đo được, cả ba runtime cùng một schema hook):
  *   Claude       Stop                     .claude/settings.json
- *   Codex        stop + interrupt         ~/.codex/config.toml [hooks]
+ *   Codex        Stop                     ~/.codex/hooks.json  (GLOBAL — Codex
+ *                                         không nạp .codex/hooks.json của repo,
+ *                                         đo 22/09; xem rào existsSync bên dưới)
  *   Antigravity  UserPromptSubmit         .agents/hooks.json
  *
  * Payload vào qua stdin, mang sẵn `session_id`, `transcript_path`, `cwd` — nên
@@ -21,9 +23,9 @@
  *
  * Run: agent-state-write.mjs --agent claude   (payload JSON qua stdin)
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { AGENTS, pruneOld, renderState, stateDir, statePath, writeStateAtomic } from "./lib/state-file.mjs";
+import { AGENTS, STATE_DIR_REL, pruneOld, renderState, stateDir, statePath, writeStateAtomic } from "./lib/state-file.mjs";
 import { deriveFromTranscript } from "./lib/derive-state.mjs";
 
 const quiet = (msg) => { if (process.env.MWG_STATE_DEBUG) process.stderr.write(`agent-state-write: ${msg}\n`); };
@@ -46,6 +48,20 @@ async function main() {
   const workspace = resolve(
     argv.includes("--workspace") ? argv[argv.indexOf("--workspace") + 1] : (payload.cwd || process.cwd()),
   );
+  // Opt-in theo thư mục, và đây là điều kiện để đăng ký hook này ở phạm vi
+  // global được. Codex KHÔNG nạp `.codex/hooks.json` của repo (đo 22/09: số hook
+  // bắn khớp y hệt file global và chỉ file global), nên chỗ đăng ký duy nhất có
+  // tác dụng là `~/.codex/hooks.json` — dùng chung cho mọi repo trên máy.
+  //
+  // `stateDir` là `<cwd>/tasks/_state`, nên nếu không rào thì một phiên Codex mở
+  // ở repo bất kỳ sẽ đẻ ra thư mục `tasks/_state/` trong repo đó. Rào bằng "thư
+  // mục đã tồn tại" thay vì bằng danh sách đường dẫn cứng: workspace nào muốn
+  // thu trạng thái thì tự tạo thư mục, và không có đường dẫn máy nào bị nhúng
+  // vào code.
+  if (!existsSync(stateDir(workspace))) {
+    return quiet(`${workspace} không có ${STATE_DIR_REL} — bỏ qua`);
+  }
+
   const session = payload.session_id ?? payload.sessionId ?? "unknown";
   const transcript = payload.transcript_path ?? payload.transcriptPath ?? null;
 
