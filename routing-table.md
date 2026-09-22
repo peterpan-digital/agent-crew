@@ -90,7 +90,8 @@ việc, không phải thứ worker được tự vá — và đường vòng duy
 Chỉ **crew headless** bị sandbox. Terminal gõ tay và **app Codex đều không**, nên cả hai
 dùng Workspace CLI bình thường — không cần wrapper, không cần sửa `config.toml`.
 
-Nguồn của sandbox là đúng một dòng trong `codex-run.mjs:buildArgs`:
+Nguồn của sandbox là đúng một dòng trong `codex-run.mjs:buildArgs` (từ 22/09 là
+biến, mặc định vẫn y nguyên giá trị dưới đây — xem `--sandbox-mode` cuối mục này):
 
 ```
 "--sandbox", "workspace-write",
@@ -126,6 +127,29 @@ Hệ quả cho người đọc sau:
 - Bản plan cũ định thêm `[sandbox_workspace_write] network_access = true` vào `config.toml`
   cho "phiên tương tác bị chặn mạng". Tiền đề đó **sai** — phiên tương tác không bị chặn.
   Không thêm dòng đó; nó sẽ cấp quyền mạng cho mọi phiên Codex ở mọi repo trên máy.
+
+#### `--sandbox-mode` — nới quyền, opt-in (thêm 2026-09-22)
+
+| | |
+| --- | --- |
+| Mặc định | `workspace-write`. Không gõ cờ thì argv **y hệt** trước khi có cờ |
+| Nới quyền | `--sandbox-mode danger-full-access` — mở khoá Computer Use, trình duyệt, ghi ngoài repo |
+| Giá trị lạ | Bị **từ chối**, không rơi về mặc định |
+| App mode | Chỉ từ chối mức nới; mức mặc định vẫn nhận. Job app ghi `sandboxMode: "app-managed"` vì app tự quyết sandbox, adapter không có tiếng nói |
+| Worker | **Không được tự nới.** `MWG_CREW_ROLE=worker` + mức nới → từ chối |
+
+Ghi lại ở: manifest (`sandboxMode`, **mọi** đường thoát kể cả job chết), stderr, và
+sidecar `*.codex-stream.jsonl`. `crew-collect` gắn cờ `FULL-ACCESS` vào dòng job —
+**không** tính vào `violation`: nới quyền là cố ý, nhưng người đọc phải thấy nó khi
+chấm mọi thứ còn lại.
+
+Khi nào dùng: việc cần trình duyệt, cần màn hình, hoặc cần ghi ngoài repo. **Không**
+dùng để chữa lỗi Workspace CLI — việc đó đã có `--workspace-cli on`, đường riêng đã
+nghiệm thu.
+
+Gộp `--workspace-cli on` với mức nới thì worker vừa cầm token vừa ghi được kho
+credential — đúng hình dạng sự cố 18/09, và rào hash chỉ **phát hiện** sau chứ không
+chặn. Không cấm, nhưng cảnh báo nêu thẳng cặp này.
 
 ### Cổng canh kho credential (thêm 2026-09-22)
 

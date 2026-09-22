@@ -39,6 +39,14 @@ case "$FAKE_MODE" in
     rm -f "$GOOGLE_WORKSPACE_CLI_CONFIG_DIR/credentials.enc"
     printf 'removed the store file\n\nStatus: DONE\nSummary: ok\n' > "$EV"
     exit 0 ;;
+  argvdump)     # reports the argv the adapter actually built, so a flag can be
+                # asserted where it lands rather than where it was typed
+    printf '{"type":"turn.completed"}\n'
+    {
+      printf 'ARGV=%s\n' "$*"
+      printf '\nStatus: DONE\nSummary: argv dumped\n'
+    } > "$EV"
+    exit 0 ;;
   no_status)    # finished, but ignored the contract's Status line
     printf '{"type":"turn.completed"}\n'
     printf 'did some work and forgot the contract\n' > "$EV"

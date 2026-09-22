@@ -94,6 +94,18 @@ function readEvidence(path) {
 
 function judgeOne(job, workspace, now, manifestVersion) {
   const row = { seq: job.seq, worker: job.worker, title: job.title, status: job.status, flags: [], detail: "" };
+
+  // A job granted full machine access is flagged in the table, not merely
+  // recorded in the manifest. This file's own rule, a few screens down: a
+  // signal nothing surfaces is not a guard. The grant is deliberate and does
+  // not make the run wrong, so it does NOT feed `violation` -- it is a fact the
+  // reader has to see while judging everything else, the same way the write
+  // scope is. Without it the only trace was one stderr line in whichever
+  // terminal happened to dispatch the job.
+  if (job.sandboxMode && job.sandboxMode !== "workspace-write" && job.sandboxMode !== "app-managed") {
+    row.flags.push("FULL-ACCESS");
+  }
+
   const evidenceAbs = resolveEvidence(job, workspace);
 
   if (!evidenceAbs) {

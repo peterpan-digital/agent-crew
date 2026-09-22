@@ -11,7 +11,7 @@
  *
  * Run: node mwg-agent-crew/tests/codex-lifecycle.test.mjs
  */
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { readdirSync, renameSync, mkdirSync } from "node:fs";
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -548,6 +548,53 @@ t.check("...and the message prints real CLI spellings", typo.stderr.includes("--
   t.check("...as a deletion", j.credentialTamper?.[0]?.change, "deleted");
   t.check("...naming the directory it watched", j.credentialTamper?.[0]?.dir, storeDir);
   t.check("...and carrying no digest", /[0-9a-f]{64}/.test(JSON.stringify(j.credentialTamper)), false);
+}
+
+{
+  // The case the --sandbox-mode grant exists for, and the one that decides
+  // whether granting it is defensible at all.
+  //
+  // Until 22/09 two things stopped a worker destroying the credential store:
+  // the Seatbelt sandbox, and the hash guard. Opening the sandbox on purpose
+  // removes the first. If the second turned out to depend on it -- if it were
+  // only ever exercised on the sandboxed path -- the grant would silently ship
+  // with no protection left, which is exactly the 18/09 outcome. So the guard
+  // is proven here at the raised permission level, not assumed to carry over.
+  const storeDir = join(ws, "cred-store-full");
+  mkdirSync(storeDir, { recursive: true });
+  writeFile(join(storeDir, "credentials.enc"), "encrypted");
+  writeFile(join(storeDir, "client_secret.json"), "{}");
+
+  const fullDir = join(ws, RUN_DIR_REL, "cred-full");
+  mkdirSync(fullDir, { recursive: true });
+  const { manifestPath: mp } = createRun({ runDir: fullDir, runId: "credfull", task: "t", workspace: ws, depth: 0 });
+  // Basename, not directory, is what names the sidecar log -- a second w1.md
+  // under a different folder collides with the case above.
+  const ev = join(RUN_DIR_REL, "cred-full", "w-full.md");
+  addJob(mp, { worker: "codex", role: "assist", title: "tamper unsandboxed", evidence: ev });
+
+  const r = run({
+    mode: "tamper",
+    evidence: ev,
+    extra: ["--manifest", mp, "--job", "1", "--sandbox-mode", "danger-full-access"],
+    env: { GOOGLE_WORKSPACE_CLI_CONFIG_DIR: storeDir },
+  });
+  const j = readManifest(mp).jobs[0];
+  t.check("an unsandboxed job that deletes a store file still reports done", r.exit, 0);
+  t.check("...and the guard still catches it", j.credentialTamper?.[0]?.change, "deleted");
+  t.check("...recording the permission it ran at", j.sandboxMode, "danger-full-access");
+
+  // The end of the chain: a finding nobody acts on is not a guard. This is the
+  // phase's closing criterion, so it is asserted through the real CLI exit code
+  // rather than by reading the manifest and trusting collect to agree.
+  // The gate reads the git working tree for its write-scope check and dies
+  // early without one -- which would have exited 2 for the wrong reason and
+  // let this assertion pass on a run that never reached the credential logic.
+  if (!existsSync(join(ws, ".git"))) execFileSync("git", ["init", "-q"], { cwd: ws });
+  const gate = spawnSync("node",
+    [join(MODULE_ROOT, "scripts", "crew-collect.mjs"), mp], { encoding: "utf8", cwd: ws });
+  t.check("...and the gate turns red", gate.status, 2);
+  t.check("...naming the credential store, not just 'a violation'", /KHO CREDENTIAL/.test(`${gate.stdout}${gate.stderr}`), true);
 }
 
 {

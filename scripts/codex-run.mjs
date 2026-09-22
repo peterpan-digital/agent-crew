@@ -75,7 +75,7 @@ const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "m
 
 const KNOWN_FLAGS = new Set([
   "prompt", "promptFile", "evidence", "workspace", "timeout", "idle",
-  "model", "effort", "manifest", "job", "mode", "workspaceCli",
+  "model", "effort", "manifest", "job", "mode", "workspaceCli", "sandboxMode",
 ]);
 
 /** `--workspace-cli` is opt-in: most jobs have no business holding a live token. */
@@ -97,6 +97,44 @@ function resolveWorkspaceCli(options) {
     );
   }
   return raw === "on";
+}
+
+/**
+ * How much of the machine a worker may touch.
+ *
+ * Measured 22/09: the tool list is IDENTICAL at every surface -- eighteen tools,
+ * Computer Use among them -- and the sandbox is the only thing that decides
+ * whether they do anything. Under `workspace-write` a screenshot comes back
+ * "Computer Use was not approved" and a write outside the repo comes back
+ * "Operation not permitted"; drop the flag and both succeed. So a worker is not
+ * missing tools, it is forbidden to use them, and this flag is the whole lever.
+ *
+ * `workspace-write` stays the default. Opening the sandbox removes a defence
+ * that did real work: on 18/09 a worker set KEYRING_BACKEND=file, the Workspace
+ * CLI concluded the store was corrupt and issued a delete, and the sandbox
+ * refused the write. The same delete outside a sandbox destroyed the store.
+ *
+ * What makes the opt-in defensible is that the credential store now has its own
+ * guard -- the hash taken before and after every job -- built precisely because
+ * Antigravity workers were never sandboxed. Opening Codex's sandbox puts it level
+ * with the path Anti already runs on, not below it. It is still one layer fewer,
+ * which is why it is a flag and not a new default.
+ */
+const SANDBOX_MODES = new Set(["workspace-write", "danger-full-access"]);
+
+function resolveSandboxMode(options) {
+  const raw = options.sandboxMode;
+  if (raw === undefined) return "workspace-write";
+  // Refused, never coerced. A value the caller invented has to stop the job:
+  // falling back to the default would run at a permission level the dispatcher
+  // did not ask for, and say nothing about it.
+  if (!SANDBOX_MODES.has(raw)) {
+    throw new CodexRunError(
+      `unknown --sandbox-mode value "${raw}"`,
+      `use one of: ${[...SANDBOX_MODES].join(", ")}`,
+    );
+  }
+  return raw;
 }
 
 /**
@@ -323,12 +361,12 @@ export function resolveLogDir(evidenceAbs, workspace) {
   return join(workspace, ...owner, "data", "crew-logs", runName);
 }
 
-function buildArgs({ workspace, model, effort, lastMessagePath }) {
+function buildArgs({ workspace, model, effort, lastMessagePath, sandboxMode = "workspace-write" }) {
   const args = [
     "exec",
     "--json",                        // JSONL events: the heartbeat this adapter watches
     "-C", workspace,
-    "--sandbox", "workspace-write",  // a worker writes inside the workspace, nowhere else
+    "--sandbox", sandboxMode,        // default: a worker writes inside the workspace, nowhere else
     // workspace-write denies network by default, and the explicit --sandbox flag
     // above outranks sandbox_mode in config.toml. Every network-bound job (GSC,
     // GA4, any crawl) returned BLOCKED with unresolvable DNS until this was set.
@@ -359,13 +397,32 @@ function prepareRun(options) {
     throw new CodexRunError(`unknown effort "${effort}"`, `use one of: ${[...EFFORTS].join(", ")}`);
   }
 
+  // Resolved here, beside the other validation, and deliberately before the
+  // caller mints anything: this used to run after mintWorkspaceToken, so
+  // `--workspace-cli on --sandbox-mode bogus` minted a live Workspace access
+  // token for a job that was then refused. A refusal must not leave a token
+  // behind it, nor a log directory for a job that never ran.
+  const sandboxMode = resolveSandboxMode(options);
+
+  // A worker may not raise its own ceiling. The crew already refuses to let a
+  // worker dispatch another worker (MWG_CREW_ROLE + manifest depth); a worker
+  // handing itself full machine access is the same escalation by a shorter
+  // route. Cheap to close, and it does not depend on Seatbelt inheritance
+  // holding -- which nobody here has verified.
+  if (sandboxMode !== "workspace-write" && process.env.MWG_CREW_ROLE === "worker") {
+    throw new CodexRunError(
+      `--sandbox-mode ${sandboxMode} is not available to a worker`,
+      "only the dispatcher grants this level; a worker raising its own ceiling is an escalation",
+    );
+  }
+
   assertEvidenceAbsent(evidenceAbs);
 
   // The log lives under the task's data/ folder (see resolveLogDir).
   const logDir = resolveLogDir(evidenceAbs, workspace);
   mkdirSync(logDir, { recursive: true });
   const base = evidenceAbs.split(sep).pop().replace(/\.md$/, "");
-  return { workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base };
+  return { workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode };
 }
 
 /**
@@ -387,7 +444,7 @@ function assertSidecarsAbsent(paths) {
 
 export async function codexRun(options) {
   const {
-    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base,
+    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode,
   } = prepareRun(options);
   const idleMs = options.idle ? parseDuration(options.idle) : DEFAULT_IDLE_MS;
 
@@ -404,8 +461,27 @@ export async function codexRun(options) {
   assertSidecarsAbsent([streamPath, lastMessagePath]);
 
   const version = codexVersion();
-  const args = buildArgs({ workspace, model: options.model, effort, lastMessagePath });
+  const args = buildArgs({ workspace, model: options.model, effort, lastMessagePath, sandboxMode });
   const stream = makeStreamWriter(streamPath);
+
+  // Announced after the stream writer exists, on purpose. The first version
+  // wrote this to stderr only, and before the writer was even created -- so a
+  // dispatch run in the background lost the one record that a job had been
+  // granted full machine access. stderr is for the human watching now; the
+  // sidecar is for whoever reads the run back later, and those are different
+  // people.
+  if (sandboxMode !== "workspace-write") {
+    const extra = resolveWorkspaceCli(options)
+      // Worth spelling out: this pair is the 18/09 shape. Unsandboxed, the
+      // worker can run the Workspace CLI itself and write the credential store,
+      // and the hash guard only detects that afterwards.
+      ? " Kèm --workspace-cli on: worker vừa có token vừa ghi được kho credential — rào hash chỉ PHÁT HIỆN sau, không chặn."
+      : "";
+    const line = `CẢNH BÁO — job chạy ở --sandbox-mode ${sandboxMode}, ngoài sandbox. `
+      + `Kho credential vẫn bị canh bằng hash, nhưng lớp sandbox không còn.${extra}`;
+    process.stderr.write(`codex-run: ${line}\n`);
+    stream.note(line);
+  }
 
   return new Promise((resolveRun, rejectRun) => {
     const startedAt = new Date();
@@ -505,6 +581,10 @@ export async function codexRun(options) {
         mode: "exec",
         model: options.model ?? null,
         effort,
+        // Recorded so an investigation weeks later can tell what this job was
+        // allowed to do. Without it the manifest cannot answer the first
+        // question anyone asks about an incident.
+        sandboxMode,
         codexVersion: version,
         startedAt: startedAt.toISOString(),
         endedAt,
@@ -823,6 +903,24 @@ async function waitForSettle(companion, jobId, { workspace, timeoutMs }) {
 }
 
 export async function codexRunApp(options) {
+  // Only the escalation is refused, not the flag. Mirrors --workspace-cli
+  // below, which accepts `off` and refuses `on`: a dispatcher template that
+  // passes the default level uniformly must not break every app job, and
+  // telling it to "use headless for full permissions" when it asked for the
+  // default would be a wrong answer to a question it did not ask.
+  //
+  // The escalation itself cannot be honoured. Measured 22/09 -- an app-mode
+  // probe writing to $HOME came back "Operation not permitted", exactly like
+  // sandboxed headless, and its browser was gone as well ("Browser is not
+  // available: iab"). The app sandboxes dispatched tasks itself, so accepting
+  // the flag would hand back a job that looks unsandboxed and is not.
+  if (resolveSandboxMode(options) !== "workspace-write") {
+    throw new CodexRunError(
+      `--sandbox-mode ${options.sandboxMode} is not available in app mode`,
+      "the app sandboxes dispatched tasks itself and ignores this flag (đo 22/09). Use --mode headless for jobs that need full permissions",
+    );
+  }
+
   // Refused rather than quietly ignored. Measured 18/09: ensureBrokerSession
   // reuses a broker that is already listening, so a token injected at dispatch
   // reaches the companion process and stops there -- the job runs inside a
@@ -837,7 +935,7 @@ export async function codexRunApp(options) {
   }
 
   const {
-    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base,
+    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode,
   } = prepareRun(options);
 
   let companion;
@@ -1025,7 +1123,10 @@ function knownFlagSpellings(alias) {
 
 function parseArgv(argv) {
   const out = {};
-  const alias = { "prompt-file": "promptFile", "idle-timeout": "idle", "workspace-cli": "workspaceCli" };
+  const alias = {
+    "prompt-file": "promptFile", "idle-timeout": "idle",
+    "workspace-cli": "workspaceCli", "sandbox-mode": "sandboxMode",
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (!arg.startsWith("--")) throw new CodexRunError(`unexpected argument "${arg}"`);
@@ -1083,6 +1184,22 @@ if (import.meta.url === `file://${process.argv[1]}`) {
    * alarm to look at a file that was never touched. Found by a live run, not
    * by a fixture: a fixture supplies the path it expects.
    */
+  /**
+   * The permission level this job ran at, as a patch fragment.
+   *
+   * Resolved here rather than taken from the finished result, because the
+   * result only exists on the success path -- and the jobs that lose the field
+   * that way are exactly the killed, crashed and SIGTERM'd ones, which is the
+   * population the field was added for. "What was this job allowed to do" is
+   * the first question anyone asks about an incident, and an incident is never
+   * the happy path.
+   *
+   * Null until resolved, so a run refused during validation records nothing
+   * rather than claiming a level it never reached.
+   */
+  let sandboxMode = null;
+  const sandboxPatch = () => (sandboxMode ? { sandboxMode } : {});
+
   const credentialPatch = () => {
     const dir = displayCredentialDir();
     if (isWatchBlind(credentialsBefore)) return { credentialWatch: `blind:${dir}` };
@@ -1116,6 +1233,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           startedAt: dispatchedAt,
           endedAt: new Date().toISOString(),
           failure: `adapter nhận ${name} trước khi job kết thúc`,
+          ...sandboxPatch(),
           // A job killed mid-flight is the most suspect one there is; skipping
           // the check here would leave exactly that group unexamined.
           ...credentialPatch(),
@@ -1162,6 +1280,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       // own error handler is not a guard.
       claimed = true;
     }
+    // Set before dispatch so the failure paths above already have it. App jobs
+    // get a level of their own: the app applies its own sandbox to a dispatched
+    // task and this adapter has no say in it, so recording "workspace-write"
+    // there would be a guess dressed as a record. An absent field then means
+    // only one thing -- a job from before this field existed.
+    sandboxMode = mode === "app" ? "app-managed" : resolveSandboxMode(opts);
     result = mode === "app" ? await codexRunApp(opts) : await codexRun(opts);
   } catch (err) {
     // The whole point of this adapter: a death nobody records reads as "pending"
@@ -1179,6 +1303,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           endedAt: new Date().toISOString(),
           codexVersion: codexVersion(),
           failure: err.message,
+          ...sandboxPatch(),
           ...credentialPatch(),
         });
       } catch (manifestErr) {
@@ -1237,6 +1362,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         lastMessage: result.lastMessage,
         // App-transport provenance. Undefined on the headless path, and
         // JSON.stringify drops undefined, so no headless job grows empty fields.
+        // Same fragment the failure paths use, so one job cannot record the
+        // level one way when it succeeds and another when it dies.
+        ...sandboxPatch(),
         transportMode: result.mode,
         conversationId: result.conversationId,
         companionJobId: result.companionJobId,
