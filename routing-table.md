@@ -113,8 +113,16 @@ Hệ quả cho người đọc sau:
 
 - Đừng đi debug "app Codex có bị sandbox không" nữa. Không.
 - `--workspace-cli on` vẫn bị **từ chối** ở `--mode app` (`codex-run.mjs:825`), và từ chối
-  đó vẫn đúng — broker dùng lại nên env tiêm sau không tới. Nhưng nó **không gây thiệt hại**:
-  job chạy trong app không bị sandbox nên tự refresh token được, không cần token tiêm.
+  đó vẫn đúng — broker dùng lại nên env tiêm sau không tới.
+- ~~Job chạy trong app không bị sandbox nên tự refresh token được~~ — **sai, đã bác bỏ
+  22/09 13:3x.** Job crew dispatch vào app **bị sandbox**: probe ghi file ra `$HOME` trả
+  `Operation not permitted`, y hệt headless. Mà `gws` phải ghi `token_cache.json` ra
+  `~/.config/gws`, tức ngoài repo. Nên **việc cần Workspace CLI phải đi headless +
+  `--workspace-cli on`**, không có lối tắt qua app.
+- App mode còn hỏng trình duyệt: `Browser is not available: iab`. Nó **không** phải bề mặt
+  "đủ quyền" như từng nghĩ.
+- Chưa đo: owner tự ngồi gõ trong app Codex. Đừng suy từ hai dòng trên — đó đúng là kiểu
+  suy rộng đã sinh ra kết luận sai này.
 - Bản plan cũ định thêm `[sandbox_workspace_write] network_access = true` vào `config.toml`
   cho "phiên tương tác bị chặn mạng". Tiền đề đó **sai** — phiên tương tác không bị chặn.
   Không thêm dòng đó; nó sẽ cấp quyền mạng cho mọi phiên Codex ở mọi repo trên máy.
