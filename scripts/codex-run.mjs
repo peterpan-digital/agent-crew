@@ -389,7 +389,7 @@ function buildArgs({ workspace, model, effort, lastMessagePath, sandboxMode = "w
 function prepareRun(options) {
   const workspace = resolve(options.workspace ?? process.cwd());
   const evidenceAbs = validateEvidencePath(options.evidence, workspace);
-  const promptText = appendWorkerContract(readPrompt(options), { evidenceAbs, workspace });
+  const briefText = readPrompt(options);
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
   const timeoutMs = parseDuration(timeout); // validates against the 30m ceiling
   const effort = options.effort ?? null;
@@ -422,6 +422,15 @@ function prepareRun(options) {
   const logDir = resolveLogDir(evidenceAbs, workspace);
   mkdirSync(logDir, { recursive: true });
   const base = evidenceAbs.split(sep).pop().replace(/\.md$/, "");
+  // Composed here rather than above because the extra boundary line depends on
+  // the sandbox level, which is only known after validation. readPrompt still
+  // runs first, so a brief over the byte ceiling is reported before a bad flag.
+  const promptText = appendWorkerContract(briefText, {
+    evidenceAbs,
+    workspace,
+    unsandboxed: sandboxMode !== "workspace-write",
+  });
+
   return { workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode };
 }
 

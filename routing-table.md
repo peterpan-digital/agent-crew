@@ -187,7 +187,14 @@ nghiệm thu.
 
 Gộp `--workspace-cli on` với mức nới thì worker vừa cầm token vừa ghi được kho
 credential — đúng hình dạng sự cố 18/09, và rào hash chỉ **phát hiện** sau chứ không
-chặn. Không cấm, nhưng cảnh báo nêu thẳng cặp này.
+chặn. **Owner chốt 22/09: không cấm** — một job cần cả trình duyệt lẫn Sheet mà phải
+tách làm hai là trả giá quá đắt cho rủi ro chưa xảy ra.
+
+Đổi lại, ràng buộc chuyển vào **brief**: mọi job chạy ngoài sandbox được adapter tự
+chèn thêm một dòng ranh giới (chỉ đụng workspace + task folder; không `~/.config/gws/`,
+`.env`, secret, token, config ngoài repo). Tự chèn theo bậc sandbox, không trông vào
+việc người giao việc nhớ gõ. Antigravity luôn nhận dòng này vì nó luôn chạy
+`--dangerously-skip-permissions`. Cảnh báo stderr + `stream.note()` vẫn nêu thẳng cặp cờ.
 
 ### Cổng canh kho credential (thêm 2026-09-22)
 

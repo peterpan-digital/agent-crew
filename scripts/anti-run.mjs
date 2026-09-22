@@ -272,7 +272,13 @@ function sleepMs(ms) {
 export function antiRun(options) {
   const workspace = resolve(options.workspace ?? process.cwd());
   const evidenceAbs = validateEvidencePath(options.evidence, workspace);
-  const promptText = appendWorkerContract(readPrompt(options), { evidenceAbs, workspace });
+  // Antigravity runs with --dangerously-skip-permissions (see buildArgs), so it
+  // is ALWAYS outside a sandbox -- unlike Codex, where this is opt-in per job.
+  const promptText = appendWorkerContract(readPrompt(options), {
+    evidenceAbs,
+    workspace,
+    unsandboxed: true,
+  });
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
   parseDuration(timeout); // validate before spending anything
 

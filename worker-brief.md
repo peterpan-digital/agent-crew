@@ -58,6 +58,15 @@ KHÔNG ghi file nào ngoài danh sách trên.
   Không phải đi qua skill trình duyệt của Claude — rào đó là của Claude, vì tài
   khoản Claude dùng chung nhiều người nên có thể mở tab nhầm máy. Worker chạy cục
   bộ, không dính.
+- **Job chạy ngoài sandbox thì tự giữ ranh giới.** Dòng này **adapter tự chèn**,
+  không cần gõ tay: `appendWorkerContract` thêm nó khi job được cấp
+  `--sandbox-mode danger-full-access` (Codex) và luôn thêm cho Antigravity, vốn
+  chạy `--dangerously-skip-permissions`. Nội dung: chỉ đụng workspace + task
+  folder; không `~/.config/gws/`, `.env`, secret, token, config ngoài repo.
+  Lý do nó nằm ở brief chứ không ở code: owner chốt 22/09 **không cấm** gộp
+  `--workspace-cli on` với mức nới, nên khi lớp sandbox không còn thì chỗ ràng
+  duy nhất còn lại là thứ worker thật sự đọc. Rào hash quanh kho credential vẫn
+  chạy, nhưng nó phát hiện **sau khi** hỏng.
 - **Không tự nới quyền.** Bậc sandbox do người giao việc cấp lúc dispatch. Worker
   gọi lại adapter với mức nới sẽ bị từ chối; thiếu quyền thì trả `BLOCKED` nêu rõ
   cần gì, đừng đi đường vòng.

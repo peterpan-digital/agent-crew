@@ -326,11 +326,15 @@ function assertBriefFits(text, where) {
  * discipline on the HOW the dispatcher writes, and charging them ~250 bytes of
  * boilerplate they no longer author would turn a real limit into a moving one.
  *
+ * `unsandboxed` adds one more line, and only then: a job dispatched outside
+ * Seatbelt can write anywhere on the machine, so the boundary that the sandbox
+ * used to enforce has to be stated where the worker reads it.
+ *
  * Idempotent by evidence path: a brief that already carries the line keeps the
  * author's wording. Two copies of a write-scope rule is how a worker learns to
  * pick whichever it likes.
  */
-export function appendWorkerContract(text, { evidenceAbs, workspace }) {
+export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed = false }) {
   const evidenceRel = evidenceAbs.startsWith(workspace + sep)
     ? evidenceAbs.slice(workspace.length + 1)
     : evidenceAbs;
@@ -344,6 +348,17 @@ export function appendWorkerContract(text, { evidenceAbs, workspace }) {
     `Chỉ được ghi đúng file: ${evidenceRel} (và data bạn tự sinh trong task folder).`,
     "Dòng cuối evidence file phải là: Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT",
   ];
+  // Owner chốt 22/09: gộp --workspace-cli on với --sandbox-mode danger-full-access
+  // KHÔNG bị cấm, vì một job cần cả trình duyệt lẫn Sheet mà phải tách đôi là trả
+  // giá quá đắt cho một rủi ro chưa xảy ra. Đổi lại, khi lớp sandbox không còn thì
+  // ràng buộc phải đi vào brief -- chỗ worker thật sự đọc. Rào hash quanh kho
+  // credential vẫn chạy, nhưng nó PHÁT HIỆN sau khi hỏng, không chặn trước.
+  if (unsandboxed) {
+    lines.push(
+      "Job này chạy NGOÀI sandbox: ghi được toàn máy. Chỉ đụng workspace và task folder;"
+        + " không đọc/ghi `~/.config/gws/`, `.env`, secret, token, hay config ngoài repo.",
+    );
+  }
   const missing = lines.filter((line) => !text.includes(line));
   if (missing.length === 0) return text;
   return `${text}\n\n${missing.join("\n")}\n`;

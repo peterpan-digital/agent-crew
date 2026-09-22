@@ -62,4 +62,24 @@ const ctx = { evidenceAbs: EV, workspace: WS };
     out.length > MAX_BRIEF_BYTES && out.includes(`Chỉ được ghi đúng file: ${REL}`), true);
 }
 
+{
+  // Owner chốt 22/09 không cấm chạy ngoài sandbox, kể cả kèm --workspace-cli on.
+  // Cái giữ chỗ còn lại là brief, nên nó phải tự xuất hiện theo bậc sandbox chứ
+  // không trông vào việc người giao việc nhớ gõ tay.
+  const sandboxed = appendWorkerContract("brief", ctx);
+  t.check("a sandboxed job gets no extra boundary line",
+    /NGOÀI sandbox/.test(sandboxed), false);
+
+  const loose = appendWorkerContract("brief", { ...ctx, unsandboxed: true });
+  t.check("an unsandboxed job is told so", /chạy NGOÀI sandbox/.test(loose), true);
+  t.check("...and the credential store is named in the brief itself",
+    loose.includes("`~/.config/gws/`"), true);
+  t.check("...without dropping any of the three base lines",
+    loose.includes(`Chỉ được ghi đúng file: ${REL}`)
+      && /Không được dispatch worker khác\./.test(loose)
+      && /Dòng cuối evidence file phải là/.test(loose), true);
+  t.check("...and stays idempotent",
+    appendWorkerContract(loose, { ...ctx, unsandboxed: true }), loose);
+}
+
 process.exit(t.finish() ? 0 : 1);

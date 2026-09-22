@@ -262,4 +262,26 @@ function newRun(name) {
   t.check("app mode does not refuse the default level", /sandbox-mode .* is not available in app mode/.test(r.stderr), false);
 }
 
+{
+  // The brief is the only boundary left once Seatbelt is off (owner chốt 22/09:
+  // không cấm cặp cờ này). Asserted on what the worker was actually handed on
+  // stdin, not on what the adapter composed -- the unit test covers composition,
+  // and a wiring mistake would pass that one while shipping nothing.
+  const plain = "brief-plain.md";
+  run({ evidence: join(RUN_DIR_REL, plain), mode: "briefdump" });
+  t.check("a sandboxed job's brief carries no extra boundary line",
+    /NGOÀI sandbox/.test(readFileSync(join(ws, RUN_DIR_REL, plain), "utf8")), false);
+
+  const loose = "brief-loose.md";
+  run({
+    evidence: join(RUN_DIR_REL, loose),
+    extra: ["--sandbox-mode", "danger-full-access"],
+    mode: "briefdump",
+  });
+  const text = readFileSync(join(ws, RUN_DIR_REL, loose), "utf8");
+  t.check("an unsandboxed job is handed the boundary line", /chạy NGOÀI sandbox/.test(text), true);
+  t.check("...naming the credential store", text.includes("~/.config/gws/"), true);
+  t.check("...and the author's own brief survives", text.includes("do the thing"), true);
+}
+
 process.exit(t.finish() ? 0 : 1);

@@ -47,6 +47,14 @@ case "$FAKE_MODE" in
       printf '\nStatus: DONE\nSummary: argv dumped\n'
     } > "$EV"
     exit 0 ;;
+  briefdump)    # writes back the brief it was actually handed on stdin, so the
+                # contract lines can be asserted where the worker reads them
+    printf '{"type":"turn.completed"}\n'
+    {
+      cat
+      printf '\nStatus: DONE\nSummary: brief dumped\n'
+    } > "$EV"
+    exit 0 ;;
   no_status)    # finished, but ignored the contract's Status line
     printf '{"type":"turn.completed"}\n'
     printf 'did some work and forgot the contract\n' > "$EV"
