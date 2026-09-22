@@ -85,6 +85,40 @@ Worker gặp `401` thì **DỪNG**, trả `BLOCKED` kèm nguyên văn. Thiếu c
 việc, không phải thứ worker được tự vá — và đường vòng duy nhất nó nghĩ ra
 (`KEYRING_BACKEND=file`) đã **xoá thật** kho credential của owner ngày 18/09.
 
+### Sandbox là cờ của adapter, không phải của Codex (đo 2026-09-22)
+
+Chỉ **crew headless** bị sandbox. Terminal gõ tay và **app Codex đều không**, nên cả hai
+dùng Workspace CLI bình thường — không cần wrapper, không cần sửa `config.toml`.
+
+Nguồn của sandbox là đúng một dòng trong `codex-run.mjs:buildArgs`:
+
+```
+"--sandbox", "workspace-write",
+```
+
+`~/.codex/config.toml` **không có key `sandbox` nào**, nên mặc định của máy là
+`filesystem unrestricted`. Phiên tương tác và app đọc đúng file đó.
+
+| Bề mặt | Sandbox | `gws` ghi lại `token_cache.json`? |
+| --- | --- | --- |
+| crew headless (`codex exec` qua adapter) | `workspace-write` — **adapter tự áp** | ❌ → `401` |
+| terminal gõ tay `codex` | unrestricted | ✅ |
+| app Codex | unrestricted, cùng `config.toml` | ✅ |
+
+Bằng chứng, không suy từ config: chạy `codex exec` **bỏ cờ `--sandbox`**, bảo nó
+`touch ~/.codex-sandbox-probe`. Lệnh exit 0 và file **tạo thật ở `$HOME`** — ngoài
+workspace. Đo `codex doctor` khớp: `filesystem unrestricted · network enabled`.
+
+Hệ quả cho người đọc sau:
+
+- Đừng đi debug "app Codex có bị sandbox không" nữa. Không.
+- `--workspace-cli on` vẫn bị **từ chối** ở `--mode app` (`codex-run.mjs:825`), và từ chối
+  đó vẫn đúng — broker dùng lại nên env tiêm sau không tới. Nhưng nó **không gây thiệt hại**:
+  job chạy trong app không bị sandbox nên tự refresh token được, không cần token tiêm.
+- Bản plan cũ định thêm `[sandbox_workspace_write] network_access = true` vào `config.toml`
+  cho "phiên tương tác bị chặn mạng". Tiền đề đó **sai** — phiên tương tác không bị chặn.
+  Không thêm dòng đó; nó sẽ cấp quyền mạng cho mọi phiên Codex ở mọi repo trên máy.
+
 ### Cổng canh kho credential (thêm 2026-09-22)
 
 Hai adapter băm `credentials.enc` và `client_secret.json` trong `~/.config/gws` **trước khi
