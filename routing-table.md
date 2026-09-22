@@ -45,6 +45,65 @@ phải kèm `note` nói vì sao — không note thì `addJob` từ chối.
 khác nhau — rule 25/08 trước đó nối chúng lại là nối sai, và phép đo phase 3 của
 `260825-1203-crew-transport-mode-split` cho thấy vì sao.
 
+### Job cần Google Workspace CLI — `--workspace-cli on` (thêm 2026-09-19)
+
+Chỉ **Codex headless** cần cờ này, và phải bật tay.
+
+`codex exec` chạy dưới Seatbelt `--sandbox workspace-write`, cấm ghi ngoài workspace.
+`gws` ghi đè `~/.config/gws/token_cache.json` mỗi lần refresh access token. Nên:
+
+| Tình huống | Kết quả |
+| --- | --- |
+| Token trong cache còn hạn | Job chạy tốt — chỉ đọc, không cần ghi |
+| Token hết hạn | CLI phải refresh → ghi bị chặn → `401` → job `BLOCKED` |
+
+Đó là lý do lỗi này trông "lúc được lúc không": nó phụ thuộc cache còn hạn hay không tại
+đúng thời điểm job chạy, không phụ thuộc job làm gì.
+
+Cờ `--workspace-cli on` làm dispatcher (chạy **ngoài** sandbox) mint access token bằng
+`grant_type=refresh_token` rồi bơm `GOOGLE_WORKSPACE_CLI_TOKEN` qua env. Worker không ghi
+vào kho credential lần nào — đường xoá `credentials.enc` vẫn bị sandbox chặn nguyên.
+
+Đo 18/09: token sống 3599s, grant **không** rotate refresh token. Trần run là 30 phút
+(`MAX_TIMEOUT_MS`), nằm gọn trong giờ đó, nên mint **mỗi job một lần** và không có xử lý
+hết hạn giữa chừng. Ba job song song cũng không đua nhau vì không job nào ghi cache chung.
+
+**Mặc định `off` là cố ý.** Access token đọc được toàn bộ Workspace của owner. Job chỉ
+refactor script thì không có lý do cầm nó.
+
+Ba giới hạn đã đo:
+
+- **App mode không dùng được.** Broker `codex app-server` tái dùng giữa các phiên, env
+  bơm lúc dispatch không tới được broker đang sống. Adapter từ chối thẳng, không âm thầm
+  chạy tiếp mà rơi về 401.
+- **Anti không cần.** `anti-run.mjs` không truyền cờ sandbox nào → chạy ngoài Seatbelt.
+- **Config dir giữ mặc định.** Đo 19/09: cache discovery ghi hỏng **không** chí mạng —
+  CLI fetch qua mạng rồi gọi API bình thường, exit 0. Khác với ca 18/09 (config dir rỗng
+  và chỉ đọc, CLI phải **tạo** thư mục cache — ca đó mới chết).
+
+Worker gặp `401` thì **DỪNG**, trả `BLOCKED` kèm nguyên văn. Thiếu cờ là lỗi người giao
+việc, không phải thứ worker được tự vá — và đường vòng duy nhất nó nghĩ ra
+(`KEYRING_BACKEND=file`) đã **xoá thật** kho credential của owner ngày 18/09.
+
+### Cổng canh kho credential (thêm 2026-09-22)
+
+Hai adapter băm `credentials.enc` và `client_secret.json` trong `~/.config/gws` **trước khi
+spawn** và so lại trên mọi đường thoát. Lệch là ghi `credentialTamper` vào job, và
+`crew-collect` tính nó vào `violation` → **exit 2**.
+
+| Điểm thiết kế | Vì sao |
+| --- | --- |
+| Chỉ canh 2 file đó | `token_cache.json` bị ghi đè mỗi lần refresh — canh nó là báo động trên đường lành, và báo động kêu lúc bình thường là báo động bị tắt |
+| Băm, không đoán theo mtime | `crew-scope.mjs` đã bác mtime thành văn: 3 job chạy chồng nhau thì cửa sổ thời gian trùng, và kẻ ghi được file cũng `touch -r` được |
+| Không quy trách nhiệm cho job nào | Hai file này không bao giờ đổi hợp lệ, nên đổi là **sự cố**, không cần biết ai — đây cũng là lớp duy nhất còn đúng khi `MAX_PARALLEL` = 3 |
+| Manifest chỉ ghi tên file + động từ, **không ghi hash** | Manifest nằm trong `reports/` và được commit; một digest của `client_secret.json` trong git là oracle vĩnh viễn để dò đoán, đổi lấy đúng số không lợi ích |
+| Phủ **cả Anti**, không riêng Codex | Vụ xoá thật 18/09 xảy ra **ngoài** sandbox — tức đường Anti. Guard chỉ phủ Codex là phủ đúng đường an toàn hơn |
+
+Codex có 3 đường thoát (signal handler, `catch`, thành công) và cả 3 đều chụp lại —
+job chết giữa chừng mới là job đáng nghi nhất. **Anti chỉ có 2**: nó không có signal
+handler, nên adapter Anti bị kill thì không ghi được gì, kể cả phần credential. Khoảng
+trống đó có trước guard này và guard này không thu hẹp nó.
+
 ### Vì sao headless là mặc định (đo 2026-08-25, 6 job app thật)
 
 | Đo được | Nghĩa là |

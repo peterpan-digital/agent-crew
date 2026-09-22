@@ -28,7 +28,6 @@
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { join, relative, resolve, sep } from "node:path";
-import { homedir } from "node:os";
 import { resolveCompanion } from "./codex-companion-path.mjs";
 // Static, unlike the `await import` calls further down: a signal handler runs
 // with no chance to await, so the one write it needs has to be resolved before
@@ -41,6 +40,12 @@ import {
   judgeJob,
   parseDuration,
   readPrompt,
+  appendWorkerContract,
+  snapshotCredentialStore,
+  diffCredentialStore,
+  isWatchBlind,
+  displayCredentialDir,
+  CREDENTIAL_STORE_DIR,
   validateEvidencePath,
   workerEnv,
 } from "./crew-guards.mjs";
@@ -94,9 +99,15 @@ function resolveWorkspaceCli(options) {
   return raw === "on";
 }
 
-/** Where the Workspace CLI credential store lives; overridable for a non-default profile. */
-const WORKSPACE_CLI_CONFIG_DIR =
-  process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR || join(homedir(), ".config", "gws");
+/**
+ * Where the Workspace CLI credential store lives.
+ *
+ * Re-exported from crew-guards rather than recomputed: this file used to carry
+ * its own copy of the same expression, and the guard that fingerprints the
+ * store has to watch the directory the token is actually minted from. Two
+ * copies drift, and the drift is silent.
+ */
+const WORKSPACE_CLI_CONFIG_DIR = CREDENTIAL_STORE_DIR;
 
 /**
  * Mints a short-lived Workspace access token for a job that asked for one.
@@ -340,7 +351,7 @@ function buildArgs({ workspace, model, effort, lastMessagePath }) {
 function prepareRun(options) {
   const workspace = resolve(options.workspace ?? process.cwd());
   const evidenceAbs = validateEvidencePath(options.evidence, workspace);
-  const promptText = readPrompt(options);
+  const promptText = appendWorkerContract(readPrompt(options), { evidenceAbs, workspace });
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
   const timeoutMs = parseDuration(timeout); // validates against the 30m ceiling
   const effort = options.effort ?? null;
@@ -1049,6 +1060,36 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // Captured before the job starts so a job that dies still carries a duration.
   const dispatchedAt = new Date().toISOString();
 
+  // Fingerprinted before anything spawns, and compared on every way out. These
+  // two files never change during a healthy job, so a difference is an incident
+  // rather than a warning -- which is why this needs no attribution logic and
+  // stays correct with three jobs running at once.
+  const credentialsBefore = snapshotCredentialStore();
+  /**
+   * The credential finding, as a patch fragment to spread into updateJob.
+   *
+   * A fragment rather than a field, and that is the load-bearing part. Writing
+   * `credentialTamper: undefined` on a clean attempt looked harmless -- JSON
+   * drops the key -- but updateJob does a plain Object.assign, so it also
+   * erased a finding recorded by an earlier attempt. An operator who saw exit 2
+   * and re-dispatched the job would get a clean run and a store that was still
+   * damaged. Omitting the key leaves the earlier record standing; `failure`
+   * next door is cleared on purpose and preserves its history in `notes`, and
+   * this field does neither.
+   *
+   * Each finding carries the directory it was taken in. The gate runs in its
+   * own process and does not inherit GOOGLE_WORKSPACE_CLI_CONFIG_DIR, so
+   * without this it printed its own default path -- sending whoever reads the
+   * alarm to look at a file that was never touched. Found by a live run, not
+   * by a fixture: a fixture supplies the path it expects.
+   */
+  const credentialPatch = () => {
+    const dir = displayCredentialDir();
+    if (isWatchBlind(credentialsBefore)) return { credentialWatch: `blind:${dir}` };
+    const changes = diffCredentialStore(credentialsBefore, snapshotCredentialStore());
+    return changes.length ? { credentialTamper: changes.map((c) => ({ ...c, dir })) } : {};
+  };
+
   // The adapter exists so that a death is recorded rather than read as
   // `pending` forever -- and until now its own death was the one death nobody
   // recorded. A SIGTERM (session closed, supervisor stopping the tree) does not
@@ -1075,6 +1116,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           startedAt: dispatchedAt,
           endedAt: new Date().toISOString(),
           failure: `adapter nhận ${name} trước khi job kết thúc`,
+          // A job killed mid-flight is the most suspect one there is; skipping
+          // the check here would leave exactly that group unexamined.
+          ...credentialPatch(),
         });
       } catch { /* nothing left to do about it from inside a signal */ }
     }
@@ -1135,6 +1179,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           endedAt: new Date().toISOString(),
           codexVersion: codexVersion(),
           failure: err.message,
+          ...credentialPatch(),
         });
       } catch (manifestErr) {
         console.error(`codex-run: could not record the failure in the manifest: ${manifestErr.message}`);
@@ -1205,6 +1250,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         // App transport only, and only when the dispatch race actually fired.
         settleRetries: result.settleRetries,
         settleRaceWhy: result.settleRaceWhy,
+        ...credentialPatch(),
         notes: result.runtimeVerdict
           ? [...prior, `runtime báo fail (${result.runtimeVerdict}) nhưng evidence tự phán ${result.reportedStatus} — cần người đọc`]
           : prior,

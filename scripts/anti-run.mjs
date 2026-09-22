@@ -37,6 +37,11 @@ import {
   judgeJob,
   parseDuration,
   readPrompt,
+  appendWorkerContract,
+  snapshotCredentialStore,
+  diffCredentialStore,
+  isWatchBlind,
+  displayCredentialDir,
   readWorkerStatus,
   stripUnsafeEnv,
   validateEvidencePath,
@@ -267,7 +272,7 @@ function sleepMs(ms) {
 export function antiRun(options) {
   const workspace = resolve(options.workspace ?? process.cwd());
   const evidenceAbs = validateEvidencePath(options.evidence, workspace);
-  const promptText = readPrompt(options);
+  const promptText = appendWorkerContract(readPrompt(options), { evidenceAbs, workspace });
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
   parseDuration(timeout); // validate before spending anything
 
@@ -343,6 +348,41 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // Captured before the job starts so a failed job still has a duration; the
   // failure path never sees the timestamps that antiRun() builds internally.
   const dispatchedAt = new Date().toISOString();
+
+  // Same credential fingerprint the Codex adapter takes, and it matters more
+  // here: Antigravity workers run with no sandbox at all. The deletion that
+  // actually destroyed the owner's store on 18/09 came from outside a sandbox,
+  // so a guard that only covered the sandboxed runtime would cover the safer
+  // one -- the reasoning STRIPPED_ENV already spells out in crew-guards.mjs.
+  //
+  // Two exit paths here, not three: anti-run has no signal handler, so a job
+  // whose adapter is killed records nothing at all -- credential check
+  // included. That gap predates this guard and is not narrowed by it.
+  const credentialsBefore = snapshotCredentialStore();
+  /**
+   * The credential finding, as a patch fragment to spread into updateJob.
+   *
+   * A fragment rather than a field, and that is the load-bearing part. Writing
+   * `credentialTamper: undefined` on a clean attempt looked harmless -- JSON
+   * drops the key -- but updateJob does a plain Object.assign, so it also
+   * erased a finding recorded by an earlier attempt. An operator who saw exit 2
+   * and re-dispatched the job would get a clean run and a store that was still
+   * damaged. Omitting the key leaves the earlier record standing; `failure`
+   * next door is cleared on purpose and preserves its history in `notes`, and
+   * this field does neither.
+   *
+   * Each finding carries the directory it was taken in. The gate runs in its
+   * own process and does not inherit GOOGLE_WORKSPACE_CLI_CONFIG_DIR, so
+   * without this it printed its own default path -- sending whoever reads the
+   * alarm to look at a file that was never touched. Found by a live run, not
+   * by a fixture: a fixture supplies the path it expects.
+   */
+  const credentialPatch = () => {
+    const dir = displayCredentialDir();
+    if (isWatchBlind(credentialsBefore)) return { credentialWatch: `blind:${dir}` };
+    const changes = diffCredentialStore(credentialsBefore, snapshotCredentialStore());
+    return changes.length ? { credentialTamper: changes.map((c) => ({ ...c, dir })) } : {};
+  };
   try {
     opts = parseArgv(process.argv.slice(2));
     // Recorded before the job spawns, not after it returns. A job that is still
@@ -388,6 +428,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           startedAt: dispatchedAt,
           endedAt: new Date().toISOString(),
           failure: err.message,
+          ...credentialPatch(),
         });
       } catch (manifestErr) {
         console.error(`anti-run: could not record the failure in the manifest: ${manifestErr.message}`);
@@ -428,6 +469,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         agentDurationSec: result.agentDurationSec ?? null,
         usage: result.usage ?? null,
         evidenceBytes: result.evidenceBytes,
+        ...credentialPatch(),
       });
     } catch (manifestErr) {
       console.error(

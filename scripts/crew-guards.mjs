@@ -8,6 +8,8 @@
  * non-empty file inside the task folder is.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 
 // Ceilings come from mwg-agent-crew/cost-gate.md; a runaway agent burns quota.
@@ -45,6 +47,107 @@ export const MAX_BRIEF_BYTES = 2048;
  * safer one.
  */
 export const STRIPPED_ENV = ["GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND"];
+
+/**
+ * Where the Workspace CLI keeps its credential store.
+ *
+ * Read from the env first so a non-default profile is still watched: a guard
+ * that only ever looks at the default directory is blind on exactly the machine
+ * whose setup is unusual.
+ */
+export const CREDENTIAL_STORE_DIR =
+  process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR || join(homedir(), ".config", "gws");
+
+/**
+ * The two files in that store that a normal job never changes.
+ *
+ * `token_cache.json` is deliberately absent: it is rewritten on every token
+ * refresh, so watching it would fire on the healthy path and teach everyone to
+ * ignore the alarm. These two only change when someone re-authenticates by
+ * hand -- or when something has gone wrong.
+ */
+export const IMMUTABLE_CREDENTIAL_FILES = ["credentials.enc", "client_secret.json"];
+
+/**
+ * Fingerprints the immutable half of the credential store.
+ *
+ * Synchronous on purpose: codex-run's signal handler gets no `await`, and the
+ * job killed mid-flight is the one most worth fingerprinting.
+ *
+ * A missing file reads as `null` rather than an error, because deletion is the
+ * exact incident this watches for. On 18/09 a worker decided the store was
+ * corrupt and deleted it; outside a sandbox the delete succeeded and the owner
+ * had to re-authenticate from scratch. A guard that threw on ENOENT would have
+ * failed precisely then.
+ */
+export function snapshotCredentialStore(dir = CREDENTIAL_STORE_DIR) {
+  const out = {};
+  for (const name of IMMUTABLE_CREDENTIAL_FILES) {
+    try {
+      out[name] = createHash("sha256").update(readFileSync(join(dir, name))).digest("hex");
+    } catch (err) {
+      out[name] = err.code === "ENOENT" ? null : `unreadable:${err.code}`;
+    }
+  }
+  return out;
+}
+
+/**
+ * True when the snapshot could not read a single file for a reason other than
+ * absence -- so the guard is watching nothing and would report "clean".
+ *
+ * Without this the blind case is indistinguishable from a healthy one: both
+ * ends of the job read the same error string, the diff is empty, and the gate
+ * passes. A guard that cannot see has to say so rather than vouch.
+ */
+export function isWatchBlind(snapshot) {
+  const values = IMMUTABLE_CREDENTIAL_FILES.map((f) => snapshot?.[f]);
+  return values.length > 0
+    && values.every((v) => typeof v === "string" && v.startsWith("unreadable:"));
+}
+
+/**
+ * The watched directory as it should be recorded, with the home prefix folded
+ * back to `~`.
+ *
+ * Manifests live in `reports/` and get committed, so writing the resolved path
+ * would publish the OS username and home layout into git on every incident.
+ * The tilde form still tells a reader which store was watched.
+ */
+export function displayCredentialDir(dir = CREDENTIAL_STORE_DIR) {
+  const home = homedir();
+  return dir === home ? "~" : dir.startsWith(home + "/") ? `~${dir.slice(home.length)}` : dir;
+}
+
+/**
+ * What changed between two snapshots, as names and verbs only.
+ *
+ * The hashes deliberately do not travel any further than this comparison. The
+ * manifest lives in `reports/` and gets committed, so a digest of
+ * `client_secret.json` sitting in git would be a permanent oracle for checking
+ * guesses at the secret -- bought for nothing, since detecting a change never
+ * needed the value.
+ */
+export function diffCredentialStore(before, after) {
+  if (!before || !after) return [];
+  const changes = [];
+  for (const name of IMMUTABLE_CREDENTIAL_FILES) {
+    const a = before[name];
+    const b = after[name];
+    if (a === b) continue;
+    const unreadable = (v) => typeof v === "string" && v.startsWith("unreadable:");
+    // "unreadable" covers both directions. Going from a hash to an error, and
+    // from an error to a hash, both mean the same thing: nobody knows whether
+    // the bytes changed. Calling either one "modified" would send the reader
+    // hunting for an edit that may never have happened.
+    const change = unreadable(a) || unreadable(b) ? "unreadable"
+      : a === null ? "created"
+      : b === null ? "deleted"
+      : "modified";
+    changes.push({ file: name, change });
+  }
+  return changes;
+}
 
 /**
  * Removes the unsafe vars from an env object that is otherwise already built.
@@ -204,6 +307,46 @@ function assertBriefFits(text, where) {
     );
   }
   return text;
+}
+
+/**
+ * The three lines `seo-crew` Bước 5 requires in every brief, appended by the
+ * adapter instead of trusted to the person writing the brief.
+ *
+ * Why here rather than in the prose: run `crew-260909-1450` lost all three jobs,
+ * including the one that never touched the sandbox. `brief-codex-1.md` was
+ * missing the "Chỉ được ghi đúng file" line, so the worker wrote a complete
+ * report into the chat and never created the evidence file -- and an evidence
+ * file that does not exist is, by this module's central rule, a job that did not
+ * happen. readPrompt measured the brief's size and nothing else, so a brief
+ * could pass every guard while missing the only instruction that makes the work
+ * collectable.
+ *
+ * Appended after the byte ceiling is checked, not before: the ceiling is a
+ * discipline on the HOW the dispatcher writes, and charging them ~250 bytes of
+ * boilerplate they no longer author would turn a real limit into a moving one.
+ *
+ * Idempotent by evidence path: a brief that already carries the line keeps the
+ * author's wording. Two copies of a write-scope rule is how a worker learns to
+ * pick whichever it likes.
+ */
+export function appendWorkerContract(text, { evidenceAbs, workspace }) {
+  const evidenceRel = evidenceAbs.startsWith(workspace + sep)
+    ? evidenceAbs.slice(workspace.length + 1)
+    : evidenceAbs;
+  // The run dir is the evidence file's parent (crew-{yymmdd-hhmm}); it is only
+  // ever cosmetic here, so an unexpected layout drops the id rather than throws.
+  const runId = evidenceRel.split("/").slice(-2, -1)[0] ?? null;
+  const lines = [
+    runId
+      ? `Bạn là worker trong crew run ${runId}. Không được dispatch worker khác.`
+      : "Bạn là worker trong một crew run. Không được dispatch worker khác.",
+    `Chỉ được ghi đúng file: ${evidenceRel} (và data bạn tự sinh trong task folder).`,
+    "Dòng cuối evidence file phải là: Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT",
+  ];
+  const missing = lines.filter((line) => !text.includes(line));
+  if (missing.length === 0) return text;
+  return `${text}\n\n${missing.join("\n")}\n`;
 }
 
 /**

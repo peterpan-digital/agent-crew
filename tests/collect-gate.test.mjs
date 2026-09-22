@@ -1125,4 +1125,103 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   t.check("the rest of the evidence line does not", printed.includes(POISON_API), false);
 }
 
+// --- credential store: the gate has to exit on it, not just print it -------
+// The 18/09 incident: a worker set KEYRING_BACKEND=file, the CLI decided the
+// store was corrupt, and deleted it. Outside a sandbox that delete succeeded.
+// The adapters fingerprint the store on every exit path; these cases exist to
+// prove the finding reaches the exit code, which is the only part a human
+// cannot forget to read.
+{
+  const { ws, manifestPath } = newRun({
+    jobs: [{
+      evidence: join(RUN_REL, "w1.md"),
+      body: DONE,
+      patch: { credentialTamper: [{ file: "credentials.enc", change: "deleted" }] },
+    }],
+  });
+  const r = collectRun(manifestPath, { workspace: ws });
+  t.check("a deleted credential store fails the gate", r.exitCode, 2);
+  t.check("...and names the file", r.credentialTamper[0]?.changes[0]?.file, "credentials.enc");
+  t.check("...and pins it on a job", r.credentialTamper[0]?.seq, 1);
+}
+
+{
+  // Found by a live run on 22/09, not by a fixture. The gate runs in its own
+  // process and does not inherit GOOGLE_WORKSPACE_CLI_CONFIG_DIR, so it used
+  // to print its own default path -- pointing whoever reads the alarm at a
+  // file that was never touched, on exactly the non-default profile the guard
+  // was widened to cover. The adapter now records the directory it watched.
+  const run = newRun({
+    jobs: [{
+      evidence: join(RUN_REL, "w1.md"),
+      body: DONE,
+      patch: { credentialTamper: [{ file: "credentials.enc", change: "deleted", dir: "/somewhere/else/gws" }] },
+    }],
+  });
+  const proc = spawnSync(process.execPath,
+    [join(MODULE_ROOT, "scripts", "crew-collect.mjs"), run.manifestPath],
+    { encoding: "utf8", cwd: run.ws });
+  const printed = `${proc.stdout ?? ""}${proc.stderr ?? ""}`;
+  t.check("the alarm names the directory that was actually watched",
+    printed.includes("/somewhere/else/gws/credentials.enc"), true);
+  t.check("...and not the gate's own default", printed.includes("/.config/gws/credentials.enc"), false);
+}
+
+{
+  // The negative that keeps the alarm worth hearing. A token refresh rewrites
+  // token_cache.json on the healthy path, so the adapters never fingerprint it
+  // -- a job that refreshed and did nothing else has an empty finding and must
+  // pass clean. An alarm that fires on the healthy path is one people mute.
+  const { ws, manifestPath } = newRun({
+    jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, patch: { credentialTamper: [] } }],
+  });
+  const r = collectRun(manifestPath, { workspace: ws });
+  t.check("a normal refresh is not a violation", r.exitCode, 0);
+  t.check("...and raises nothing", r.credentialTamper.length, 0);
+}
+
+{
+  // A job that died still has to be able to report tampering: the adapter
+  // writes the finding from its signal and catch paths too, and a dead job
+  // must not launder the incident into a plain failure.
+  const { ws, manifestPath } = newRun({
+    jobs: [{
+      evidence: join(RUN_REL, "w1.md"),
+      body: DONE,
+      patch: {
+        status: "failed",
+        failure: "adapter nhận SIGTERM trước khi job kết thúc",
+        credentialTamper: [{ file: "client_secret.json", change: "modified" }],
+      },
+    }],
+  });
+  const r = collectRun(manifestPath, { workspace: ws });
+  // 3 rather than 2: the job is blocking AND the store changed. Folding those
+  // into one code is the mistake the exitCode comment above warns about.
+  t.check("a dead job still reports tampering", r.credentialTamper.length, 1);
+  t.check("...and the run is not clean", r.exitCode !== 0, true);
+}
+
+{
+  // Review finding, 22/09 — the one that made the whole guard optional. The
+  // adapters used to write `credentialTamper: undefined` on a clean attempt.
+  // updateJob is a plain Object.assign, so that erased a finding an earlier
+  // attempt had recorded: an operator who saw exit 2 and re-dispatched got a
+  // clean run over a store that was still damaged. The fix is to omit the key
+  // rather than null it, so this asserts a retry cannot launder an incident.
+  const { ws, manifestPath } = newRun({
+    jobs: [{
+      evidence: join(RUN_REL, "w1.md"),
+      body: DONE,
+      patch: { credentialTamper: [{ file: "credentials.enc", change: "deleted", dir: "~/.config/gws" }] },
+    }],
+  });
+  t.check("the incident is on the record", collectRun(manifestPath, { workspace: ws }).exitCode, 2);
+  // What a clean retry writes now: everything else, and no mention of the field.
+  updateJob(manifestPath, 1, { status: "done", reportedStatus: "DONE", failure: undefined });
+  const after = collectRun(manifestPath, { workspace: ws });
+  t.check("a clean retry does not erase it", after.exitCode, 2);
+  t.check("...and the finding is still named", after.credentialTamper[0]?.changes[0]?.file, "credentials.enc");
+}
+
 process.exit(t.finish() ? 0 : 1);

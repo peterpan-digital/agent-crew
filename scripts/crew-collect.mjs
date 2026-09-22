@@ -17,9 +17,12 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { resolve, dirname, relative, join } from "node:path";
 import { readManifest, updateJob, updateManifest, appendNote } from "./crew-manifest.mjs";
-import { readWorkerStatus } from "./crew-guards.mjs";
+import { readWorkerStatus, CREDENTIAL_STORE_DIR } from "./crew-guards.mjs";
 import { reconcileRun, resolveEvidence } from "./crew-reconcile.mjs";
 import { collectWriteScope, headMovement } from "./crew-scope.mjs";
+
+/** Report language matches the rest of the gate's output, which is Vietnamese. */
+const VI_CHANGE = { modified: "bị sửa", deleted: "bị XOÁ", created: "bị tạo mới", unreadable: "không đọc được nữa" };
 
 /**
  * How long past a job's own timeout it may stay silent before the gate calls it
@@ -242,7 +245,16 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
     const job = manifest.jobs.find((j) => j.seq === r.seq);
     return acked.get(r.seq) !== (job.runtimeVerdict ?? job.disagreement ?? null);
   });
-  const violation = scope.outOfScope.length > 0 || scope.protectedHits.length > 0 || dupes.length > 0;
+  // The credential store is watched by fingerprint, not by write attribution:
+  // `crew-scope` only reasons about paths inside the repo, and this store sits
+  // in the owner's home. The adapters compare a before/after hash on every exit
+  // path and record what changed; the gate's only job is to make sure that
+  // finding reaches the exit code. A signal nothing exits on is not a guard.
+  const credentialTamper = manifest.jobs
+    .filter((j) => Array.isArray(j.credentialTamper) && j.credentialTamper.length > 0)
+    .map((j) => ({ seq: j.seq, worker: j.worker, changes: j.credentialTamper }));
+  const violation = scope.outOfScope.length > 0 || scope.protectedHits.length > 0
+    || dupes.length > 0 || credentialTamper.length > 0;
   // 3 is not "worse than 2" -- it is both. Folding the two into one code let a
   // reader who fixed the scope problem believe the run was clean while jobs were
   // still unresolved underneath.
@@ -250,7 +262,7 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   const exitCode = violation && stopped ? 3 : violation ? 2 : stopped ? 1 : 0;
   const unchecked = rows.length > 0 && scope.intervals.length === 0;
 
-  return { runId: manifest.runId, task: manifest.task, dryRun, reconciled, rows, dupes, scope, costGates, unchecked, head, unread, exitCode };
+  return { runId: manifest.runId, task: manifest.task, dryRun, reconciled, rows, dupes, scope, costGates, unchecked, head, unread, credentialTamper, exitCode };
 }
 
 /**
@@ -371,6 +383,33 @@ function report(r) {
     for (const d of r.dupes) console.log(`  job ${d.seqs.join(" và ")} trỏ về cùng một file: ${d.path}`);
   }
 
+  if (r.credentialTamper?.length) {
+    console.log("\nKHO CREDENTIAL BỊ ĐỔI — hai file này không bao giờ đổi trong một job bình thường:");
+    // Printed once per file, not once per job. A before/after fingerprint
+    // cannot say who wrote: with MAX_PARALLEL 3, one deletion is observed by
+    // every job running at the time, and listing each of them would assert
+    // that three workers tampered when one did. Attribution by timing is the
+    // thing crew-scope.mjs:252-258 refuses to do, and this is the same trap.
+    const seen = new Map();
+    for (const c of r.credentialTamper) {
+      for (const ch of c.changes) {
+        const key = `${ch.dir ?? CREDENTIAL_STORE_DIR}/${ch.file}|${ch.change}`;
+        if (!seen.has(key)) seen.set(key, new Set());
+        seen.get(key).add(c.seq);
+      }
+    }
+    for (const [key, seqs] of seen) {
+      const [path, change] = key.split("|");
+      console.log(`  ${path} — ${VI_CHANGE[change] ?? change}`);
+      console.log(`    job đang chạy lúc đó: ${[...seqs].sort((a, b) => a - b).join(", ")}`
+        + (seqs.size > 1 ? " — không quy được cho job nào trong số này, vì hash không nói ai ghi" : ""));
+    }
+    console.log("  Đây là sự cố cần người kiểm, không phải cảnh báo bỏ qua được.");
+    console.log("  Hai nguyên nhân đã biết: worker tự ý ghi/xoá, hoặc owner đăng nhập lại giữa run.");
+    console.log("  Kiểm kho trước khi chạy tiếp:");
+    console.log('    GOOGLE_WORKSPACE_CLI_CONFIG_DIR="$HOME/.config/gws" command gws auth status');
+    console.log("  Worker tự đặt GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND là nguyên nhân đã xảy ra thật — xem worker-brief.md.");
+  }
   if (r.scope.protectedHits.length) {
     console.log("\nGHI VÀO FILE ĐƯỢC BẢO VỆ — không worker nào được phép:");
     for (const h of r.scope.protectedHits) console.log(`  ${h.path} — ${why(h)}`);

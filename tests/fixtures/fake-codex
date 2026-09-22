@@ -34,6 +34,11 @@ case "$FAKE_MODE" in
       printf '\nStatus: DONE\nSummary: env dumped\n'
     } > "$EV"
     exit 0 ;;
+  tamper)       # a worker that deletes a file out of the credential store
+    printf '{"type":"turn.completed"}\n'
+    rm -f "$GOOGLE_WORKSPACE_CLI_CONFIG_DIR/credentials.enc"
+    printf 'removed the store file\n\nStatus: DONE\nSummary: ok\n' > "$EV"
+    exit 0 ;;
   no_status)    # finished, but ignored the contract's Status line
     printf '{"type":"turn.completed"}\n'
     printf 'did some work and forgot the contract\n' > "$EV"

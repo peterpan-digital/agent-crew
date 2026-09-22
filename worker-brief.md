@@ -50,6 +50,9 @@ KHÔNG ghi file nào ngoài danh sách trên.
 
 ## Ranh giới
 - Không đọc `.env`/secret/token. Không sửa Protected Files của `CLAUDE.md`.
+- **Không ghi, không xoá, không đổi tên bất cứ thứ gì trong `~/.config/gws/`** — kho
+  credential Google Workspace. Adapter băm thư mục đó trước và sau job; lệch là
+  cổng nghiệm thu đỏ và cả run bị chặn.
 - Sheet read-only trừ khi brief ghi rõ. Không dispatch worker khác (`MWG_CREW_ROLE=worker`).
 - Cost gate {cost_gate}: gặp thì DỪNG, trả BLOCKED / COST_GATE.
 - **Không tự đặt biến môi trường cho Workspace CLI**, đặc biệt là

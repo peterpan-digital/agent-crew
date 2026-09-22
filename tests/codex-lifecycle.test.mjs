@@ -12,7 +12,7 @@
  * Run: node mwg-agent-crew/tests/codex-lifecycle.test.mjs
  */
 import { spawn, spawnSync } from "node:child_process";
-import { readdirSync, renameSync } from "node:fs";
+import { readdirSync, renameSync, mkdirSync } from "node:fs";
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createRun, addJob, claimRunSlot, readManifest } from "../scripts/crew-manifest.mjs";
@@ -32,7 +32,7 @@ const bigBrief = writeFile(join(ws, "big-brief.md"), "x".repeat(200_000));
 const DONE_BODY = "work\n\nStatus: DONE\nSummary: ok\n";
 
 /** Runs the adapter the way the skill dispatches it, and reports how it ended. */
-function run({ mode, evidence, promptFile = brief, extra = [], timeoutSec = 120 }) {
+function run({ mode, evidence, promptFile = brief, extra = [], timeoutSec = 120, env = {} }) {
   const started = Date.now();
   const proc = spawnSync("node", [
     ADAPTER,
@@ -43,7 +43,7 @@ function run({ mode, evidence, promptFile = brief, extra = [], timeoutSec = 120 
     ...extra,
   ], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${FIXTURE_BIN}:${process.env.PATH}`, FAKE_MODE: mode, FAKE_EVIDENCE: join(ws, evidence) },
+    env: { ...process.env, PATH: `${FIXTURE_BIN}:${process.env.PATH}`, FAKE_MODE: mode, FAKE_EVIDENCE: join(ws, evidence), ...env },
     // A hang is the bug this file exists to catch, so the harness must outlive
     // the adapter's own deadline rather than the other way round.
     timeout: (timeoutSec + 30) * 1000,
@@ -515,6 +515,59 @@ t.check("...and the message prints real CLI spellings", typo.stderr.includes("--
   });
   t.check("a store that never settles still fails", forever.exit, 1);
   t.check("...naming the window rather than the raw error", /never gave job .* a status within/.test(forever.stderr), true);
+}
+
+// --- the credential store, through the real adapter ------------------------
+// The unit tests fingerprint files and the gate tests patch a manifest by
+// hand; neither one proves the adapter actually writes the finding. This runs
+// the real adapter against a worker that deletes a store file, which is the
+// 18/09 shape. Deterministic on purpose: a live Codex run proved this on
+// 22/09 and then the runtime started crashing on an unrelated MCP auth error,
+// which is exactly the kind of flake a closing criterion must not depend on.
+{
+  const storeDir = join(ws, "cred-store");
+  mkdirSync(storeDir, { recursive: true });
+  writeFile(join(storeDir, "credentials.enc"), "encrypted");
+  writeFile(join(storeDir, "client_secret.json"), "{}");
+
+  const credDir = join(ws, RUN_DIR_REL, "cred-case");
+  mkdirSync(credDir, { recursive: true });
+  const { manifestPath: mp } = createRun({ runDir: credDir, runId: "cred", task: "t", workspace: ws, depth: 0 });
+  const ev = join(RUN_DIR_REL, "cred-case", "w1.md");
+  addJob(mp, { worker: "codex", role: "assist", title: "tamper", evidence: ev });
+
+  const r = run({
+    mode: "tamper",
+    evidence: ev,
+    extra: ["--manifest", mp, "--job", "1"],
+    env: { GOOGLE_WORKSPACE_CLI_CONFIG_DIR: storeDir },
+  });
+  const j = readManifest(mp).jobs[0];
+  t.check("the worker's own job still reads done", r.exit, 0);
+  t.check("the adapter recorded the tampering", j.credentialTamper?.[0]?.file, "credentials.enc");
+  t.check("...as a deletion", j.credentialTamper?.[0]?.change, "deleted");
+  t.check("...naming the directory it watched", j.credentialTamper?.[0]?.dir, storeDir);
+  t.check("...and carrying no digest", /[0-9a-f]{64}/.test(JSON.stringify(j.credentialTamper)), false);
+}
+
+{
+  // The other half of the criterion: a job that touches nothing must leave the
+  // field absent. An alarm that fires on the healthy path gets muted.
+  const storeDir = join(ws, "cred-store-clean");
+  mkdirSync(storeDir, { recursive: true });
+  writeFile(join(storeDir, "credentials.enc"), "encrypted");
+  writeFile(join(storeDir, "client_secret.json"), "{}");
+
+  const cleanDir = join(ws, RUN_DIR_REL, "cred-clean");
+  mkdirSync(cleanDir, { recursive: true });
+  const { manifestPath: mp } = createRun({ runDir: cleanDir, runId: "credclean", task: "t", workspace: ws, depth: 0 });
+  const ev = join(RUN_DIR_REL, "cred-clean", "w1.md");
+  addJob(mp, { worker: "codex", role: "assist", title: "clean", evidence: ev });
+
+  run({ mode: "ok", evidence: ev, extra: ["--manifest", mp, "--job", "1"], env: { GOOGLE_WORKSPACE_CLI_CONFIG_DIR: storeDir } });
+  const j = readManifest(mp).jobs[0];
+  t.check("a clean job records no credential finding", j.credentialTamper, undefined);
+  t.check("...and is not marked blind either", j.credentialWatch, undefined);
 }
 
 process.exit(t.finish() ? 0 : 1);
