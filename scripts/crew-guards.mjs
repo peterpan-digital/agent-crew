@@ -175,6 +175,55 @@ export class GuardError extends Error {
   }
 }
 
+/**
+ * One gate for `--resume`, shared by both adapters.
+ *
+ * It exists because of a silent failure, not a missing feature. `--resume` was
+ * accepted by anti-run's flag parser but read only on the app branch, so
+ * `--mode headless --resume <id>` parsed fine, printed nothing, and opened a
+ * BRAND NEW conversation. The worker then re-read the task from scratch and the
+ * dispatcher had no way to tell -- the run looked exactly like a successful
+ * resume. A flag that cannot be honoured has to be refused, loudly.
+ *
+ * `supportsResume` comes from the ADAPTER, not from a table in here. Two places
+ * declaring which surfaces can resume is two places to drift; the adapter is the
+ * one that would actually have to build the argv, so it owns the answer.
+ *
+ * Rejecting `--model` alongside `--resume` is deliberately stricter than the
+ * runtimes are. agy accepts --model on a headless resume; agentapi send-message
+ * has no model parameter at all and ignores it. One rule for all four surfaces
+ * is easier to hold than four, and changing a model mid-session is a reason to
+ * open a new session, not to reuse one.
+ */
+export function resolveResume(options, { worker, mode, supportsResume }) {
+  const raw = options.resume;
+  if (raw === undefined || raw === null) return null;
+
+  if (!supportsResume) {
+    throw new GuardError(
+      `--resume is not available on ${worker} --mode ${mode}`,
+      "that surface always opens a new session; drop the flag or dispatch on a surface that resumes",
+    );
+  }
+
+  const id = String(raw).trim();
+  if (!id) {
+    throw new GuardError(
+      "--resume needs the id of the session to continue",
+      "read it from the finished job in the manifest (conversationId), do not guess it",
+    );
+  }
+
+  if (options.model) {
+    throw new GuardError(
+      "--resume and --model cannot be combined",
+      "a resumed session already has the model it was opened with; open a new session to change tier",
+    );
+  }
+
+  return id;
+}
+
 /** Accepts Go-style durations because that is what agy's --print-timeout takes. */
 export function parseDuration(value) {
   const text = String(value).trim();

@@ -1,0 +1,26 @@
+#!/bin/bash
+# A stand-in for the agy CLI, so anti-run's lifecycle can be tested without
+# spending a real Antigravity run.
+#
+# It exists because of a vacuous test: the resume-gate suite asserted "anti
+# headless --resume spawned nothing" while anti-run was in fact dying at
+# `could not run agy` on every path, gate or no gate. The assertion passed with
+# the gate removed. Proving a refusal stopped a spawn requires a spawn that
+# would otherwise succeed.
+#
+# FAKE_MODE picks the shape. FAKE_EVIDENCE is where the "worker" writes.
+[ "$1" = "--version" ] && { echo "fake-agy 0.0.1"; exit 0; }
+EV="$FAKE_EVIDENCE"
+CONV="${FAKE_CONVERSATION_ID:-conv-fake-0001}"
+case "$FAKE_MODE" in
+  ok|argvdump)
+    # argvdump writes the argv the adapter built, so a flag can be asserted
+    # where it lands rather than where it was typed.
+    {
+      printf 'ARGV=%s\n' "$*"
+      printf '\nStatus: DONE\nSummary: ok\n'
+    } > "$EV"
+    printf '{"status":"SUCCESS","response":"done","conversation_id":"%s","duration_seconds":1,"num_turns":1}\n' "$CONV"
+    exit 0 ;;
+  *) echo "fake-agy: unknown FAKE_MODE '$FAKE_MODE'" >&2; exit 99 ;;
+esac

@@ -286,9 +286,12 @@ Bốn điều cần biết trước khi dùng:
 - **`conversationId` lấy từ job trước, không tự đoán.** Đọc field `conversationId` của job đã
   xong trong manifest (`m.jobs.find(j => j.seq === N).conversationId`) — đây là id
   `runApp()` trả về sau `new-conversation`, không phải id do dispatcher đặt tên.
-- **Không truyền `--model`.** `send-message` không có tham số model — conversation đã có model
-  từ lúc `new-conversation`. Truyền `--model` cùng `--resume` bị bỏ qua lặng lẽ ở tầng CLI
-  (không lỗi), nên đừng dựa vào nó để đổi bậc giữa chừng; đổi bậc thì phải mở conversation mới.
+- **Không truyền `--model`. Từ 22/09 đây là lỗi cứng, không còn bị bỏ qua.** `send-message`
+  không có tham số model — conversation đã có model từ lúc `new-conversation`. Trước đây cặp
+  `--model` + `--resume` chạy tiếp và bỏ qua `--model` lặng lẽ; giờ `resolveResume` từ chối cả
+  job. Luật này áp cho **cả 4 bề mặt**, kể cả những bề mặt runtime có nhận `--model` — một luật
+  dễ nhớ hơn bốn, và đổi bậc model giữa chừng là lý do để mở phiên mới chứ không phải dùng lại
+  phiên cũ. Lưu ý rule "`--model` (anti) là bắt buộc": nó **không** áp cho job resume.
 - **Evidence path vẫn phải mới**, đúng rule "hai job không bao giờ nhận cùng evidence path" —
   resume là một **job mới** (seq mới, `addJob` mới) tiếp tục một **conversation cũ**, không phải
   sửa lại job cũ. Job cũ giữ nguyên verdict (`blocked` ở ca COST_GATE) làm bằng chứng cho quyết

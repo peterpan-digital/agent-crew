@@ -38,6 +38,7 @@ import {
   parseDuration,
   readPrompt,
   appendWorkerContract,
+  resolveResume,
   snapshotCredentialStore,
   diffCredentialStore,
   isWatchBlind,
@@ -145,8 +146,10 @@ function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMo
 }
 
 function runApp({ promptText, workspace, evidenceAbs, model, title, timeout, resumeId }) {
-  // send-message has no --model: the conversation being resumed already has one.
-  if (model && !resumeId && !APP_MODELS.has(model)) {
+  // `--model` alongside `--resume` never reaches here: resolveResume refuses the
+  // pair outright, because send-message has no model parameter and would have
+  // dropped it silently. So this check is only ever about a fresh conversation.
+  if (model && !APP_MODELS.has(model)) {
     throw new AntiRunError(
       `app mode does not accept model "${model}"`,
       `pick one of: ${[...APP_MODELS].join(", ")}`,
@@ -286,12 +289,21 @@ export function antiRun(options) {
 
   const mode = options.mode ?? "headless";
   if (mode === "headless") {
-    return runHeadless({ promptText, workspace, evidenceAbs, model: options.model, timeout, agyMode: options.agyMode });
+    // Phase 2 flips supportsResume AND teaches runHeadless the --conversation
+    // argv, in the same change. Nothing is passed through until then: a dead
+    // parameter is how that phase half-lands and recreates the silent no-op
+    // this gate exists to kill.
+    resolveResume(options, { worker: "antigravity", mode, supportsResume: false });
+    return runHeadless({
+      promptText, workspace, evidenceAbs, model: options.model, timeout,
+      agyMode: options.agyMode,
+    });
   }
   if (mode === "app") {
+    const resumeId = resolveResume(options, { worker: "antigravity", mode, supportsResume: true });
     return runApp({
       promptText, workspace, evidenceAbs, model: options.model, title: options.title, timeout,
-      resumeId: options.resume,
+      resumeId,
     });
   }
   throw new AntiRunError(`unknown mode "${mode}"`, "use --mode headless or --mode app");

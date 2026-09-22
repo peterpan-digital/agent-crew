@@ -36,6 +36,7 @@ import { updateJob as updateJobSync } from "./crew-manifest.mjs";
 import {
   DEFAULT_TIMEOUT,
   GuardError,
+  resolveResume,
   assertEvidenceAbsent,
   judgeJob,
   parseDuration,
@@ -76,6 +77,7 @@ const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "m
 const KNOWN_FLAGS = new Set([
   "prompt", "promptFile", "evidence", "workspace", "timeout", "idle",
   "model", "effort", "manifest", "job", "mode", "workspaceCli", "sandboxMode",
+  "resume",
 ]);
 
 /** `--workspace-cli` is opt-in: most jobs have no business holding a live token. */
@@ -415,6 +417,16 @@ function prepareRun(options) {
       "only the dispatcher grants this level; a worker raising its own ceiling is an escalation",
     );
   }
+
+  // Phase 3 (headless) and Phase 4 (app) flip these, each alongside the argv or
+  // companion call that honours the flag. Refusing here, before the log dir and
+  // before any spawn, keeps a flag that cannot be honoured from looking like a
+  // resume that worked.
+  resolveResume(options, {
+    worker: "codex",
+    mode: options.mode ?? "headless",
+    supportsResume: false,
+  });
 
   assertEvidenceAbsent(evidenceAbs);
 
