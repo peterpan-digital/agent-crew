@@ -54,6 +54,13 @@ KHÔNG ghi file nào ngoài danh sách trên.
   credential Google Workspace. Adapter băm thư mục đó trước và sau job; lệch là
   cổng nghiệm thu đỏ và cả run bị chặn.
 - Sheet read-only trừ khi brief ghi rõ. Không dispatch worker khác (`MWG_CREW_ROLE=worker`).
+- **Trình duyệt dùng được, nếu job được cấp `--sandbox-mode danger-full-access`.**
+  Không phải đi qua skill trình duyệt của Claude — rào đó là của Claude, vì tài
+  khoản Claude dùng chung nhiều người nên có thể mở tab nhầm máy. Worker chạy cục
+  bộ, không dính.
+- **Không tự nới quyền.** Bậc sandbox do người giao việc cấp lúc dispatch. Worker
+  gọi lại adapter với mức nới sẽ bị từ chối; thiếu quyền thì trả `BLOCKED` nêu rõ
+  cần gì, đừng đi đường vòng.
 - Cost gate {cost_gate}: gặp thì DỪNG, trả BLOCKED / COST_GATE.
 - **Không tự đặt biến môi trường cho Workspace CLI**, đặc biệt là
   `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND`. Đặt `=file` làm CLI mất khoá Keychain,
@@ -61,6 +68,10 @@ KHÔNG ghi file nào ngoài danh sách trên.
   được; ngày 18/09 cùng thao tác đó chạy ngoài sandbox và **xoá thật**, owner
   phải đăng nhập lại từ đầu. Adapter đã gỡ biến này khỏi env, nên đặt lại là cố
   tình vượt rào.
+- **Việc Google Workspace luôn dùng Workspace CLI**, không dùng connector Google
+  có sẵn của runtime (`gmail@`, `google-drive@`, `spreadsheets@`). Connector đi
+  OAuth riêng, nằm ngoài rào định tuyến profile, nên có thể ghi nhầm sang tài
+  khoản cá nhân mà không ai phát hiện.
 - Gặp `401` khi gọi Workspace CLI thì **DỪNG**, trả `BLOCKED` kèm nguyên văn lỗi.
   Không đi tìm đường vòng. Job cần Workspace CLI phải được dispatch với
   `--workspace-cli on`; thiếu nó là lỗi của người giao việc, không phải thứ

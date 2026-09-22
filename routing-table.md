@@ -128,6 +128,44 @@ Hệ quả cho người đọc sau:
   cho "phiên tương tác bị chặn mạng". Tiền đề đó **sai** — phiên tương tác không bị chặn.
   Không thêm dòng đó; nó sẽ cấp quyền mạng cho mọi phiên Codex ở mọi repo trên máy.
 
+#### Tool nào dùng được ở bề mặt nào — đo 2026-09-22, Codex `0.154.0` cả ba
+
+| Phép đo | Crew headless (mặc định) | `exec` **không** cờ sandbox | Crew `--mode app` |
+| --- | --- | --- | --- |
+| Số tool gọi được | **18** | **18** | **18** |
+| Ghi file ngoài repo | ❌ `Operation not permitted` | ✅ `WRITE_OK` | ❌ `Operation not permitted` |
+| Trình duyệt (`web.run`) | ✅ | ✅ | ❌ `Browser is not available: iab` |
+| Computer Use (chụp màn hình) | ❌ `was not approved` | ✅ **được** | ❌ `was not approved` |
+
+**Không tool nào bị mất — danh sách 18 tool giống hệt nhau ở cả ba.** Worker bị chặn
+lúc *dùng*, không phải lúc *thấy*. Nên đừng đi tìm cách "thêm tool cho worker": thứ
+duy nhất cần đổi là bậc sandbox.
+
+`--mode app` **không** phải lối thoát: bị sandbox y hệt headless, và trình duyệt còn
+hỏng hẳn. Bằng chứng: `tasks/260818-agent-crew-build/reports/260922-1340-tool-parity-3-be-mat.md`.
+
+#### Luật chọn transport theo loại việc
+
+| Việc | Đường | Vì sao |
+| --- | --- | --- |
+| Đọc/ghi file, Sheet, script, code | **headless**, mặc định | Quyền hẹp nhất đủ dùng, đã nghiệm thu |
+| Google Workspace | **headless + `--workspace-cli on`** | Owner chốt 22/09: luôn đi Workspace CLI. **Không có lối tắt qua app** — app cũng bị sandbox nên `gws` không ghi nổi `token_cache.json` |
+| Cần trình duyệt / Computer Use / ghi ngoài repo | **headless + `--sandbox-mode danger-full-access`** | Bậc sandbox là thứ duy nhất chặn; app mode không thay thế được |
+| Việc cần ngữ cảnh một thread app đang sống | `--mode app` | Xem "Ba ca `app` đáng giá" |
+
+#### Connector Google của OpenAI — **không dùng** (owner chốt 22/09)
+
+Codex có sẵn `gmail@openai-curated`, `google-drive@openai-curated`,
+`spreadsheets@openai-primary-runtime`, tất cả `enabled`. **Đừng dùng chúng cho việc
+Google Workspace.**
+
+Lý do không phải vì chúng kém: chúng đi **OAuth riêng của Codex**, nằm **ngoài** rào
+`gws-ntcong-routing.cjs`. Rào đó chặn `gws` trần và profile cá nhân, nhưng nó chỉ soi
+lệnh shell — connector không đi qua shell. Máy này có cả `~/.config/gws-personal`, nên
+"gọi nhầm tài khoản mà không ai biết" là kịch bản có thật, không phải lý thuyết.
+
+Ghi ở đây để lần sau không ai "phát hiện" lại rồi bật lên.
+
 #### `--sandbox-mode` — nới quyền, opt-in (thêm 2026-09-22)
 
 | | |
