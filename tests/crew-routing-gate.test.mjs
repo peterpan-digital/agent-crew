@@ -25,6 +25,29 @@ const HOOK = join(WS, ".agents", "hooks", "crew-routing-gate.cjs");
 const REAL_LOG = join(WS, ".agents", "logs", "crew-routing-gate.jsonl");
 
 /**
+ * Gate là hook cấp workspace, sống ở `<workspace>/.agents/hooks/`, nên nó KHÔNG
+ * nằm trong module. Module được publish riêng bằng `git subtree push`, và trong
+ * một bản clone trần thì `.agents/` không tồn tại — cả 14 check ở đây fail, làm
+ * người cài tưởng mình cài hỏng.
+ *
+ * Phân biệt hai ca, đừng gộp:
+ *   - không có `.agents/` → module đang chạy ngoài workspace. Bỏ qua, in lý do.
+ *   - có `.agents/` nhưng thiếu hook → workspace thật mà hook biến mất. Đó là
+ *     hỏng thật, phải fail to. Bỏ qua ca này là biến bộ test thành vô nghĩa.
+ */
+if (!existsSync(join(WS, ".agents"))) {
+  console.log(
+    "crew-routing-gate: SKIP — không thấy <workspace>/.agents/, "
+      + "module đang chạy ngoài workspace nên gate không tồn tại để chấm",
+  );
+  process.exit(0);
+}
+if (!existsSync(HOOK)) {
+  console.error(`crew-routing-gate: FAIL — có .agents/ nhưng thiếu hook: ${HOOK}`);
+  process.exit(1);
+}
+
+/**
  * Log riêng cho bộ test. Trước 23/09 test spawn hook mà không rẽ đường, nên nó
  * ghi thẳng vào log thật: một lần test crash giữa chừng đã bỏ lại 12 dòng giả
  * không phân biệt được với lượt thật, và teardown "snapshot rồi đè" còn xoá mất

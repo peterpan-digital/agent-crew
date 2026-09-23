@@ -6,10 +6,13 @@ việc cho Codex và Antigravity, gom kết quả về một task folder.
 Đây **không** phải task folder và **không** chứa evidence của run cụ thể. Evidence của
 mỗi lần chạy nằm trong `tasks/{task}/reports/crew-{yymmdd-hhmm}/`.
 
+Cài trên máy mới: đọc [`INSTALL.md`](INSTALL.md).
+
 ## Nội dung
 
 | File | Vai trò |
 | --- | --- |
+| `INSTALL.md` | Dựng module trên workspace mới: yêu cầu, cách đặt, cách kiểm. |
 | `routing-table.md` | Việc nào giao worker nào. **Sửa file này** khi muốn đổi phân việc. |
 | `worker-brief.md` | Format brief gửi worker. Dùng nguyên schema `~/.claude/rules/orchestration-protocol.md`. |
 | `cost-gate.md` | API tốn tiền worker không được tự gọi + ngưỡng cứng chống đốt credit. |
