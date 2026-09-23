@@ -16,15 +16,20 @@ khi có mẫu.
 
 ## Bảng phân việc
 
-| Worker | Việc |
+Chia theo **rule đã thành văn hay chưa**, không theo dễ/khó:
+
+| Worker | Loại việc |
 | --- | --- |
-| **Claude** | `seo-gsc-category-review`, `seo-action-impact-review`, `seo-daily-reporter`, `seo-task-state-audit`, viết report chính thức, `seo-log-cv`, `seo-log-weekly-work` |
-| **Codex** | tool trong `mwg-seo-analytics/`, `mwg-seo-planning/scripts/`, workflow n8n, dedup/clustering, `batch-llm-skill` runs, transform data phức tạp |
-| **Antigravity** | `seo-keyword-research`, `seo-gsc-rank-check` (bulk), `image-seo-pipeline`, `content-html-optimizer`, readback/export Sheet, chuẩn hoá bảng, fill metadata theo mẫu, research đối thủ, audit outline nhiều URL, việc cần browser tools |
+| **Claude** | Việc cần phán đoán ngoài văn bản: đọc số rồi kết luận, xếp ưu tiên, viết report chính thức, audit trạng thái, quyết định đánh đổi |
+| **Codex** | Code và pipeline: viết/refactor tool, workflow, dedup/clustering, transform dữ liệu phức tạp, chạy theo lô |
+| **Antigravity** | Việc đã có rule viết sẵn trong một skill: lọc theo tiêu chí, readback/export, chuẩn hoá bảng, điền metadata theo mẫu, audit nhiều URL, việc cần browser tools |
+
+`ĐIỀN VÀO`: thêm tên skill cụ thể của workspace bạn vào từng hàng. Bảng trống vẫn route
+được theo loại việc, nhưng có tên skill thì Claude khỏi phải đoán.
 
 Bảng này chỉ trả lời **ai làm**. Nó không có cột transport: transport không phải thuộc
-tính của loại việc. Cùng một việc `seo-gsc-rank-check` có thể là owner hay assist tuỳ ai
-chịu trách nhiệm về đầu ra — và cả hai đều chạy `headless` trừ khi có lý do viết ra.
+tính của loại việc. Cùng một việc có thể là owner hay assist tuỳ ai chịu trách nhiệm về
+đầu ra — và cả hai đều chạy `headless` trừ khi có lý do viết ra.
 
 ## Transport
 

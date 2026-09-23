@@ -7,15 +7,21 @@ Hai loại chi phí, hai cơ chế khác nhau.
 Worker gặp một trong các đường dưới đây thì **dừng**, trả `Status: BLOCKED` với
 `Concerns/Blockers: COST_GATE — {tên API}`. Claude hỏi user, được đồng ý mới dispatch lại.
 
-| API | Đường vào |
-| --- | --- |
-| **Ahrefs API** | skill `seo-keyword-research` |
-| **DataForSEO** | workflow n8n trong `mwg-workflow-n8n/` |
-| **Gemini API** | skill `image-seo-pipeline` (sinh alt text), `batch-llm-skill` |
-| **OpenAI / Anthropic batch API** | skill `batch-llm-skill` |
+`ĐIỀN VÀO` bảng này. Cột trái là API tính tiền theo lượt gọi; cột phải là skill hoặc
+workflow nào dẫn tới nó — worker cần biết **đường vào**, vì nó gặp cái tên skill trước
+khi gặp cái tên API.
 
-Miễn gate (free quota, cứ chạy): Google Search Console, GA4, Google Sheets, Drive, Docs,
-Gmail, crawl web thường.
+| API tốn tiền | Đường vào |
+| --- | --- |
+| *(ví dụ)* API dữ liệu trả phí | tên skill gọi nó |
+| *(ví dụ)* LLM chạy theo lô | tên skill gọi nó |
+| *(ví dụ)* API sinh ảnh / sinh text | tên skill gọi nó |
+
+Miễn gate (free quota, cứ chạy): các nguồn đọc miễn phí của bạn và crawl web thường.
+
+Bảng trống không có nghĩa là mở cổng. Không chắc một đường có tốn tiền hay không thì
+coi như **có** và hỏi — đoán sai theo hướng này chỉ mất một lượt hỏi, đoán sai theo
+hướng kia thì mất tiền.
 
 ## Loại 2 — Credit của chính worker: NGƯỠNG CỨNG, KHÔNG HỎI
 
