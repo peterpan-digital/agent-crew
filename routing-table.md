@@ -179,10 +179,11 @@ Codex có sẵn `gmail@openai-curated`, `google-drive@openai-curated`,
 `spreadsheets@openai-primary-runtime`, tất cả `enabled`. **Đừng dùng chúng cho việc
 Google Workspace.**
 
-Lý do không phải vì chúng kém: chúng đi **OAuth riêng của Codex**, nằm **ngoài** rào
-`gws-ntcong-routing.cjs`. Rào đó chặn `gws` trần và profile cá nhân, nhưng nó chỉ soi
-lệnh shell — connector không đi qua shell. Máy này có cả `~/.config/gws-personal`, nên
-"gọi nhầm tài khoản mà không ai biết" là kịch bản có thật, không phải lý thuyết.
+Lý do không phải vì chúng kém: chúng đi **OAuth riêng của Codex**, nằm **ngoài** mọi
+rào định tuyến tài khoản mà workspace bạn dựng. Rào kiểu đó thường soi lệnh shell —
+mà connector không đi qua shell. Máy nào có nhiều tài khoản cùng đăng nhập (công ty và
+cá nhân) thì "gọi nhầm tài khoản mà không ai biết" là kịch bản có thật, không phải lý
+thuyết.
 
 Ghi ở đây để lần sau không ai "phát hiện" lại rồi bật lên.
 
@@ -267,11 +268,10 @@ Ngoài 3 ca này, chọn `app` là đang trả giá quan sát để lấy một 
 
 Trước 17/09, `anti-run.mjs --mode app` chỉ biết `agentapi new-conversation`: mỗi job app
 luôn mở một conversation mới, kể cả khi đang tiếp tục đúng việc một conversation trước đó
-vừa làm. Ca thật gây ra thay đổi: job lập kế hoạch ảnh AI (`image-ai-generate` Bước 0→4)
-dừng ở `COST_GATE`, user duyệt qua chat, và bước tiếp theo (Bước 5 generate +
-`image-seo-pipeline`) là **đúng việc của cùng conversation đó** — nó đã đọc bài, đã chọn
-archetype, đã tra product ID. Mở conversation mới bắt nó làm lại toàn bộ từ đầu, tốn token
-và có nguy cơ đổi kế hoạch đã duyệt.
+vừa làm. Ca thật gây ra thay đổi: một job nhiều bước dừng giữa chừng ở `COST_GATE`, user
+duyệt qua chat, và bước tiếp theo là **đúng việc của cùng conversation đó** — nó đã đọc
+dữ liệu, đã chọn hướng, đã tra tham số. Mở conversation mới bắt nó làm lại toàn bộ từ
+đầu, tốn token và có nguy cơ đổi kế hoạch đã được duyệt.
 
 `agentapi` có sẵn lệnh thứ ba ngoài `new-conversation` và `get-conversation-metadata`:
 `send-message [--title=<title>] <recipient_id> <content>` — gửi tiếp một prompt vào đúng
