@@ -17,8 +17,10 @@
  * Usage:
  *   node mwg-agent-crew/scripts/sync-skill-surfaces.mjs --check
  *   node mwg-agent-crew/scripts/sync-skill-surfaces.mjs --apply
+ *   node mwg-agent-crew/scripts/sync-skill-surfaces.mjs --bless
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, extname, join, relative } from "node:path";
 
 const REPO_ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
@@ -26,31 +28,73 @@ const CANONICAL = ".claude/skills";
 const TARGETS = [".codex/skills", ".agents/skills", ".gemini/skills"];
 
 /**
- * A skill that must also ship inside the module it drives, keyed by skill name.
+ * A hand-maintained generic derivative of a canonical skill, keyed by skill name.
  *
- * `seo-crew` is the only entry point into `mwg-agent-crew`, but it lived solely
- * in `.claude/skills/`, which is outside the module. The module is published on
- * its own (`git subtree push --prefix=mwg-agent-crew`), so a clone of it got the
- * engine and no way to start it. Mirroring the skill into the module makes that
- * clone complete.
+ * `mwg-agent-crew` is published on its own, so a clone of it needs the skill that
+ * drives it. But canonical `seo-crew` is written for THIS workspace: it names a
+ * KPI, `seo-task-*`, File 1 / File 2, `tasks/_registry.md`. Shipping that to a
+ * stranger hands them a skill pointing at things they do not have.
  *
- * This is a mirror, not a second canonical copy: `.claude/skills/` is still the
- * only place a human edits, and `--check` fails the moment the two drift.
+ * So the module ships `skill/agent-crew/`: the same machinery with the local
+ * details lifted out into fill-in blanks. It is a DERIVATIVE, not a mirror --
+ * copying canonical over it would undo the whole point, which is exactly what
+ * the first version of this block did.
+ *
+ * Nothing here is ever written by `--apply`. What is tracked instead is drift:
+ * the derivative records the canonical fingerprint it was last reconciled
+ * against, and `--check` reports STALE once canonical moves, so a human re-reads
+ * both and runs `--bless`. Without that the generic copy rots silently, which is
+ * the failure mode every other gate in this repo exists to catch.
  */
-const BUNDLED = { "seo-crew": "mwg-agent-crew/skill" };
+const DERIVED = { "seo-crew": "mwg-agent-crew/skill/agent-crew" };
 
-/** Every surface a given skill is copied to. */
-function surfacesFor(skill) {
-  const bundle = BUNDLED[skill];
-  return bundle ? [...TARGETS, bundle] : TARGETS;
+/** File inside a derivative holding the canonical fingerprint it matches. */
+const STAMP = ".derived-from";
+
+/** Fingerprint of a canonical skill: every file, name and content. */
+function canonicalFingerprint(skill) {
+  const dir = join(abs(CANONICAL), skill);
+  const h = createHash("sha256");
+  for (const file of filesUnder(dir)) {
+    h.update(file);
+    h.update(readFileSync(join(dir, file)));
+  }
+  return h.digest("hex");
 }
 
-/** Skill names a surface is expected to hold, or null for "all owned". */
-function expectedAt(surface) {
-  const bundled = Object.entries(BUNDLED)
-    .filter(([, dir]) => dir === surface)
-    .map(([skill]) => skill);
-  return bundled.length ? new Set(bundled) : null;
+/** One row per derivative: SAME, STALE, or MISSING. */
+function derivedRows() {
+  const rows = [];
+  for (const [skill, dir] of Object.entries(DERIVED)) {
+    if (!existsSync(abs(dir))) {
+      rows.push({ skill, surface: dir, file: "", status: "MISSING", note: "derivative absent" });
+      continue;
+    }
+    const stampPath = join(abs(dir), STAMP);
+    const want = canonicalFingerprint(skill);
+    const got = existsSync(stampPath) ? readFileSync(stampPath, "utf8").trim() : "";
+    rows.push(
+      got === want
+        ? { skill, surface: dir, file: "", status: "SAME", note: "derived, reconciled" }
+        : {
+            skill, surface: dir, file: "", status: "STALE",
+            note: got ? "canonical moved since last reconcile" : `no ${STAMP} recorded`,
+          },
+    );
+  }
+  return rows;
+}
+
+/** Record that a derivative has been re-read against the current canonical. */
+function bless() {
+  for (const [skill, dir] of Object.entries(DERIVED)) {
+    if (!existsSync(abs(dir))) {
+      console.error(`cannot bless ${dir}: it does not exist`);
+      process.exit(2);
+    }
+    writeFileSync(join(abs(dir), STAMP), `${canonicalFingerprint(skill)}\n`);
+    console.log(`blessed ${dir} against ${CANONICAL}/${skill}`);
+  }
 }
 
 /**
@@ -154,7 +198,7 @@ function compare() {
   for (const skill of ownedSkills()) {
     const canonicalDir = join(abs(CANONICAL), skill);
     const canonicalFiles = filesUnder(canonicalDir);
-    for (const surface of surfacesFor(skill)) {
+    for (const surface of TARGETS) {
       const targetDir = join(abs(surface), skill);
       if (!existsSync(targetDir)) {
         rows.push({ skill, surface, file: "", status: "MISSING", note: "skill dir absent" });
@@ -202,6 +246,7 @@ function compare() {
     }
   }
   rows.push(...straysAtSurfaceRoot());
+  rows.push(...derivedRows());
   return rows;
 }
 
@@ -215,12 +260,9 @@ function compare() {
  * reads a directory listing; nothing here deletes.
  */
 function straysAtSurfaceRoot() {
-  const allOwned = new Set(ownedSkills());
+  const owned = new Set(ownedSkills());
   const rows = [];
-  for (const surface of [...TARGETS, ...new Set(Object.values(BUNDLED))]) {
-    // A bundle surface holds exactly one skill, so anything else there is a
-    // stray even when it is a skill this repo owns elsewhere.
-    const owned = expectedAt(surface) ?? allOwned;
+  for (const surface of TARGETS) {
     const root = abs(surface);
     if (!existsSync(root)) continue;
     for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -261,17 +303,26 @@ function printSummary(rows) {
     const path = [row.surface, row.skill, row.file].filter(Boolean).join("/");
     console.log(`  ${row.status}: ${path} ${row.note}`);
   }
-  const pairs = ownedSkills().reduce((n, skill) => n + surfacesFor(skill).length, 0);
+  const stale = rows.filter((r) => r.status === "STALE");
+  for (const row of stale) {
+    console.log(`  STALE: ${row.surface} — ${row.note}. Re-read it against canonical, then --bless`);
+  }
   console.log(
-    `\n${ownedSkills().length} skill, ${pairs} skill×surface pair — ` +
-      `DIFF/MISSING: ${bad.length}, ORPHAN: ${orphans.length}`,
+    `\n${ownedSkills().length} skill × ${TARGETS.length} surface, ` +
+      `${Object.keys(DERIVED).length} derived — ` +
+      `DIFF/MISSING: ${bad.length}, ORPHAN: ${orphans.length}, STALE: ${stale.length}`,
   );
-  return bad.length;
+  return bad.length + stale.length;
 }
 
 function apply(rows) {
+  // A derivative is hand-written and diverges on purpose. Left in, a MISSING row
+  // for one would make --apply create `<derivative>/seo-crew/` out of canonical
+  // -- reinstating exactly the overwrite this design exists to prevent.
+  const derivedDirs = new Set(Object.values(DERIVED));
   const written = [];
   for (const row of rows) {
+    if (derivedDirs.has(row.surface)) continue;
     if (row.status !== "DIFF" && row.status !== "MISSING") continue;
     const canonicalDir = join(abs(CANONICAL), row.skill);
     const files = row.file ? [row.file] : filesUnder(canonicalDir);
@@ -295,9 +346,14 @@ function apply(rows) {
 }
 
 const mode = process.argv[2];
-if (mode !== "--check" && mode !== "--apply") {
-  console.error("usage: sync-skill-surfaces.mjs --check | --apply");
+if (mode !== "--check" && mode !== "--apply" && mode !== "--bless") {
+  console.error("usage: sync-skill-surfaces.mjs --check | --apply | --bless");
   process.exit(2);
+}
+
+if (mode === "--bless") {
+  bless();
+  process.exit(0);
 }
 
 const rows = compare();

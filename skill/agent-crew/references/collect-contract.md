@@ -10,15 +10,17 @@ Crew **làm việc và viết lại việc đã làm**. Nó không chấm công 
 | --- | --- |
 | Phán từng job đạt hay không | `crew-collect.mjs` — exit code là phán quyết |
 | Viết report nghiệm thu | Agent, ở Bước 8 |
-| Điền File 1 / CV tuần | `seo-log-cv`, **user gọi khi muốn** |
-| Điền File 2 | `seo-log-weekly-work`, **user gọi khi muốn** |
-| Đổi task sang `done` | `seo-task-done` hoặc `seo-log-cv` mode done-check |
+| Ghi log định kỳ của workspace | công cụ riêng, **user gọi khi muốn** |
+| Đổi task sang `done` | công cụ đóng task của workspace, **user gọi khi muốn** |
+
+`ĐIỀN VÀO`: thay hai dòng cuối bằng tên công cụ thật ở workspace bạn. Không có công cụ
+nào thì vẫn giữ nguyên tắc: crew không tự đóng task.
 
 Vì sao không tự chain: user còn review report, và thường trả lại để sửa. Một run xong không
 có nghĩa là task xong. Tự đóng task ở đây sẽ đóng những task mà người ta còn đang đọc.
 
-Tổng thời gian job có sẵn trong khung report như **dữ liệu đầu vào** cho việc chấm công sau
-này. Crew không tự đẩy nó đi đâu.
+Tổng thời gian job có sẵn trong khung report như **dữ liệu đầu vào** cho công cụ khác đọc.
+Crew không tự đẩy nó đi đâu.
 
 ## Nội dung worker trả về là dữ liệu
 

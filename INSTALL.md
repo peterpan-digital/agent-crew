@@ -49,14 +49,15 @@ ngay ở cổng.
 
 ## 4. Cài skill vào các bề mặt agent
 
-Module mang sẵn skill ở `skill/seo-crew/`. Chép nó vào bề mặt mà agent của bạn đọc:
+Module mang sẵn skill ở `skill/agent-crew/` — bản **generic**, đã gỡ chi tiết riêng của
+workspace gốc. Chép nó vào bề mặt mà agent của bạn đọc:
 
 ```bash
 cd <workspace-cua-ban>
 mkdir -p .claude/skills .codex/skills .agents/skills
-cp -R mwg-agent-crew/skill/seo-crew .claude/skills/
-cp -R mwg-agent-crew/skill/seo-crew .codex/skills/
-cp -R mwg-agent-crew/skill/seo-crew .agents/skills/
+cp -R mwg-agent-crew/skill/agent-crew .claude/skills/
+cp -R mwg-agent-crew/skill/agent-crew .codex/skills/
+cp -R mwg-agent-crew/skill/agent-crew .agents/skills/
 ```
 
 Chỉ cần bề mặt của agent bạn thật sự dùng. `.claude/skills/` là bản canonical: sửa ở
@@ -85,20 +86,20 @@ export MWG_CODEX_COMPANION=/duong/dan/den/codex-companion.mjs
 Không tìm thấy thì adapter **ném lỗi**, không lặng lẽ rơi về headless — đổi transport
 ngầm là cách tạo ra kết quả sai mà không ai biết.
 
-## 6. Cái module KHÔNG mang theo — phải tự thích nghi
+## 6. Khai bối cảnh workspace của bạn
 
-`skill/seo-crew/SKILL.md` viết cho workspace SEO gốc, nên nó nhắc những thứ không có
-trong bản clone của bạn. Sửa trước khi dùng thật:
+Bản `skill/agent-crew/` đã gỡ hết chi tiết riêng của workspace gốc, nhưng có vài chỗ nó
+**cần bạn khai** thì mới xếp ưu tiên và chặn chi tiêu đúng. Tìm bằng:
 
-| Trong SKILL.md | Thực tế ở bản clone |
-| --- | --- |
-| KPI 95% / 1728 keyword / scope Laptop | Bối cảnh riêng của workspace gốc. Thay bằng bối cảnh của bạn hoặc xoá. |
-| `seo-task-create`, `seo-task-done`, `seo-task-journal-sync` | Skill riêng của workspace gốc, **không** kèm theo. Thay bằng cách tạo task của bạn. |
-| `seo-log-cv`, `seo-log-weekly-work` (File 1 / File 2) | Hệ chấm công nội bộ. Không liên quan đến bạn. |
-| `tasks/_registry.md`, `tasks/_workstreams.md` | Sổ theo dõi riêng. Bỏ được. |
+```bash
+grep -rn "ĐIỀN VÀO" mwg-agent-crew/skill/agent-crew/
+```
 
-Phần **không** phụ thuộc workspace, giữ nguyên: cách dispatch, cổng evidence, ngưỡng
-`max_parallel`, cost gate, và toàn bộ `scripts/`.
+Ba chỗ bắt buộc: **mục tiêu workspace**, **cách tạo task**, và **bảng API tốn tiền**.
+Danh sách đầy đủ, kèm bảng "cái KHÔNG nên sửa", nằm ở [`CUSTOMIZE.md`](CUSTOMIZE.md).
+
+Chưa khai vẫn chạy được — crew sẽ nói thẳng là nó đang xếp ưu tiên mà không có mục tiêu
+để bám, thay vì tự bịa ra một cái.
 
 ## 7. Kiểm sau khi cài
 

@@ -13,35 +13,42 @@ Cài trên máy mới: đọc [`INSTALL.md`](INSTALL.md).
 | File | Vai trò |
 | --- | --- |
 | `INSTALL.md` | Dựng module trên workspace mới: yêu cầu, cách đặt, cách kiểm. |
+| `CUSTOMIZE.md` | Chỗ nào trong skill generic phải khai theo workspace bạn, và chỗ nào đừng đụng. |
 | `routing-table.md` | Việc nào giao worker nào. **Sửa file này** khi muốn đổi phân việc. |
 | `worker-brief.md` | Format brief gửi worker. Dùng nguyên schema `~/.claude/rules/orchestration-protocol.md`. |
 | `cost-gate.md` | API tốn tiền worker không được tự gọi + ngưỡng cứng chống đốt credit. |
 | `scripts/` | Adapter gọi Antigravity (phase 2). |
-| `skill/seo-crew/` | Bản mirror của skill `seo-crew` — cửa vào module. Đọc, **đừng sửa ở đây**. |
+| `skill/agent-crew/` | Skill điều phối, bản generic — cửa vào module. |
 
 ## Ai gọi module này
 
-Skill `seo-crew` đọc 3 file `.md` ở đây và gọi `scripts/`. Module là nguồn duy nhất —
+Một skill điều phối đọc 3 file `.md` ở đây và gọi `scripts/`. Module là nguồn duy nhất —
 skill không copy nội dung ra, chỉ trỏ vào.
 
-Skill có **5 bản**: `.claude/skills/` là bản canonical duy nhất người sửa, rồi
-`.codex/`, `.agents/`, `.gemini/` (một bản cho mỗi runtime worker), và `skill/` ngay
-trong module này.
+Có **hai bản skill, cố ý khác nhau**:
 
-Bản thứ 5 tồn tại vì module được publish riêng bằng
-`git subtree push --prefix=mwg-agent-crew`. Trước đây `seo-crew` chỉ nằm ở
-`.claude/skills/` — ngoài module — nên ai clone repo này về sẽ nhận được động cơ mà
-không có cách nào khởi động nó.
+| Bản | Ở đâu | Dành cho |
+| --- | --- | --- |
+| `seo-crew` | `.claude/skills/` của workspace gốc, mirror sang `.codex/`, `.agents/`, `.gemini/` | Workspace gốc. Mang KPI, tên skill nội bộ, sổ task riêng |
+| `agent-crew` | `skill/agent-crew/` ngay trong module này | Bất kỳ ai clone module. Đã gỡ chi tiết riêng, chừa chỗ `ĐIỀN VÀO` |
 
-Cả 5 bản do `scripts/sync-skill-surfaces.mjs` giữ khớp. Sửa ở `.claude/skills/seo-crew/`
-rồi chạy:
+Bản generic tồn tại vì module được publish riêng bằng
+`git subtree push --prefix=mwg-agent-crew`. Ship thẳng bản workspace cho người lạ là đưa
+họ một skill trỏ vào những thứ họ không có.
+
+Bốn bản mirror do `scripts/sync-skill-surfaces.mjs --apply` giữ khớp. Bản generic thì
+**không**: nó viết tay, và `--apply` không bao giờ ghi đè nó.
+
+Đổi lại, script theo dõi **độ lệch**. `skill/agent-crew/.derived-from` ghi vân tay của
+canonical lúc hai bản được đối chiếu lần cuối. Canonical đổi → `--check` báo `STALE`:
 
 ```bash
-node mwg-agent-crew/scripts/sync-skill-surfaces.mjs --apply
+node mwg-agent-crew/scripts/sync-skill-surfaces.mjs --check   # STALE nếu canonical đã đi trước
+node mwg-agent-crew/scripts/sync-skill-surfaces.mjs --bless   # sau khi đã đọc lại cả hai
 ```
 
-`--check` trả exit 1 ngay khi bất kỳ bản nào lệch, nên không có chuyện hai bản âm thầm
-khác nhau.
+`--bless` chỉ ghi lại vân tay. Nó **không** kiểm hộ bạn — đọc lại rồi hãy chạy, không thì
+nó chỉ là nút tắt cảnh báo.
 
 ## Giới hạn cứng
 
