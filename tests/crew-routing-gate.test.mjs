@@ -14,7 +14,7 @@
  * Run: node mwg-agent-crew/tests/crew-routing-gate.test.mjs
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MODULE_ROOT, makeChecker } from "./helpers.mjs";
@@ -22,12 +22,26 @@ import { MODULE_ROOT, makeChecker } from "./helpers.mjs";
 const t = makeChecker("crew-routing-gate");
 const WS = join(MODULE_ROOT, "..");
 const HOOK = join(WS, ".agents", "hooks", "crew-routing-gate.cjs");
-const LOG = join(WS, ".agents", "logs", "crew-routing-gate.jsonl");
+const REAL_LOG = join(WS, ".agents", "logs", "crew-routing-gate.jsonl");
+
+/**
+ * Log riêng cho bộ test. Trước 23/09 test spawn hook mà không rẽ đường, nên nó
+ * ghi thẳng vào log thật: một lần test crash giữa chừng đã bỏ lại 12 dòng giả
+ * không phân biệt được với lượt thật, và teardown "snapshot rồi đè" còn xoá mất
+ * lượt thật nào bắn trúng lúc test chạy. Log đó là nguồn duy nhất để chấm gate
+ * nên nó phải sạch; test không được có quyền ghi vào đấy.
+ */
+const LOG = join(tmpdir(), `crew-routing-gate-test-${process.pid}.jsonl`);
 
 const fire = (prompt, event = "UserPromptSubmit") =>
-  spawnSync("node", [HOOK], { input: JSON.stringify({ hook_event_name: event, prompt }), encoding: "utf8" });
+  spawnSync("node", [HOOK], {
+    input: JSON.stringify({ hook_event_name: event, prompt }),
+    encoding: "utf8",
+    env: { ...process.env, MWG_CREW_GATE_LOG: LOG },
+  });
 
-const before = existsSync(LOG) ? readFileSync(LOG, "utf8") : null;
+// Ảnh chụp log thật: cuối bài phải chứng minh bộ test không đụng vào nó.
+const realBefore = existsSync(REAL_LOG) ? readFileSync(REAL_LOG, "utf8") : null;
 
 // ------------------------------------------------- 4 prompt mẫu của phase file
 {
@@ -102,12 +116,16 @@ const before = existsSync(LOG) ? readFileSync(LOG, "utf8") : null;
   t.check("log đúng schema", Object.keys(last).sort().join(","), "branch,decision,triggers,ts");
   t.check("log ghi id trigger", last.triggers.includes("internal-link"), true);
 
-  const ignored = spawnSync("git", ["-C", WS, "check-ignore", "-q", LOG]);
+  const ignored = spawnSync("git", ["-C", WS, "check-ignore", "-q", REAL_LOG]);
   t.check("đường dẫn log được .gitignore che", ignored.status, 0);
 }
 
-// Trả log về nguyên trạng: bộ test không được để lại rác trong workspace thật.
-if (before === null) rmSync(LOG, { force: true });
-else writeFileSync(LOG, before);
+// ------------------------------------------------- log thật phải y nguyên
+{
+  const realAfter = existsSync(REAL_LOG) ? readFileSync(REAL_LOG, "utf8") : null;
+  t.check("bộ test KHÔNG ghi gì vào log production", realAfter, realBefore);
+}
+
+rmSync(LOG, { force: true });
 
 process.exit(t.finish() ? 0 : 1);
