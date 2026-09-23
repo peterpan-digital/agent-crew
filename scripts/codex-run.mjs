@@ -52,6 +52,9 @@ import {
 } from "./crew-guards.mjs";
 
 /** A job that emits no stdout event for this long is treated as dead, not as thinking. */
+/** A probe that reads a state file; the dispatch ceiling would hold a slot for minutes. */
+const RESUME_PROBE_TIMEOUT_MS = 15_000;
+
 const DEFAULT_IDLE_MS = 120_000;
 /** Grace between SIGTERM and SIGKILL for the process group. */
 const KILL_GRACE_MS = 5_000;
@@ -474,12 +477,10 @@ function prepareRun(options) {
   // companion call that honours the flag. Refusing here, before the log dir and
   // before any spawn, keeps a flag that cannot be honoured from looking like a
   // resume that worked.
-  // Headless resumes; the app surface does not yet, and will be flipped
-  // alongside the companion call that can honour it.
   const resumeId = resolveResume(options, {
     worker: "codex",
     mode: options.mode ?? "headless",
-    supportsResume: (options.mode ?? "headless") === "headless",
+    supportsResume: true,
   });
 
   assertEvidenceAbsent(evidenceAbs);
@@ -765,6 +766,66 @@ export async function codexRun(options) {
 }
 
 /**
+ * Refuse unless the thread the companion is about to continue is the one asked
+ * for. Runs before the dispatch, never after: the side effect being guarded is
+ * a message delivered into a stranger's thread.
+ *
+ * `task-resume-candidate` is not in the companion's --help, but it is in its
+ * dispatch table and answers with the threadId `--resume-last` would resolve to.
+ * It is NOT the same resolution path: the probe calls findLatestResumableTaskJob
+ * alone, while the dispatch calls resolveLatestTrackedTaskThread, which also
+ * throws on a queued/running sibling and can fall back to a thread read off disk
+ * when no session id is set. Same leaf, extra rules.
+ *
+ * That divergence is tolerable because of its DIRECTION, which is also the real
+ * reason this beats importing the companion's internal runAppServerTurn: every
+ * way this probe can be wrong ends in a refusal, while a silently renamed
+ * `resumeThreadId` parameter ends in a message delivered to a new or foreign
+ * thread. Measured 23/09 on companion 1.0.5.
+ */
+function assertAppResumeTarget(companion, resumeId, { workspace }) {
+  const probe = callCompanion(companion, ["task-resume-candidate", "--json", "--cwd", workspace], {
+    workspace, timeoutMs: RESUME_PROBE_TIMEOUT_MS, what: "resume candidate",
+  });
+  // M3: a payload with neither key is a protocol change, not an empty store.
+  // Reporting it as "no resumable task" would send the reader after the wrong
+  // thing entirely.
+  if (probe == null || (!("available" in probe) && !("candidate" in probe))) {
+    throw new CodexRunError(
+      "companion task-resume-candidate returned an unrecognised payload",
+      "the companion's resume-candidate contract changed; --resume cannot be verified until it is re-read",
+    );
+  }
+  const candidate = probe.candidate ?? null;
+
+  // The companion's job store is scoped to a Claude session and cleaned up when
+  // that session ends, so this is also what "the thread is from another
+  // session" looks like from here. Saying so beats "no resumable task".
+  if (!candidate?.threadId) {
+    // The session explanation is true only when the companion is actually
+    // filtering, which it does only when CODEX_COMPANION_SESSION_ID is set --
+    // injected by the plugin's SessionStart hook. Run from a bare shell, or
+    // from the Codex/Antigravity hosts, the filter is off and the reason is a
+    // plain empty store. The probe reports which case this is, so say the true
+    // one rather than the usual one.
+    throw new CodexRunError(
+      `no resumable app task to continue as ${resumeId}`,
+      probe.sessionId
+        ? "the companion keeps app jobs per Claude session and drops them when it ends;"
+          + " an app thread from an earlier session cannot be resumed"
+        : "the companion's job store has no finished app task for this workspace",
+    );
+  }
+  if (candidate.threadId !== resumeId) {
+    throw new CodexRunError(
+      `--resume asked for thread ${resumeId} but the companion would continue ${candidate.threadId}`,
+      "the app CLI takes no thread id -- it always continues the newest resumable task."
+      + " Dispatch this job after that one, or resume it headless instead",
+    );
+  }
+}
+
+/**
  * One companion call. Parsed defensively on purpose: this is another project's
  * CLI, so a field that moved must produce a named error rather than an
  * `undefined` that travels three functions before it fails.
@@ -1036,7 +1097,7 @@ export async function codexRunApp(options) {
   }
 
   const {
-    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode,
+    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode, resumeId,
   } = prepareRun(options);
 
   let companion;
@@ -1049,6 +1110,12 @@ export async function codexRunApp(options) {
     throw new CodexRunError(err.message, err.detail);
   }
 
+  // Before the prompt file, not after: a refusal that leaves a sidecar blocks
+  // the very retry its error message prescribes ("dispatch this job after that
+  // one") -- assertSidecarsAbsent below would reject the second attempt. Every
+  // other refusal on this path spawns nothing and leaves nothing.
+  if (resumeId) assertAppResumeTarget(companion, resumeId, { workspace });
+
   const promptPath = join(logDir, `${base}.codex-app-prompt.md`);
   const statusPath = join(logDir, `${base}.codex-app-status.json`);
   const replyPath = join(logDir, `${base}.codex-app-reply.md`);
@@ -1060,8 +1127,25 @@ export async function codexRunApp(options) {
   const version = codexVersion();
   const startedAt = new Date();
 
+  // The app surface cannot be told WHICH thread to continue. Measured 23/09:
+  // the companion's `--resume` is a boolean alias of `--resume-last`, and it
+  // picks `findLatestResumableTaskJob()` -- the newest resumable task of this
+  // Claude session. With max_parallel at 3, "newest" is a race, and sending a
+  // follow-up into another job's thread is not an action that can be taken back.
+  //
+  // So the id is checked BEFORE anything is sent, using the companion's own
+  // `task-resume-candidate` subcommand: it reports the thread `--resume-last`
+  // would choose, computed by that same function. Detecting a mismatch
+  // afterwards would be too late by exactly one irreversible message.
+  //
+  // This narrows the window, it does not close it: the candidate can change
+  // between the check and the dispatch. There is no tighter option on a CLI
+  // that takes no id, and the alternative -- importing the companion's internal
+  // runAppServerTurn, which does take one -- buys precision by depending on
+  // another project's private function, which breaks silently.
   const dispatchArgs = [
     "task", "--background", "--json",
+    ...(resumeId ? ["--resume"] : []),
     "--prompt-file", promptPath,
     "--cwd", workspace,
     // Always write. Not role-dependent, despite what the plan first said: every
@@ -1152,8 +1236,16 @@ export async function codexRunApp(options) {
   const reply = fetchCompanionReply(companion, jobId, { workspace, replyPath });
   if (reply.replyError) process.stderr.write(`codex-run: ${reply.replyError}\n`);
 
-  const runtimeOk = job.status === "completed" && !timedOut;
+  // The pre-flight guard narrows the window between probe and dispatch; it does
+  // not close it, because the CLI takes no thread id. So the surface also has to
+  // check afterwards -- otherwise the one failure this whole phase exists to
+  // prevent, when it does slip through, is recorded as a clean success. Anti and
+  // Codex headless both do this; app mode was the gap.
+  const resumeMismatch = Boolean(resumeId && job.threadId && job.threadId !== resumeId);
+  const runtimeOk = job.status === "completed" && !timedOut && !resumeMismatch;
   const runtimeDetail = runtimeOk ? null
+    : resumeMismatch ? `job xin tiếp thread ${resumeId} nhưng companion chạy ở thread ${job.threadId}`
+      + " — cửa sổ giữa lúc kiểm và lúc gửi đã đổi ứng viên"
     : timedOut ? `companion job did not settle within ${timeout} (status ${job.status}); ${cancelled}`
     : `companion job ${job.status}${job.errorMessage ? `: ${job.errorMessage}` : ""}`;
 
@@ -1180,6 +1272,8 @@ export async function codexRunApp(options) {
     // The provenance field the collect gate already asks about for app-mode
     // jobs. Reusing it means no new branch in the gate to forget to update.
     conversationId: job.threadId ?? null,
+    resumedFrom: resumeId ?? null,
+    resumeMismatch: resumeMismatch || undefined,
     companionJobId: jobId,
     companionStatus: job.status,
     // How many times the store had to be re-asked before it would name a

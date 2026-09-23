@@ -19,8 +19,8 @@
  * Run: node mwg-agent-crew/tests/codex-resume.test.mjs
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { join, sep } from "node:path";
 import { createRun, addJob, readManifest } from "../scripts/crew-manifest.mjs";
 import { resolveLogDir } from "../scripts/codex-run.mjs";
 import { FIXTURE_BIN, MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
@@ -54,6 +54,14 @@ function run({ evidence, extra = [], mode = "argvdump", threadId, manifest, job 
   });
   return { exit: proc.status, stderr: proc.stderr ?? "" };
 }
+
+/** Sidecars this job left behind -- per-job, named after the evidence basename. */
+const sidecarsOf = (evidence) => {
+  const dir = resolveLogDir(join(ws, evidence), ws);
+  if (!existsSync(dir)) return [];
+  const base = evidence.split(sep).pop().replace(/\.md$/, "");
+  return readdirSync(dir).filter((f) => f.startsWith(base));
+};
 
 const argvOf = (evidence) => readFileSync(join(ws, evidence), "utf8").match(/^ARGV=(.*)$/m)?.[1] ?? "";
 
@@ -178,11 +186,132 @@ const plain = argvOf(plainEv);
   t.check("...and is marked mismatched", jobRec.resumeMismatch, true);
 }
 
-function setupManifest(name, evidence) {
+// --- app mode: the target check that runs BEFORE anything is dispatched ------
+
+function runApp({ evidence, resume, candidate, argvOut, dispatchThread, manifest, job }) {
+  const proc = spawnSync("node", [
+    ADAPTER,
+    "--prompt-file", brief,
+    "--evidence", evidence,
+    "--workspace", ws,
+    "--timeout", "60s",
+    "--mode", "app",
+    ...(manifest ? ["--manifest", manifest, "--job", String(job)] : []),
+    ...(resume ? ["--resume", resume] : []),
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${FIXTURE_BIN}:${process.env.PATH}`,
+      // Points the adapter's companion lookup at the fixture, which can claim a
+      // candidate. The real companion answers "no candidate" for a temp
+      // workspace, which only ever exercises the empty case -- and the case
+      // worth guarding is the other one.
+      CLAUDE_PLUGIN_ROOT: join(MODULE_ROOT, "tests", "fixtures", "fake-plugin"),
+      // Outranks CLAUDE_PLUGIN_ROOT in resolveCompanion. On a machine that sets
+      // it -- the documented workaround for a cache-only install -- these tests
+      // would drive the REAL companion and open a real app thread.
+      MWG_CODEX_COMPANION: undefined,
+      ...(candidate ? { FAKE_CANDIDATE_THREAD: candidate } : {}),
+      ...(argvOut ? { FAKE_ARGV_OUT: argvOut } : {}),
+      ...(dispatchThread ? { FAKE_DISPATCH_THREAD: dispatchThread } : {}),
+      FAKE_EVIDENCE: join(ws, evidence),
+    },
+    timeout: 90_000,
+  });
+  return { exit: proc.status, stderr: proc.stderr ?? "" };
+}
+
+{
+  // The dangerous case: a resumable thread exists and it is the WRONG one.
+  // Sending into a stranger's thread cannot be taken back, so the assertion
+  // that matters is that the companion was never asked to dispatch.
+  const r = runApp({
+    evidence: join(RUN_DIR_REL, "app-wrong-thread.md"),
+    resume: "01a0-asked",
+    candidate: "01a0-someone-else",
+  });
+  t.check("a resume aimed at the wrong thread is refused",
+    /--resume asked for thread/.test(r.stderr), true);
+  t.check("...naming both threads",
+    /01a0-asked/.test(r.stderr) && /01a0-someone-else/.test(r.stderr), true);
+  t.check("...before the companion was ever asked to dispatch",
+    /job_fake queued/.test(r.stderr), false);
+  // The refusal used to run AFTER the prompt file was written, so the retry its
+  // own error message prescribes was blocked by the leftover sidecar.
+  t.check("...leaving no sidecar to block the retry it recommends",
+    sidecarsOf(join(RUN_DIR_REL, "app-wrong-thread.md")).length, 0);
+}
+
+{
+  // The empty case reads as "another session's thread", because that is what it
+  // usually is: the companion drops app jobs when a Claude session ends.
+  const r = runApp({ evidence: join(RUN_DIR_REL, "app-no-candidate.md"), resume: "01a0-asked" });
+  t.check("a resume with no candidate is refused",
+    /no resumable app task/.test(r.stderr), true);
+  t.check("...saying the session boundary is why",
+    /per Claude session/.test(r.stderr), true);
+  t.check("...and dispatches nothing", /job_fake queued/.test(r.stderr), false);
+}
+
+{
+  // The control: matching ids must NOT be refused by the guard. Without it, a
+  // guard that rejected every app resume would leave both cases above green.
+  const argvOut = join(ws, "argv-app-match.txt");
+  const r = runApp({
+    evidence: join(RUN_DIR_REL, "app-match.md"),
+    resume: "01a0-match",
+    candidate: "01a0-match",
+    argvOut,
+  });
+  t.check("a matching thread passes the guard",
+    /--resume asked for thread|no resumable app task/.test(r.stderr), false);
+  t.check("...and reaches the dispatch", /job_fake queued/.test(r.stderr), true);
+  // The deliverable of this phase, and it was asserted by nothing: deleting
+  // `--resume` from the dispatch argv left the entire suite green.
+  t.check("...telling the companion to resume",
+    readFileSync(argvOut, "utf8").split(" ").includes("--resume"), true);
+}
+
+{
+  // The other half: an app job that never asked to resume must not be told to.
+  const argvOut = join(ws, "argv-app-plain.txt");
+  runApp({ evidence: join(RUN_DIR_REL, "app-plain.md"), argvOut });
+  t.check("an app job with no --resume does not carry the flag",
+    readFileSync(argvOut, "utf8").split(" ").includes("--resume"), false);
+}
+
+{
+  // The residual window the pre-flight guard cannot close: the candidate can
+  // change between probe and dispatch, because the CLI takes no thread id. If
+  // that happens, the surface must still notice -- otherwise the exact failure
+  // this phase exists to prevent is recorded as a clean success. Anti and Codex
+  // headless both check afterwards; app mode was the gap.
+  const evidence = join(RUN_DIR_REL, "app-window-changed.md");
+  const manifest = setupManifest("m5", evidence, "app");
+  const r = runApp({
+    evidence, resume: "01a0-match", candidate: "01a0-match",
+    dispatchThread: "01a0-drifted", manifest, job: 1,
+  });
+  t.check("a thread that drifted after the check is caught", r.exit !== 0, true);
+  t.check("...naming both threads",
+    /01a0-match/.test(r.stderr) && /01a0-drifted/.test(r.stderr), true);
+  const jobRec = readManifest(manifest).jobs[0];
+  t.check("...and the manifest records both", [jobRec.resumedFrom, jobRec.conversationId],
+    ["01a0-match", "01a0-drifted"]);
+  t.check("...marked mismatched", jobRec.resumeMismatch, true);
+}
+
+function setupManifest(name, evidence, transport) {
   const runDir = join(ws, RUN_DIR_REL, name);
   mkdirSync(runDir, { recursive: true });
   const { manifestPath } = createRun({ runDir, runId: `crew-${name}`, task: "t", workspace: ws, depth: 0 });
-  addJob(manifestPath, { worker: "codex", role: "assist", title: name, evidence });
+  // The adapter refuses when the manifest's transport disagrees with the flag,
+  // so an app-mode test has to declare it.
+  addJob(manifestPath, {
+    worker: "codex", role: "assist", title: name, evidence,
+    ...(transport ? { transport, note: "resume test: the app surface is what is under test" } : {}),
+  });
   return manifestPath;
 }
 

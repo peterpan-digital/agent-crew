@@ -134,10 +134,11 @@ const throwsGuard = (fn) => {
 }
 
 {
-  const evidence = join(RUN_DIR_REL, "codex-app.md");
-  const r = run(CODEX, { evidence, extra: ["--mode", "app", "--resume", "abc"] });
-  t.check("codex app --resume is refused by the gate, not by the companion",
-    /--resume is not available/.test(r.stderr), true);
+  // Codex app resumes as of Phase 4; only an empty id is refused by the gate.
+  const evidence = join(RUN_DIR_REL, "codex-app-empty.md");
+  const r = run(CODEX, { evidence, extra: ["--mode", "app", "--resume", ""] });
+  t.check("codex app refuses an empty --resume at the gate",
+    /--resume needs the id/.test(r.stderr), true);
   t.check("...and spawned nothing", ranNothing(evidence), true);
   t.check("...and left no sidecar of its own", sidecarsOf(evidence).length, 0);
 }

@@ -248,10 +248,13 @@ có lý do, không phải mặc định.
 2. **Việc mở/khám phá, chưa viết nổi acceptance trước.** Không có tiêu chí chấm thì mất
    evidence-first cũng không mất gì; đổi lại owner nhìn được quá trình.
 3. **Cần thread resume làm tiếp buổi sau.** `codex resume <id>` cho Codex, `anti-run.mjs
-   --resume <conversationId>`. Từ 23/09 **cả 3 bề mặt đã đấu dây resume đều dùng
-   chung một cờ `--resume <id>`** — Anti app, Anti headless, Codex headless. Nên
-   "cần resume" **không còn** là lý do chọn app; chọn app phải vì một trong hai ca
-   trên. Codex app là ô duy nhất còn lại.
+   --resume <conversationId>`. Từ 23/09 **cả 4 bề mặt đều resume được**, chung một
+   cờ `--resume <id>`.
+
+   Nhưng "làm tiếp buổi sau" **vẫn là lý do chọn Anti app** — vì lý do khác lúc
+   đầu tưởng. Codex app chỉ resume được **trong cùng một phiên Claude**: companion
+   giữ job theo `CODEX_COMPANION_SESSION_ID` và xoá chúng khi phiên đóng. Anti app
+   không dính vì `agentapi` giữ conversation ở store riêng của app.
 
 Ngoài 3 ca này, chọn `app` là đang trả giá quan sát để lấy một thứ chưa nêu được.
 
@@ -303,6 +306,32 @@ Bốn điều cần biết trước khi dùng:
 Cách poll hoàn thành, cổng evidence, và `judgeJob()` giữ nguyên y hệt `new-conversation` —
 `runApp()` chỉ khác ở cách lấy `conversationId` (từ tham số thay vì từ output lệnh), phần còn
 lại của vòng đời job không đổi.
+
+### Resume cho Codex app — guard tiền-kiểm (thêm 2026-09-23)
+
+Khác hẳn 3 ô kia: **CLI không nhận thread id.** `--resume` của companion chỉ là
+alias boolean của `--resume-last`, và nó tự chọn "task resumable mới nhất của phiên
+Claude này". `max_parallel` là 3, nên "mới nhất" là một cuộc đua — mà gửi tiếp vào
+thread của job khác thì không rút lại được.
+
+Nên adapter hỏi trước bằng `task-resume-candidate --json` (có trong bảng dispatch
+của companion, không có trong `--help`), so `threadId` với id đã xin, **lệch thì từ
+chối trước khi gửi**. Từ chối xảy ra trước cả lúc ghi file prompt: một refusal để
+lại sidecar sẽ chặn đúng lần thử lại mà chính thông báo lỗi của nó khuyên làm.
+
+Vì sao không import `runAppServerTurn` (hàm nội bộ companion, *có* nhận id): không
+phải vì CLI bền hơn hàm nội bộ, mà vì **hướng hỏng**. Mọi cách probe sai đều dẫn tới
+*từ chối*; còn một tham số `resumeThreadId` bị đổi tên âm thầm dẫn tới *gửi vào
+thread lạ*.
+
+Guard **thu hẹp chứ không đóng** cửa sổ: ứng viên có thể đổi giữa lúc kiểm và lúc
+gửi. Nên sau khi chạy còn so lại `job.threadId` với id đã xin — giống hệt Anti và
+Codex headless. Không có phép so đó thì đúng lỗi phase này sinh ra để chặn, khi nó
+lọt, lại được ghi thành một lần thành công sạch.
+
+**Chưa làm, để owner chốt:** có nên từ chối resume app khi còn job app khác đang
+chạy không? Làm vậy đóng gần hết cửa sổ, nhưng cũng làm resume app dùng không được
+trong lúc run bận.
 
 ### Lịch sử: vì sao có `role`
 
