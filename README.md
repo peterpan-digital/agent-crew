@@ -14,12 +14,31 @@ mỗi lần chạy nằm trong `tasks/{task}/reports/crew-{yymmdd-hhmm}/`.
 | `worker-brief.md` | Format brief gửi worker. Dùng nguyên schema `~/.claude/rules/orchestration-protocol.md`. |
 | `cost-gate.md` | API tốn tiền worker không được tự gọi + ngưỡng cứng chống đốt credit. |
 | `scripts/` | Adapter gọi Antigravity (phase 2). |
+| `skill/seo-crew/` | Bản mirror của skill `seo-crew` — cửa vào module. Đọc, **đừng sửa ở đây**. |
 
 ## Ai gọi module này
 
-Skill `seo-crew` (4 bản mirror `.claude/.codex/.agents/.gemini`) đọc 3 file `.md` ở đây
-và gọi `scripts/`. Module là nguồn duy nhất — 4 bản skill không được copy nội dung ra,
-chỉ trỏ vào.
+Skill `seo-crew` đọc 3 file `.md` ở đây và gọi `scripts/`. Module là nguồn duy nhất —
+skill không copy nội dung ra, chỉ trỏ vào.
+
+Skill có **5 bản**: `.claude/skills/` là bản canonical duy nhất người sửa, rồi
+`.codex/`, `.agents/`, `.gemini/` (một bản cho mỗi runtime worker), và `skill/` ngay
+trong module này.
+
+Bản thứ 5 tồn tại vì module được publish riêng bằng
+`git subtree push --prefix=mwg-agent-crew`. Trước đây `seo-crew` chỉ nằm ở
+`.claude/skills/` — ngoài module — nên ai clone repo này về sẽ nhận được động cơ mà
+không có cách nào khởi động nó.
+
+Cả 5 bản do `scripts/sync-skill-surfaces.mjs` giữ khớp. Sửa ở `.claude/skills/seo-crew/`
+rồi chạy:
+
+```bash
+node mwg-agent-crew/scripts/sync-skill-surfaces.mjs --apply
+```
+
+`--check` trả exit 1 ngay khi bất kỳ bản nào lệch, nên không có chuyện hai bản âm thầm
+khác nhau.
 
 ## Giới hạn cứng
 

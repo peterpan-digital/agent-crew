@@ -26,6 +26,34 @@ const CANONICAL = ".claude/skills";
 const TARGETS = [".codex/skills", ".agents/skills", ".gemini/skills"];
 
 /**
+ * A skill that must also ship inside the module it drives, keyed by skill name.
+ *
+ * `seo-crew` is the only entry point into `mwg-agent-crew`, but it lived solely
+ * in `.claude/skills/`, which is outside the module. The module is published on
+ * its own (`git subtree push --prefix=mwg-agent-crew`), so a clone of it got the
+ * engine and no way to start it. Mirroring the skill into the module makes that
+ * clone complete.
+ *
+ * This is a mirror, not a second canonical copy: `.claude/skills/` is still the
+ * only place a human edits, and `--check` fails the moment the two drift.
+ */
+const BUNDLED = { "seo-crew": "mwg-agent-crew/skill" };
+
+/** Every surface a given skill is copied to. */
+function surfacesFor(skill) {
+  const bundle = BUNDLED[skill];
+  return bundle ? [...TARGETS, bundle] : TARGETS;
+}
+
+/** Skill names a surface is expected to hold, or null for "all owned". */
+function expectedAt(surface) {
+  const bundled = Object.entries(BUNDLED)
+    .filter(([, dir]) => dir === surface)
+    .map(([skill]) => skill);
+  return bundled.length ? new Set(bundled) : null;
+}
+
+/**
  * Only workspace-owned skills. Google Workspace, n8n, gcloud and the anthropic
  * content skills come from upstream sources and are updated by their own
  * installers, so copying them between surfaces would fight those installers.
@@ -126,7 +154,7 @@ function compare() {
   for (const skill of ownedSkills()) {
     const canonicalDir = join(abs(CANONICAL), skill);
     const canonicalFiles = filesUnder(canonicalDir);
-    for (const surface of TARGETS) {
+    for (const surface of surfacesFor(skill)) {
       const targetDir = join(abs(surface), skill);
       if (!existsSync(targetDir)) {
         rows.push({ skill, surface, file: "", status: "MISSING", note: "skill dir absent" });
@@ -187,9 +215,12 @@ function compare() {
  * reads a directory listing; nothing here deletes.
  */
 function straysAtSurfaceRoot() {
-  const owned = new Set(ownedSkills());
+  const allOwned = new Set(ownedSkills());
   const rows = [];
-  for (const surface of TARGETS) {
+  for (const surface of [...TARGETS, ...new Set(Object.values(BUNDLED))]) {
+    // A bundle surface holds exactly one skill, so anything else there is a
+    // stray even when it is a skill this repo owns elsewhere.
+    const owned = expectedAt(surface) ?? allOwned;
     const root = abs(surface);
     if (!existsSync(root)) continue;
     for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -230,8 +261,9 @@ function printSummary(rows) {
     const path = [row.surface, row.skill, row.file].filter(Boolean).join("/");
     console.log(`  ${row.status}: ${path} ${row.note}`);
   }
+  const pairs = ownedSkills().reduce((n, skill) => n + surfacesFor(skill).length, 0);
   console.log(
-    `\n${ownedSkills().length} skill × ${TARGETS.length} surface — ` +
+    `\n${ownedSkills().length} skill, ${pairs} skill×surface pair — ` +
       `DIFF/MISSING: ${bad.length}, ORPHAN: ${orphans.length}`,
   );
   return bad.length;
