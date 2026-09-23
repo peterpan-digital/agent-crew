@@ -39,6 +39,7 @@ import {
   readPrompt,
   appendWorkerContract,
   resolveResume,
+  assertSurfaceFlags,
   snapshotCredentialStore,
   diffCredentialStore,
   isWatchBlind,
@@ -340,6 +341,9 @@ export function antiRun(options) {
 
   const mode = options.mode ?? "headless";
   if (mode === "headless") {
+    assertSurfaceFlags(options, {
+      worker: "antigravity", mode, unsupported: { title: "--title" },
+    });
     const resumeId = resolveResume(options, { worker: "antigravity", mode, supportsResume: true });
     return runHeadless({
       promptText, workspace, evidenceAbs, model: options.model, timeout,
@@ -347,6 +351,9 @@ export function antiRun(options) {
     });
   }
   if (mode === "app") {
+    assertSurfaceFlags(options, {
+      worker: "antigravity", mode, unsupported: { agyMode: "--agy-mode" },
+    });
     const resumeId = resolveResume(options, { worker: "antigravity", mode, supportsResume: true });
     return runApp({
       promptText, workspace, evidenceAbs, model: options.model, title: options.title, timeout,

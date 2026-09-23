@@ -37,6 +37,7 @@ import {
   DEFAULT_TIMEOUT,
   GuardError,
   resolveResume,
+  assertSurfaceFlags,
   assertEvidenceAbsent,
   judgeJob,
   parseDuration,
@@ -477,11 +478,12 @@ function prepareRun(options) {
   // companion call that honours the flag. Refusing here, before the log dir and
   // before any spawn, keeps a flag that cannot be honoured from looking like a
   // resume that worked.
-  const resumeId = resolveResume(options, {
-    worker: "codex",
-    mode: options.mode ?? "headless",
-    supportsResume: true,
-  });
+  const mode = options.mode ?? "headless";
+  // --idle promises a watchdog that only codexRun arms. On the app transport the
+  // wait sits inside the companion and nothing reads this, so a dispatcher that
+  // passed it was trusting a guard that did not exist.
+  if (mode === "app") assertSurfaceFlags(options, { worker: "codex", mode, unsupported: { idle: "--idle" } });
+  const resumeId = resolveResume(options, { worker: "codex", mode, supportsResume: true });
 
   assertEvidenceAbsent(evidenceAbs);
 
@@ -1157,9 +1159,27 @@ export async function codexRunApp(options) {
   if (options.model) dispatchArgs.push("-m", options.model);
   if (effort) dispatchArgs.push("--effort", effort);
 
-  const queued = callCompanion(companion, dispatchArgs, {
-    workspace, timeoutMs: COMPANION_DISPATCH_TIMEOUT_MS, what: "task dispatch",
-  });
+  let queued;
+  try {
+    queued = callCompanion(companion, dispatchArgs, {
+      workspace, timeoutMs: COMPANION_DISPATCH_TIMEOUT_MS, what: "task dispatch",
+    });
+  } catch (err) {
+    // The commonest way an app resume fails, and it arrived as a wall of
+    // another project's text ending in advice to run a Claude slash command.
+    // The companion refuses to resume while a sibling app job is still going --
+    // which is the right call, and also the one case the pre-flight probe does
+    // not report, because it only looks at FINISHED tasks. Translate it rather
+    // than leaving the reader to reverse-engineer someone else's CLI.
+    if (resumeId && /is still running/.test(err.message ?? "")) {
+      throw new CodexRunError(
+        "còn job Codex app khác đang chạy, nên chưa resume được",
+        "companion không tiếp một thread khi còn task app khác dang dở."
+        + " Đợi job đó xong rồi bắn lại, hoặc resume bằng --mode headless",
+      );
+    }
+    throw err;
+  }
   const jobId = queued?.jobId;
   if (typeof jobId !== "string" || !jobId) {
     throw new CodexRunError(

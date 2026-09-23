@@ -329,9 +329,37 @@ gửi. Nên sau khi chạy còn so lại `job.threadId` với id đã xin — gi
 Codex headless. Không có phép so đó thì đúng lỗi phase này sinh ra để chặn, khi nó
 lọt, lại được ghi thành một lần thành công sạch.
 
-**Chưa làm, để owner chốt:** có nên từ chối resume app khi còn job app khác đang
-chạy không? Làm vậy đóng gần hết cửa sổ, nhưng cũng làm resume app dùng không được
-trong lúc run bận.
+**Owner chốt 23/09: không chặn.** Lý do là cửa sổ hẹp hơn tưởng — companion **tự
+từ chối** khi còn job app khác đang chạy (`Task <id> is still running`), nên chỉ
+còn đúng một ca lọt: một job chuyển từ đang-chạy sang xong *vừa khít* trong 1-2
+giây giữa lúc kiểm và lúc gửi. Chặn thêm chỉ bịt được ca đó, đổi lại mất resume
+app suốt lúc run bận. Ca companion từ chối giờ được **dịch lại** thành câu đọc
+được thay vì trả nguyên văn lỗi của project khác.
+
+### Thread app resume được bằng headless (đo 2026-09-23)
+
+Thread do app tạo nằm **chung `~/.codex/sessions/`** với session `exec`. Đo thật:
+`codex exec resume --all <thread-app>` tiếp được một thread app tạo từ 25/08 và nó
+nhắc đúng việc hôm đó. Cần `--all` khi resume từ thư mục khác thư mục lúc tạo.
+
+Đây là **đường duy nhất tiếp một thread app qua phiên Claude khác** — companion
+xoá job app khi phiên đóng, còn rollout thì không bị xoá. Đổi lại **mất phần
+nhìn**: job chạy ngầm, không hiện trong app nữa. Dùng khi cần trí nhớ hơn cần xem.
+
+### Cờ không đọc được thì phải từ chối, không được im (thêm 2026-09-23)
+
+`assertSurfaceFlags` trong `crew-guards.mjs`. Ba cờ từng parse trót lọt rồi bị bỏ
+qua lặng lẽ ở bề mặt không đọc chúng:
+
+| Cờ | Chỉ được đọc ở | Gõ ở bề mặt kia thì |
+| --- | --- | --- |
+| `--title` | anti app | trước: im lặng mất tên · giờ: lỗi |
+| `--agy-mode` | anti headless | trước: im lặng mất chế độ · giờ: lỗi |
+| `--idle` | codex headless | trước: **hứa watchdog không tồn tại** · giờ: lỗi |
+
+`--idle` là cái nguy: nó đọc như "treo quá X thì giết", nên người giao việc tin là
+có người canh. Ở app mode không có ai canh cả. **Cờ im lặng không làm gì tệ hơn cờ
+thiếu, vì nó được tin.**
 
 ### Lịch sử: vì sao có `role`
 

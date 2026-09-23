@@ -177,4 +177,34 @@ const throwsGuard = (fn) => {
   t.check("...and wrote its evidence", ranNothing(evidence), false);
 }
 
+// --- the same defect, three more flags --------------------------------------
+
+{
+  // Found while reviewing the resume gate: each of these parsed cleanly, was
+  // read on exactly one branch, and was dropped in silence on the other.
+  // `--idle` is the one that mattered -- it reads as a watchdog, so a
+  // dispatcher passing it on an app job believed a hung worker would be killed.
+  const cases = [
+    { name: "anti headless --title", adapter: ANTI, extra: ["--title", "x"], flag: "--title" },
+    { name: "anti app --agy-mode", adapter: ANTI, extra: ["--mode", "app", "--agy-mode", "plan"], flag: "--agy-mode" },
+    { name: "codex app --idle", adapter: CODEX, extra: ["--mode", "app", "--idle", "5m"], flag: "--idle" },
+  ];
+  for (const c of cases) {
+    const evidence = join(RUN_DIR_REL, `unsupported-${c.flag.replace(/-/g, "")}.md`);
+    const r = run(c.adapter, { evidence, extra: c.extra });
+    t.check(`${c.name} is refused instead of ignored`,
+      new RegExp(`${c.flag} is not available`).test(r.stderr), true);
+    t.check("...and spawned nothing", ranNothing(evidence), true);
+  }
+}
+
+{
+  // The controls. A guard that refused these flags on the surface that DOES
+  // read them would be a worse bug than the silence it replaces.
+  const a = run(ANTI, { evidence: join(RUN_DIR_REL, "ok-agymode.md"), extra: ["--agy-mode", "plan"] });
+  t.check("anti headless still accepts --agy-mode", a.exit, 0);
+  const c = run(CODEX, { evidence: join(RUN_DIR_REL, "ok-idle.md"), extra: ["--idle", "5m"] });
+  t.check("codex headless still accepts --idle", c.exit, 0);
+}
+
 process.exit(t.finish() ? 0 : 1);

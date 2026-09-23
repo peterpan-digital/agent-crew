@@ -224,6 +224,33 @@ export function resolveResume(options, { worker, mode, supportsResume }) {
   return id;
 }
 
+/**
+ * Refuse a flag the surface about to run cannot honour.
+ *
+ * The generalisation of resolveResume, written after finding three more flags
+ * with the identical defect it was built for. All of them parsed cleanly, all
+ * were read on exactly one branch, and all were dropped in silence on the other:
+ *
+ *   --title      read only by anti's app branch
+ *   --agy-mode   read only by anti's headless branch
+ *   --idle       read only by codexRun, never by codexRunApp
+ *
+ * `--idle` is the one that mattered. It reads as a watchdog -- kill the job if
+ * it goes quiet -- so a dispatcher passing it on an app job believed a hung
+ * worker would be stopped. Nothing was watching. A flag that silently does
+ * nothing is worse than a missing feature, because it is relied upon.
+ */
+export function assertSurfaceFlags(options, { worker, mode, unsupported }) {
+  for (const [key, cliName] of Object.entries(unsupported)) {
+    const value = options[key];
+    if (value === undefined || value === null || value === false) continue;
+    throw new GuardError(
+      `${cliName} is not available on ${worker} --mode ${mode}`,
+      "that surface ignores it entirely; drop the flag, or dispatch on the surface that reads it",
+    );
+  }
+}
+
 /** Accepts Go-style durations because that is what agy's --print-timeout takes. */
 export function parseDuration(value) {
   const text = String(value).trim();
