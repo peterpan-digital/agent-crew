@@ -341,6 +341,26 @@ function collectFileChange(line, into) {
 }
 
 /**
+ * The session id, for resuming this job later.
+ *
+ * It has been on the wire since at least 27/08 -- every stored sidecar opens
+ * with `{"type":"thread.started","thread_id":"01a0..."}` -- and nothing read
+ * it, so the one thing needed to continue a headless job was thrown away on
+ * every run. Captured for EVERY job, not just resumed ones: a job only becomes
+ * worth continuing after you have seen what it produced.
+ *
+ * Substring test first, same as collectFileChange: the common case is a long
+ * command_execution event that has no business going through JSON.parse.
+ */
+function collectThreadId(line, prev) {
+  if (prev || !line || !line.includes("thread.started")) return prev;
+  let d;
+  try { d = JSON.parse(line); } catch { return prev; }
+  if (d?.type !== "thread.started") return prev;
+  return typeof d.thread_id === "string" && d.thread_id ? d.thread_id : prev;
+}
+
+/**
  * Where a job's raw log goes: the task's own `data/` folder, never next to the
  * evidence in `reports/`.
  *
@@ -363,19 +383,51 @@ export function resolveLogDir(evidenceAbs, workspace) {
   return join(workspace, ...owner, "data", "crew-logs", runName);
 }
 
-function buildArgs({ workspace, model, effort, lastMessagePath, sandboxMode = "workspace-write" }) {
+function buildArgs({ workspace, model, effort, lastMessagePath, sandboxMode = "workspace-write", resumeId = null }) {
+  // workspace-write denies network by default, and the explicit --sandbox flag
+  // outranks sandbox_mode in config.toml. Every network-bound job (GSC, GA4,
+  // any crawl) returned BLOCKED with unresolvable DNS until this was set.
+  const NETWORK = ["-c", "sandbox_workspace_write.network_access=true"];
   const args = [
     "exec",
     "--json",                        // JSONL events: the heartbeat this adapter watches
     "-C", workspace,
     "--sandbox", sandboxMode,        // default: a worker writes inside the workspace, nowhere else
-    // workspace-write denies network by default, and the explicit --sandbox flag
-    // above outranks sandbox_mode in config.toml. Every network-bound job (GSC,
-    // GA4, any crawl) returned BLOCKED with unresolvable DNS until this was set.
-    "-c", "sandbox_workspace_write.network_access=true",
+    // Only on a fresh run. On a resume this same `-c` goes AFTER the subcommand
+    // -- see below, and do not "tidy" it back up here.
+    ...(resumeId ? [] : NETWORK),
     "-o", lastMessagePath,
     "--color", "never",
   ];
+  // `resume` is a SUBCOMMAND of `exec`, not a flag, and the insertion point is
+  // load-bearing. Measured 23/09 against codex-cli 0.154.0: `codex exec resume`
+  // rejects -C, --sandbox and --color outright ("unexpected argument"), because
+  // those belong to `exec` and clap wants a parent's flags before the
+  // subcommand. Every one of them is already above this line, so inserting here
+  // leaves the non-resume argv byte-identical -- which matters: a reviewer once
+  // caught this adapter reordering argv, and the flags below (-m, effort) are
+  // accepted by `resume` itself.
+  // `resume` is a SUBCOMMAND of `exec`, not a flag, and both the insertion point
+  // and what follows it are load-bearing. Measured 23/09 on codex-cli 0.154.0:
+  //
+  //   `codex exec resume --sandbox ...`  ->  error: unexpected argument
+  //   `-C`, `--sandbox`, `--color` are `exec`'s and must precede the subcommand.
+  //   All three are already above this line, and they DO reach the resumed turn:
+  //   a probe with `--sandbox danger-full-access --resume <id>` recorded
+  //   `{"type":"danger-full-access"}` on the new turn in the rollout file.
+  //
+  // But `-c` does NOT survive in the parent position, and this cost a real bug.
+  // Read straight out of one session's rollout, same adapter, same flags:
+  //   turn 1 (fresh exec)   sandbox_policy.network_access: true
+  //   turn 2 (exec resume)  sandbox_policy.network_access: FALSE
+  //   turn 4 (-c moved after `resume`)  network_access: true again
+  // Every resumed job was heading back to unresolvable DNS, and the symptom
+  // would have surfaced inside the worker as a network error with nothing in
+  // the manifest saying a flag had been dropped.
+  //
+  // `-m` and the effort `-c` below are already on the correct side of the
+  // subcommand, which is why they are left where they are.
+  if (resumeId) args.push("resume", resumeId, ...NETWORK);
   if (model) args.push("-m", model);
   if (effort) args.push("-c", `model_reasoning_effort=${effort}`);
   args.push("-");                    // read the prompt from stdin
@@ -422,10 +474,12 @@ function prepareRun(options) {
   // companion call that honours the flag. Refusing here, before the log dir and
   // before any spawn, keeps a flag that cannot be honoured from looking like a
   // resume that worked.
-  resolveResume(options, {
+  // Headless resumes; the app surface does not yet, and will be flipped
+  // alongside the companion call that can honour it.
+  const resumeId = resolveResume(options, {
     worker: "codex",
     mode: options.mode ?? "headless",
-    supportsResume: false,
+    supportsResume: (options.mode ?? "headless") === "headless",
   });
 
   assertEvidenceAbsent(evidenceAbs);
@@ -443,7 +497,7 @@ function prepareRun(options) {
     unsandboxed: sandboxMode !== "workspace-write",
   });
 
-  return { workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode };
+  return { workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode, resumeId };
 }
 
 /**
@@ -465,7 +519,7 @@ function assertSidecarsAbsent(paths) {
 
 export async function codexRun(options) {
   const {
-    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode,
+    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode, resumeId,
   } = prepareRun(options);
   const idleMs = options.idle ? parseDuration(options.idle) : DEFAULT_IDLE_MS;
 
@@ -482,7 +536,7 @@ export async function codexRun(options) {
   assertSidecarsAbsent([streamPath, lastMessagePath]);
 
   const version = codexVersion();
-  const args = buildArgs({ workspace, model: options.model, effort, lastMessagePath, sandboxMode });
+  const args = buildArgs({ workspace, model: options.model, effort, lastMessagePath, sandboxMode, resumeId });
   const stream = makeStreamWriter(streamPath);
 
   // Announced after the stream writer exists, on purpose. The first version
@@ -520,6 +574,7 @@ export async function codexRun(options) {
     let events = 0;
     let residual = "";              // a chunk can split a line; count whole lines only
     const touched = new Set();      // paths codex says it wrote, from file_change events
+    let threadId = null;            // the session id, for a later `exec resume`
     let nextHeartbeat = 25;
     let stderrTail = [];
     let killedFor = null;
@@ -577,8 +632,18 @@ export async function codexRun(options) {
       const endedAt = new Date().toISOString();
       const code = exited?.code ?? null;
       const signal = exited?.signal ?? null;
-      const runtimeOk = code === 0 && !killedFor;
+      // Insurance, and labelled as such: measured 23/09, `codex exec resume
+      // <unknown-id>` exits 1 with "no rollout found for thread id ...", so
+      // this branch is unreachable today. It exists because the neighbouring
+      // runtime does the opposite -- agy warns on stderr, exits 0, and opens a
+      // fresh conversation -- and a silent substitution is the one failure that
+      // leaves no trace anywhere else. Three lines to make sure codex is not
+      // the surface without the check if its behaviour ever moves.
+      const resumeMismatch = Boolean(resumeId && threadId && threadId !== resumeId);
+      const runtimeOk = code === 0 && !killedFor && !resumeMismatch;
       const runtimeDetail = runtimeOk ? null
+        : resumeMismatch ? `job xin tiếp thread ${resumeId} nhưng codex chạy ở thread ${threadId}`
+          + " — phiên cũ không được nạp"
         : killedFor ? `codex killed: ${killedFor}`
         : `codex exited ${code}${signal ? ` on ${signal}` : ""}${stderrTail.length ? `: ${stderrTail.join(" | ")}` : ""}`;
 
@@ -611,6 +676,12 @@ export async function codexRun(options) {
         endedAt,
         durationSec: Math.round((Date.parse(endedAt) - startedAt.getTime()) / 1000),
         streamEvents: events,
+        // Same field the app transport fills from the companion's threadId, so
+        // one name answers "which session was this" for both transports -- and
+        // so a later `--resume` reads the id from one place in the manifest.
+        conversationId: threadId,
+        resumedFrom: resumeId ?? null,
+        resumeMismatch: resumeMismatch || undefined,
         // Same field name the app transport fills from the companion, so the
         // write-scope gate reads one name whatever the transport was.
         touchedFiles: touched.size ? [...touched] : null,
@@ -638,7 +709,16 @@ export async function codexRun(options) {
       const parts = (residual + chunk).split("\n");
       residual = parts.pop() ?? "";
       events += parts.filter(Boolean).length;
-      for (const line of parts) collectFileChange(line, touched);
+      for (const line of parts) {
+        collectFileChange(line, touched);
+        const next = collectThreadId(line, threadId);
+        // Reported the moment it is known, not at the end: the job most worth
+        // resuming is the one that died mid-flight, and its result object never
+        // gets built. The CLI keeps it and patches it onto the failure and
+        // SIGTERM paths, the same way it does for sandboxMode.
+        if (next !== threadId) options.onThreadId?.(next);
+        threadId = next;
+      }
       // Only stdout re-arms the watchdog. Re-arming on stderr let a process that
       // had stopped working keep itself alive with warning chatter -- the silent
       // crashloop the skill warns about.
@@ -1221,6 +1301,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   let sandboxMode = null;
   const sandboxPatch = () => (sandboxMode ? { sandboxMode } : {});
 
+  // Same reasoning as sandboxMode, for the same population of jobs: a killed or
+  // crashed run builds no result, so without this the one job anybody would
+  // want to continue is the one whose session id was thrown away.
+  let threadId = null;
+  const threadPatch = () => (threadId ? { conversationId: threadId } : {});
+
   const credentialPatch = () => {
     const dir = displayCredentialDir();
     if (isWatchBlind(credentialsBefore)) return { credentialWatch: `blind:${dir}` };
@@ -1255,6 +1341,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           endedAt: new Date().toISOString(),
           failure: `adapter nhận ${name} trước khi job kết thúc`,
           ...sandboxPatch(),
+          ...threadPatch(),
           // A job killed mid-flight is the most suspect one there is; skipping
           // the check here would leave exactly that group unexamined.
           ...credentialPatch(),
@@ -1307,7 +1394,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // there would be a guess dressed as a record. An absent field then means
     // only one thing -- a job from before this field existed.
     sandboxMode = mode === "app" ? "app-managed" : resolveSandboxMode(opts);
-    result = mode === "app" ? await codexRunApp(opts) : await codexRun(opts);
+    result = mode === "app"
+      ? await codexRunApp(opts)
+      : await codexRun({ ...opts, onThreadId: (id) => { threadId = id; } });
   } catch (err) {
     // The whole point of this adapter: a death nobody records reads as "pending"
     // forever, which is exactly what happened on 2026-08-24.
@@ -1325,6 +1414,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           codexVersion: codexVersion(),
           failure: err.message,
           ...sandboxPatch(),
+          ...threadPatch(),
           ...credentialPatch(),
         });
       } catch (manifestErr) {
@@ -1388,6 +1478,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         ...sandboxPatch(),
         transportMode: result.mode,
         conversationId: result.conversationId,
+        // Which session this job continued, recorded even when the answer is
+        // "none". `conversationId` alone cannot answer it: that names the
+        // session the job RAN in, which for a fresh job is also a new session.
+        resumedFrom: result.resumedFrom ?? null,
+        resumeMismatch: result.resumeMismatch,
         companionJobId: result.companionJobId,
         companionStatus: result.companionStatus,
         companionLog: result.companionLog,

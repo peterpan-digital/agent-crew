@@ -248,9 +248,10 @@ có lý do, không phải mặc định.
 2. **Việc mở/khám phá, chưa viết nổi acceptance trước.** Không có tiêu chí chấm thì mất
    evidence-first cũng không mất gì; đổi lại owner nhìn được quá trình.
 3. **Cần thread resume làm tiếp buổi sau.** `codex resume <id>` cho Codex, `anti-run.mjs
-   --resume <conversationId>` cho Anti. **Anti headless cũng resume được từ 23/09**
-   (`agy --conversation <id>`), nên "cần resume" **không còn** là lý do chọn app —
-   chọn app phải vì một trong hai ca trên. Codex thì vẫn chỉ app.
+   --resume <conversationId>`. Từ 23/09 **cả 3 bề mặt đã đấu dây resume đều dùng
+   chung một cờ `--resume <id>`** — Anti app, Anti headless, Codex headless. Nên
+   "cần resume" **không còn** là lý do chọn app; chọn app phải vì một trong hai ca
+   trên. Codex app là ô duy nhất còn lại.
 
 Ngoài 3 ca này, chọn `app` là đang trả giá quan sát để lấy một thứ chưa nêu được.
 

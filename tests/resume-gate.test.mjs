@@ -16,8 +16,8 @@
  * Run: node mwg-agent-crew/tests/resume-gate.test.mjs
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { join, sep } from "node:path";
 import { resolveResume, GuardError } from "../scripts/crew-guards.mjs";
 import { resolveLogDir } from "../scripts/codex-run.mjs";
 import { FIXTURE_BIN, MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
@@ -53,6 +53,18 @@ function run(adapter, { evidence, extra = [], mode = "argvdump" }) {
 
 /** The evidence file is written by the worker, so its absence is the proof. */
 const ranNothing = (evidence) => !existsSync(join(ws, evidence));
+
+/**
+ * Sidecar logs this job left behind. Named after the evidence BASENAME, so this
+ * is per-job -- unlike the log directory, which every job in the run folder
+ * shares and which therefore says nothing about any one of them.
+ */
+const sidecarsOf = (evidence) => {
+  const dir = resolveLogDir(join(ws, evidence), ws);
+  if (!existsSync(dir)) return [];
+  const base = evidence.split(sep).pop().replace(/\.md$/, "");
+  return readdirSync(dir).filter((f) => f.startsWith(base));
+};
 
 const throwsGuard = (fn) => {
   try { fn(); return null; } catch (err) { return err instanceof GuardError ? err : null; }
@@ -109,21 +121,25 @@ const throwsGuard = (fn) => {
 // --- the adapters: a refusal has to stop the job ---------------------------
 
 {
-  const evidence = join(RUN_DIR_REL, "codex-headless.md");
-  const r = run(CODEX, { evidence, extra: ["--resume", "01a04169-2763-79d1-9037-6dc85981fad1"] });
-  t.check("codex headless --resume exits non-zero", r.exit !== 0, true);
+  // Codex headless resumes as of Phase 3; only an empty id is refused there.
+  const evidence = join(RUN_DIR_REL, "codex-empty-id.md");
+  const r = run(CODEX, { evidence, extra: ["--resume", "   "] });
+  t.check("codex headless refuses an empty --resume", r.exit !== 0, true);
   t.check("...and spawned nothing", ranNothing(evidence), true);
-  t.check("...and left no log dir behind",
-    existsSync(resolveLogDir(join(ws, evidence), ws)), false);
+  // Per-job, not per-directory: the log dir is shared by every job in the run
+  // folder, so `the dir does not exist` only holds while no job has run yet.
+  // That made the old assertion pass on execution order rather than on the
+  // refusal -- it went red the moment a real job ran earlier in this file.
+  t.check("...and left no sidecar of its own", sidecarsOf(evidence).length, 0);
 }
 
 {
   const evidence = join(RUN_DIR_REL, "codex-app.md");
   const r = run(CODEX, { evidence, extra: ["--mode", "app", "--resume", "abc"] });
-  t.check("codex app --resume exits non-zero", r.exit !== 0, true);
+  t.check("codex app --resume is refused by the gate, not by the companion",
+    /--resume is not available/.test(r.stderr), true);
   t.check("...and spawned nothing", ranNothing(evidence), true);
-  t.check("...and left no log dir behind",
-    existsSync(resolveLogDir(join(ws, evidence), ws)), false);
+  t.check("...and left no sidecar of its own", sidecarsOf(evidence).length, 0);
 }
 
 {

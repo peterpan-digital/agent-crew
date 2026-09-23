@@ -47,6 +47,21 @@ case "$FAKE_MODE" in
       printf '\nStatus: DONE\nSummary: argv dumped\n'
     } > "$EV"
     exit 0 ;;
+  thread)
+    # Honours -o: the adapter promises the worker's final message lands there,
+    # and nothing asserted that until the path was written for real.
+    for i in $(seq 1 $#); do
+      if [ "${!i}" = "-o" ]; then j=$((i+1)); printf 'reply\n' > "${!j}"; fi
+    done
+    # Emits the thread.started event every real run opens with, so the adapter's
+    # capture of the session id can be asserted. FAKE_THREAD_ID overrides it.
+    printf '{"type":"thread.started","thread_id":"%s"}\n' "${FAKE_THREAD_ID:-01a04169-2763-79d1-9037-6dc85981fad1}"
+    printf '{"type":"turn.completed"}\n'
+    {
+      printf 'ARGV=%s\n' "$*"
+      printf '\nStatus: DONE\nSummary: ok\n'
+    } > "$EV"
+    exit 0 ;;
   briefdump)    # writes back the brief it was actually handed on stdin, so the
                 # contract lines can be asserted where the worker reads them
     printf '{"type":"turn.completed"}\n'
