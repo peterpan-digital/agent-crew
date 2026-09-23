@@ -59,7 +59,13 @@ class AntiRunError extends GuardError {
   }
 }
 
-function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMode }) {
+/** One wording for both readers: the runtime detail and the manifest failure. */
+function resumeMismatchDetail(asked, got) {
+  return `job xin tiếp conversation ${asked} nhưng agy mở conversation mới ${got}`
+    + " — phiên cũ không được nạp, worker đã làm lại từ đầu";
+}
+
+function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMode, resumeId }) {
   const args = [
     "-p", promptText,
     "--output-format", "json",
@@ -70,6 +76,10 @@ function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMo
   ];
   if (model) args.push("--model", model);
   if (agyMode) args.push("--mode", agyMode);
+  // `--conversation <id>`, never `--continue`. agy has both, and `--continue`
+  // takes "the most recent conversation" -- with max_parallel at 3 that is a
+  // race, and losing it means feeding a follow-up into another job's session.
+  if (resumeId) args.push("--conversation", resumeId);
 
   const started = new Date();
   const proc = spawnSync("agy", args, {
@@ -117,17 +127,56 @@ function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMo
       + " a tool it needed was probably blocked -- check the brief and permissions";
   }
 
+  // Measured 22/09, and the reason this is a check rather than a comment saying
+  // "agy handles it": `agy --conversation <unknown-id>` prints
+  // `warning: conversation "..." not found` to STDERR, exits 0, and opens a
+  // BRAND NEW conversation. The same silent substitution the --resume gate was
+  // built for, one layer down. Verified against the positive case in the same
+  // session: a real id comes back unchanged, with num_turns 2 and 20k cached
+  // tokens, and the agent answered from the earlier turn.
+  //
+  // The id is compared rather than the warning text, which is free to change
+  // wording. That does NOT make it more trustworthy than agy's own verdict --
+  // `conversation_id` is agy self-reporting too. What makes this check legal
+  // under the evidence-first rule is narrower: judgeJob arbitrates whether the
+  // WORK got done, which the evidence file can answer on its own. This
+  // arbitrates which SESSION it was done in, and the evidence file holds no
+  // data about that at all. Evidence cannot outrank the runtime on a question
+  // evidence is silent about.
+  //
+  // So the finding is routed through runtimeDetail -- the ordinary WARN + ack
+  // path -- and NOT by forcing `status: "failed"`. Measured: crew-collect
+  // re-derives status from the evidence's own Status line, so an override here
+  // is discarded at the gate and only leaves the manifest saying `failed` while
+  // the gate table says PASS. Two answers to one event is the thing that gate
+  // was written to remove.
+  const returnedId = parsed?.conversation_id ?? null;
+  const resumeMismatch = Boolean(resumeId && returnedId && returnedId !== resumeId);
+  // Fails closed on purpose. The premise of this whole check is that the
+  // runtime can fail to resume without saying so; if a version bump renames or
+  // drops the field, "cannot verify" would otherwise read as "verified" on
+  // EVERY resume at once, with no signal. A false alarm costs one ack; the
+  // alternative costs a resume that silently never happened.
+  const resumeUnverifiable = Boolean(resumeId && !returnedId);
+  if (resumeMismatch) {
+    runtimeDetail = resumeMismatchDetail(resumeId, returnedId);
+  } else if (resumeUnverifiable) {
+    runtimeDetail = `job xin tiếp conversation ${resumeId} nhưng agy không trả conversation_id`
+      + " — không kiểm được phiên cũ có được nạp hay không";
+  }
+
   const verdict = judgeJob(evidenceAbs, {
     runtimeOk: runtimeDetail === null,
     runtimeDetail,
-    context: `agy conversation ${parsed?.conversation_id ?? "unknown"}`,
+    context: `agy conversation ${returnedId ?? "unknown"}`,
   });
   const evidenceBytes = verdict.evidenceBytes;
 
   return {
     worker: "antigravity",
     mode: "headless",
-    conversationId: parsed?.conversation_id ?? null,
+    conversationId: returnedId,
+    resumedFrom: resumeId ?? null,
     startedAt: started.toISOString(),
     endedAt,
     // Two clocks on purpose: durationSec is wall time (what a work log bills)
@@ -140,6 +189,7 @@ function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMo
     evidence: evidenceAbs,
     evidenceBytes,
     status: verdict.status,
+    resumeMismatch: resumeMismatch || undefined,
     reportedStatus: verdict.reportedStatus,
     runtimeVerdict: verdict.runtimeVerdict,
   };
@@ -253,6 +303,7 @@ function runApp({ promptText, workspace, evidenceAbs, model, title, timeout, res
   return {
     worker: "antigravity",
     mode: "app",
+    resumedFrom: resumeId ?? null,
     conversationId,
     startedAt: started.toISOString(),
     endedAt,
@@ -289,14 +340,10 @@ export function antiRun(options) {
 
   const mode = options.mode ?? "headless";
   if (mode === "headless") {
-    // Phase 2 flips supportsResume AND teaches runHeadless the --conversation
-    // argv, in the same change. Nothing is passed through until then: a dead
-    // parameter is how that phase half-lands and recreates the silent no-op
-    // this gate exists to kill.
-    resolveResume(options, { worker: "antigravity", mode, supportsResume: false });
+    const resumeId = resolveResume(options, { worker: "antigravity", mode, supportsResume: true });
     return runHeadless({
       promptText, workspace, evidenceAbs, model: options.model, timeout,
-      agyMode: options.agyMode,
+      agyMode: options.agyMode, resumeId,
     });
   }
   if (mode === "app") {
@@ -477,11 +524,25 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         reportedStatus: result.reportedStatus,
         runtimeVerdict: result.runtimeVerdict,
         conversationId: result.conversationId,
+        // Which session this job continued, and whether the runtime actually
+        // honoured it. Recorded even when the answer is "it did not": a job
+        // that asked to resume and silently got a fresh session is the one
+        // anybody auditing the run needs to find, and `conversationId` alone
+        // cannot show it -- it reports the session that ran, not the one asked for.
+        resumedFrom: result.resumedFrom ?? null,
+        resumeMismatch: result.resumeMismatch,
         // A retry that succeeded must not inherit the previous attempt's
         // failure: the field would keep firing a WARN on a job that is now
         // clean, and a WARN that cries on every retried job is one people learn
         // to scroll past. The history stays in `notes`, which is append-only.
-        failure: undefined,
+        // `undefined` erases the key on a retry, which the docblock above warns
+        // about for credentialTamper. It is deliberate here and safe for the
+        // same reason `failure` itself is cleared: the history is preserved in
+        // `notes` before this runs, and a stale mismatch flag left on a clean
+        // retry would accuse a job that did resume correctly.
+        failure: result.resumeMismatch
+          ? resumeMismatchDetail(result.resumedFrom, result.conversationId)
+          : undefined,
         startedAt: result.startedAt,
         endedAt: result.endedAt,
         agentDurationSec: result.agentDurationSec ?? null,

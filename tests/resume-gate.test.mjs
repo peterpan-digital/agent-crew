@@ -127,19 +127,19 @@ const throwsGuard = (fn) => {
 }
 
 {
-  // The regression that started all of this -- and the one block that has to be
-  // read carefully. Without an `agy` on PATH, anti-run dies at "could not run
-  // agy" whether the gate fires or not, so `ranNothing` would pass with the gate
-  // deleted. The fixture makes the spawn succeed, which is what turns "nothing
-  // ran" from a tautology into a measurement. The control block below is the
-  // other half: it proves the fixture path really does produce evidence.
-  const evidence = join(RUN_DIR_REL, "anti-headless.md");
-  const r = run(ANTI, { evidence, extra: ["--resume", "abc"] });
-  t.check("anti headless --resume is no longer silent", r.exit !== 0, true);
-  t.check("...and opens no new conversation", ranNothing(evidence), true);
+  // Anti headless resumes as of Phase 2, so what is refused here is the
+  // COMBINATION, not the surface. The block has to be read carefully: without
+  // an `agy` on PATH anti-run dies
+  // at "could not run agy" whether the gate fires or not, so `ranNothing` would
+  // pass with the gate deleted. The fixture makes the spawn succeed, which is
+  // what turns "nothing ran" from a tautology into a measurement.
+  const evidence = join(RUN_DIR_REL, "anti-model-conflict.md");
+  const r = run(ANTI, { evidence, extra: ["--resume", "abc", "--model", "pro"] });
+  t.check("anti --resume with --model is refused", r.exit !== 0, true);
+  t.check("...and opens no conversation", ranNothing(evidence), true);
   t.check("...and never reached agy at all", /could not run agy/.test(r.stderr), false);
-  t.check("...and says the surface cannot resume",
-    /--resume is not available/.test(r.stderr), true);
+  t.check("...and says a session keeps its model",
+    /already has the model/.test(r.stderr), true);
 }
 
 // --- controls: the gate must not refuse jobs that never asked to resume -----

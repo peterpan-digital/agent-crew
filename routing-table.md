@@ -248,7 +248,9 @@ có lý do, không phải mặc định.
 2. **Việc mở/khám phá, chưa viết nổi acceptance trước.** Không có tiêu chí chấm thì mất
    evidence-first cũng không mất gì; đổi lại owner nhìn được quá trình.
 3. **Cần thread resume làm tiếp buổi sau.** `codex resume <id>` cho Codex, `anti-run.mjs
-   --resume <conversationId>` cho Anti (thêm 2026-09-17) — cả hai chỉ có với thread app.
+   --resume <conversationId>` cho Anti. **Anti headless cũng resume được từ 23/09**
+   (`agy --conversation <id>`), nên "cần resume" **không còn** là lý do chọn app —
+   chọn app phải vì một trong hai ca trên. Codex thì vẫn chỉ app.
 
 Ngoài 3 ca này, chọn `app` là đang trả giá quan sát để lấy một thứ chưa nêu được.
 

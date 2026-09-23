@@ -22,5 +22,15 @@ case "$FAKE_MODE" in
     } > "$EV"
     printf '{"status":"SUCCESS","response":"done","conversation_id":"%s","duration_seconds":1,"num_turns":1}\n' "$CONV"
     exit 0 ;;
+  no_conv_id)
+    # A SUCCESS payload with no conversation_id: what a field rename or a
+    # version bump looks like from out here. The adapter must not read the
+    # missing field as "resume verified".
+    {
+      printf 'ARGV=%s\n' "$*"
+      printf '\nStatus: DONE\nSummary: ok\n'
+    } > "$EV"
+    printf '{"status":"SUCCESS","response":"done","duration_seconds":1,"num_turns":1}\n'
+    exit 0 ;;
   *) echo "fake-agy: unknown FAKE_MODE '$FAKE_MODE'" >&2; exit 99 ;;
 esac
