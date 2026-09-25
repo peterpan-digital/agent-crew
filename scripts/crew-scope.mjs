@@ -154,8 +154,28 @@ function declaredPrefixes(manifest) {
   ].map(normalizePrefix);
 }
 
+/**
+ * Nested repos the outer repo ignores but a worker still writes into. `tasks/`
+ * became its own local-only repo so task content never reaches the public
+ * harness; without reading its status too, every write under `tasks/` -- where
+ * all evidence lives -- would be invisible to this gate.
+ */
+export const NESTED_REPOS = ["tasks"];
+
+/** `git status` of the workspace plus every nested repo present, paths relative to the workspace. */
+export function changedPaths(workspace) {
+  const paths = statusPaths(workspace, "");
+  for (const sub of NESTED_REPOS) {
+    try {
+      statSync(join(workspace, sub, ".git"));
+    } catch { continue; }
+    paths.push(...statusPaths(join(workspace, sub), `${sub}/`));
+  }
+  return paths;
+}
+
 /** `git status --porcelain -z`, keeping the second path of a rename record. */
-function changedPaths(workspace) {
+function statusPaths(workspace, prefix) {
   const out = execFileSync("git", ["status", "--porcelain", "-z", "--untracked-files=all"], {
     cwd: workspace, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
   });
@@ -165,12 +185,12 @@ function changedPaths(workspace) {
     const rec = records[i];
     if (!rec) continue;
     const code = rec.slice(0, 2);
-    paths.push(rec.slice(3));
+    paths.push(prefix + rec.slice(3));
     // A rename/copy record is followed by its source path in its own field, so
     // it must be consumed here or it is read as a status line on the next pass.
     if (code[0] === "R" || code[0] === "C") {
       i += 1;
-      if (records[i]) paths.push(records[i]);
+      if (records[i]) paths.push(prefix + records[i]);
     }
   }
   return paths;
