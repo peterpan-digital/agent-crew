@@ -50,7 +50,10 @@ import {
   CREDENTIAL_STORE_DIR,
   validateEvidencePath,
   workerEnv,
+  resolveLogDir,
 } from "./crew-guards.mjs";
+// Dời sang crew-guards để anti-run dùng chung; giữ export ở đây cho test và nơi gọi cũ.
+export { resolveLogDir };
 
 /** A job that emits no stdout event for this long is treated as dead, not as thinking. */
 /** A probe that reads a state file; the dispatch ceiling would hold a slot for minutes. */
@@ -362,29 +365,6 @@ function collectThreadId(line, prev) {
   try { d = JSON.parse(line); } catch { return prev; }
   if (d?.type !== "thread.started") return prev;
   return typeof d.thread_id === "string" && d.thread_id ? d.thread_id : prev;
-}
-
-/**
- * Where a job's raw log goes: the task's own `data/` folder, never next to the
- * evidence in `reports/`.
- *
- * The reason is that a task's `data/` folder is already ignored by git, for both
- * the flat and the work-item layout. Keeping the log beside the evidence meant
- * same fact -- "these two files are legitimate and must not be committed" --
- * had to be written in three places: gitignore patterns, a whitelist in the
- * skill's collect step, and an exception in the collect gate. One existing rule
- * replaces all three, and the manifest records the path so nothing has to guess
- * the name.
- */
-export function resolveLogDir(evidenceAbs, workspace) {
-  const rel = relative(workspace, evidenceAbs).split(sep);
-  const i = rel.lastIndexOf("reports");
-  // rel[i + 1] is the run folder; if it is the evidence file itself the job was
-  // dispatched loose, without a run folder.
-  const inRunFolder = i > 0 && i + 2 <= rel.length - 1;
-  const owner = i > 0 ? rel.slice(0, i) : rel.slice(0, 2);
-  const runName = inRunFolder ? rel[i + 1] : "loose";
-  return join(workspace, ...owner, "data", "crew-logs", runName);
 }
 
 function buildArgs({ workspace, model, effort, lastMessagePath, sandboxMode = "workspace-write", resumeId = null }) {

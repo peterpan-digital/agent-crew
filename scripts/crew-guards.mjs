@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 // Ceilings come from mwg-agent-crew/cost-gate.md; a runaway agent burns quota.
 export const DEFAULT_TIMEOUT = "15m";
@@ -485,4 +485,27 @@ export function judgeJob(evidenceAbs, { runtimeOk, runtimeDetail = null, context
     // Set only when the runtime disagreed with evidence that judged itself.
     runtimeVerdict: runtimeOk ? null : (runtimeDetail ?? "runtime reported failure"),
   };
+}
+
+/**
+ * Where a job's raw log goes: the task's own `data/` folder, never next to the
+ * evidence in `reports/`.
+ *
+ * The reason is that a task's `data/` folder is already ignored by git, for both
+ * the flat and the work-item layout. Keeping the log beside the evidence meant
+ * same fact -- "these two files are legitimate and must not be committed" --
+ * had to be written in three places: gitignore patterns, a whitelist in the
+ * skill's collect step, and an exception in the collect gate. One existing rule
+ * replaces all three, and the manifest records the path so nothing has to guess
+ * the name.
+ */
+export function resolveLogDir(evidenceAbs, workspace) {
+  const rel = relative(workspace, evidenceAbs).split(sep);
+  const i = rel.lastIndexOf("reports");
+  // rel[i + 1] is the run folder; if it is the evidence file itself the job was
+  // dispatched loose, without a run folder.
+  const inRunFolder = i > 0 && i + 2 <= rel.length - 1;
+  const owner = i > 0 ? rel.slice(0, i) : rel.slice(0, 2);
+  const runName = inRunFolder ? rel[i + 1] : "loose";
+  return join(workspace, ...owner, "data", "crew-logs", runName);
 }

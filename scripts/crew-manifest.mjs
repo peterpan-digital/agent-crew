@@ -413,6 +413,17 @@ export function addJob(manifestPath, job) {
     if (job.filesMayModify?.some((x) => typeof x !== "string")) {
       throw new ManifestError("filesMayModify entries must all be strings");
     }
+    // Hai việc đọc cùng danh sách này: cổng phạm vi ghi, và đồng hồ "job còn sống
+    // không" của adapter Anti app (mtime của các file khai ở đây). Một prefix
+    // tuyệt đối hoặc có `..` thì cả hai đều trỏ ra ngoài workspace.
+    for (const prefix of job.filesMayModify ?? []) {
+      if (isAbsolute(prefix)) {
+        throw new ManifestError(`filesMayModify phải là đường dẫn tương đối trong workspace, nhận đường tuyệt đối ${prefix}`);
+      }
+      if (normalize(prefix).split(sep).includes("..") || prefix.split(/[\\/]/).includes("..")) {
+        throw new ManifestError(`filesMayModify không được chứa "..", nhận ${prefix}`);
+      }
+    }
     const extra = { ...job.extra };
     for (const field of SEALED_JOB_FIELDS) {
       if (field in extra) {

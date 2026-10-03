@@ -26,10 +26,14 @@
  * while their evidence was complete.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { resolveAntiEnv } from "./anti-env.mjs";
 import { antiStatus } from "./anti-status.mjs";
+import { appendNote, holdsTamperPatch, readManifest, updateJob as updateJobSync } from "./crew-manifest.mjs";
+import {
+  DEFAULT_QUIET_ALERT_MS, DEFAULT_QUIET_WARN_MS, newestOwnMtime, progressVerdict,
+} from "./lib/progress-watch.mjs";
 import {
   DEFAULT_TIMEOUT,
   GuardError,
@@ -45,6 +49,7 @@ import {
   isWatchBlind,
   displayCredentialDir,
   readWorkerStatus,
+  resolveLogDir,
   stripUnsafeEnv,
   validateEvidencePath,
 } from "./crew-guards.mjs";
@@ -196,7 +201,45 @@ function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMo
   };
 }
 
-function runApp({ promptText, workspace, evidenceAbs, model, title, timeout, resumeId }) {
+/**
+ * Mọi thứ runApp chạm vào bên ngoài, gom một chỗ để test thay bằng hàm giả. Cố ý là
+ * tham số chứ không phải biến môi trường: một seam đọc env thì chạy thật cũng bật
+ * được nó, mà seam này không có đường đó.
+ */
+const REAL_DEPS = {
+  resolveEnv: resolveAntiEnv,
+  dispatch: (agentapi, args, { workspace, env }) => execFileSync(agentapi, args, {
+    cwd: workspace,
+    encoding: "utf8",
+    timeout: 60_000,
+    // Antigravity runs unsandboxed, so it is the path where a worker setting
+    // KEYRING_BACKEND=file can actually destroy the credential store. See
+    // STRIPPED_ENV.
+    env: stripUnsafeEnv({ ...process.env, ...env }),
+    maxBuffer: 16 * 1024 * 1024,
+  }),
+  status: antiStatus,
+  // Bất đồng bộ có chủ ý: đợi bằng Atomics.wait chặn cả event loop, và một signal
+  // gửi tới trong lúc đó không bao giờ được giao tới handler.
+  sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+  now: () => Date.now(),
+  pollMs: POLL_INTERVAL_MS,
+};
+
+/**
+ * Job app chạy qua agentapi và đợi bằng cách poll. Im lặng quá ngưỡng thì BÁO
+ * (`onWatch`) chứ không dừng: adapter còn sống tới hết timeout nên kiểm credential
+ * ở đường thoát vẫn chạy, còn người nghe sidecar quyết dừng bằng SIGTERM.
+ *
+ * `onConversation` được gọi ngay khi có id, TRƯỚC vòng poll: 4/4 job app treo từng
+ * đo đều mất id vì nó chỉ vào manifest ở nhánh thành công.
+ */
+export async function runApp({
+  promptText, workspace, evidenceAbs, model, title, timeout, resumeId,
+  filesMayModify = [], onConversation, onWatch,
+  quietWarnMs = DEFAULT_QUIET_WARN_MS, quietAlertMs = DEFAULT_QUIET_ALERT_MS,
+}, deps = {}) {
+  const d = { ...REAL_DEPS, ...deps };
   // `--model` alongside `--resume` never reaches here: resolveResume refuses the
   // pair outright, because send-message has no model parameter and would have
   // dropped it silently. So this check is only ever about a fresh conversation.
@@ -206,7 +249,7 @@ function runApp({ promptText, workspace, evidenceAbs, model, title, timeout, res
       `pick one of: ${[...APP_MODELS].join(", ")}`,
     );
   }
-  const { agentapi, env } = resolveAntiEnv(workspace);
+  const { agentapi, env } = d.resolveEnv(workspace);
   const args = resumeId ? ["send-message"] : ["new-conversation"];
   if (!resumeId) {
     if (model) args.push(`--model=${model}`);
@@ -215,19 +258,10 @@ function runApp({ promptText, workspace, evidenceAbs, model, title, timeout, res
   if (resumeId) args.push(resumeId);
   args.push(promptText);
 
-  const started = new Date();
+  const started = new Date(d.now());
   let raw;
   try {
-    raw = execFileSync(agentapi, args, {
-      cwd: workspace,
-      encoding: "utf8",
-      timeout: 60_000,
-      // Antigravity runs unsandboxed, so it is the path where a worker setting
-      // KEYRING_BACKEND=file can actually destroy the credential store. See
-      // STRIPPED_ENV.
-      env: stripUnsafeEnv({ ...process.env, ...env }),
-      maxBuffer: 16 * 1024 * 1024,
-    });
+    raw = d.dispatch(agentapi, args, { workspace, env });
   } catch (err) {
     throw new AntiRunError(
       `agentapi ${resumeId ? "send-message" : "new-conversation"} failed`,
@@ -252,6 +286,8 @@ function runApp({ promptText, workspace, evidenceAbs, model, title, timeout, res
       );
     }
   }
+  // Trước mọi thứ có thể treo. Lỗi ghi sổ ở đây không được làm hỏng job đã dispatch.
+  try { onConversation?.({ conversationId, resumedFrom: resumeId ?? null }); } catch { /* chỉ là bookkeeping */ }
 
   // The app gives no completion callback, so poll the conversation store. A
   // conversation that never leaves 0 steps means the app never picked it up.
@@ -265,16 +301,20 @@ function runApp({ promptText, workspace, evidenceAbs, model, title, timeout, res
   //
   // Steps are still polled, but only as a fallback for a worker that finished
   // without writing the required Status line.
-  const deadline = Date.now() + parseDuration(timeout);
+  const deadline = d.now() + parseDuration(timeout);
   let last = null;
   let settledAt = null;
+  let prevFingerprint = null;
+  let lastProgressAt = d.now();
+  let level = "ok";
+  let maxQuietMs = 0;
   for (;;) {
     if (existsSync(evidenceAbs) && statSync(evidenceAbs).size > 0 && readWorkerStatus(evidenceAbs).reported) {
       break;
     }
     let prevSteps = last?.steps ?? null;
     try {
-      last = antiStatus(conversationId);
+      last = d.status(conversationId);
     } catch {
       last = null; // the database appears a moment after the conversation does
     }
@@ -283,16 +323,39 @@ function runApp({ promptText, workspace, evidenceAbs, model, title, timeout, res
       settledAt = last.steps;
       break;
     }
-    if (Date.now() > deadline) {
-      throw new AntiRunError(
+
+    // Còn sống hay đã im: xem `progress-watch` vì sao tín hiệu chính là byStatus.
+    const now = d.now();
+    const v = progressVerdict({
+      prevFingerprint, byStatus: last?.byStatus ?? null,
+      newestOwnMtime: newestOwnMtime(workspace, filesMayModify),
+      lastProgressAt, level, now, warnMs: quietWarnMs, alertMs: quietAlertMs,
+    });
+    prevFingerprint = v.fingerprint;
+    lastProgressAt = v.lastProgressAt;
+    level = v.level;
+    maxQuietMs = Math.max(maxQuietMs, v.quietMs);
+    if (v.emit) {
+      try {
+        onWatch?.({
+          type: "anti.watch", level: v.emit, at: new Date(now).toISOString(),
+          quietSec: Math.round(v.quietMs / 1000), conversationId,
+        });
+      } catch { /* sidecar hỏng không được giết một job đang chạy */ }
+    }
+
+    if (now > deadline) {
+      const err = new AntiRunError(
         `app-mode job did not finish within ${timeout}`,
         `conversation ${conversationId}, evidence not written; last seen ${JSON.stringify(last)}`,
       );
+      err.quietMaxSec = Math.round(maxQuietMs / 1000);
+      throw err;
     }
-    sleepMs(POLL_INTERVAL_MS);
+    await d.sleep(d.pollMs);
   }
 
-  const endedAt = new Date().toISOString();
+  const endedAt = new Date(d.now()).toISOString();
   // App mode has no runtime verdict to disagree with -- reaching here means the
   // evidence file appeared, which is the completion signal for this transport.
   const verdict = judgeJob(evidenceAbs, {
@@ -315,16 +378,11 @@ function runApp({ promptText, workspace, evidenceAbs, model, title, timeout, res
     status: verdict.status,
     reportedStatus: verdict.reportedStatus,
     runtimeVerdict: verdict.runtimeVerdict,
+    quietMaxSec: Math.round(maxQuietMs / 1000),
   };
 }
 
-/** Blocking sleep: these scripts are synchronous CLI tools, not servers. */
-function sleepMs(ms) {
-  const shared = new SharedArrayBuffer(4);
-  Atomics.wait(new Int32Array(shared), 0, 0, ms);
-}
-
-export function antiRun(options) {
+export async function antiRun(options, deps = {}) {
   const workspace = resolve(options.workspace ?? process.cwd());
   const evidenceAbs = validateEvidencePath(options.evidence, workspace);
   // Antigravity runs with --dangerously-skip-permissions (see buildArgs), so it
@@ -342,7 +400,10 @@ export function antiRun(options) {
   const mode = options.mode ?? "headless";
   if (mode === "headless") {
     assertSurfaceFlags(options, {
-      worker: "antigravity", mode, unsupported: { title: "--title" },
+      worker: "antigravity", mode,
+      // --quiet-* chỉ báo, còn headless không có vòng poll nào để báo. Tên cố ý khác
+      // --idle của Codex: --idle GIẾT job, --quiet-* thì không bao giờ.
+      unsupported: { title: "--title", quietWarn: "--quiet-warn", quietAlert: "--quiet-alert" },
     });
     const resumeId = resolveResume(options, { worker: "antigravity", mode, supportsResume: true });
     return runHeadless({
@@ -355,10 +416,18 @@ export function antiRun(options) {
       worker: "antigravity", mode, unsupported: { agyMode: "--agy-mode" },
     });
     const resumeId = resolveResume(options, { worker: "antigravity", mode, supportsResume: true });
+    const quietWarnMs = options.quietWarn ? parseDuration(options.quietWarn) : DEFAULT_QUIET_WARN_MS;
+    const quietAlertMs = options.quietAlert ? parseDuration(options.quietAlert) : DEFAULT_QUIET_ALERT_MS;
+    if (quietWarnMs <= 0 || quietWarnMs >= quietAlertMs) {
+      throw new AntiRunError(
+        `--quiet-warn phải nhỏ hơn --quiet-alert (và lớn hơn 0), nhận ${options.quietWarn ?? "5m"} và ${options.quietAlert ?? "10m"}`,
+      );
+    }
     return runApp({
       promptText, workspace, evidenceAbs, model: options.model, title: options.title, timeout,
-      resumeId,
-    });
+      resumeId, quietWarnMs, quietAlertMs,
+      filesMayModify: options.filesMayModify, onConversation: options.onConversation, onWatch: options.onWatch,
+    }, deps);
   }
   throw new AntiRunError(`unknown mode "${mode}"`, "use --mode headless or --mode app");
 }
@@ -369,6 +438,7 @@ export { parseDuration, validateEvidencePath } from "./crew-guards.mjs";
 const KNOWN_FLAGS = new Set([
   "prompt", "promptFile", "evidence", "workspace", "timeout",
   "mode", "agyMode", "model", "title", "manifest", "job", "resume",
+  "quietWarn", "quietAlert",
 ]);
 
 /**
@@ -386,6 +456,8 @@ function parseArgv(argv) {
   const alias = {
     "prompt-file": "promptFile",
     "agy-mode": "agyMode",
+    "quiet-warn": "quietWarn",
+    "quiet-alert": "quietAlert",
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -413,10 +485,65 @@ function needsHuman(result) {
     || result.status === "needs_context";
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+/**
+ * Sidecar mà Claude nghe bằng Monitor: mỗi sự kiện `anti.watch` một dòng JSON, nằm
+ * ở `data/crew-logs/` của task (đã được gitignore), không phải cạnh evidence trong
+ * `reports/`. Mức `alert` còn ghi một note vào job, đúng một lần, để người đọc
+ * manifest sau này thấy job từng im lâu mà không cần đọc sidecar.
+ */
+export function makeWatchSink({ manifestPath = null, seq = null, sidecarPath }) {
+  let noted = false;
+  return (event) => {
+    mkdirSync(join(sidecarPath, ".."), { recursive: true });
+    appendFileSync(sidecarPath, `${JSON.stringify(event)}\n`, "utf8");
+    if (event.level === "alert" && !noted && manifestPath && seq != null) {
+      noted = true;
+      appendNote(manifestPath, seq,
+        `anti-run: job app im ${Math.round(event.quietSec / 60)} phút (alert) — conversation ${event.conversationId}; adapter vẫn canh tới timeout`);
+    }
+  };
+}
+
+/**
+ * Handler cho SIGTERM/SIGINT khi job app còn chạy: ghi `failed` ("dispatcher dừng
+ * sau cảnh báo") kèm kiểm kho credential và vân tay holds, rồi thoát 1. Job `failed`
+ * claim lại được ngay, nên retry hoặc resume (bằng id đã lưu sớm) không phải đợi.
+ *
+ * Tách ra và nhận hàm thoát để test gọi thẳng. Chỉ ghi khi job vẫn đang `running`:
+ * một job đã kết thúc rồi không được đổi thành failed vì signal đến chậm.
+ */
+export function makeStopHandler({ manifestPath, seq, dispatchedAt, credentialPatch, holdsPatch, exit = process.exit }) {
+  return (name) => {
+    try {
+      const job = readManifest(manifestPath).jobs.find((j) => j.seq === seq);
+      if (job?.status === "running") {
+        updateJobSync(manifestPath, seq, {
+          status: "failed",
+          startedAt: dispatchedAt,
+          endedAt: new Date().toISOString(),
+          failure: `adapter nhận ${name} — dispatcher dừng sau cảnh báo`,
+          ...credentialPatch(),
+          ...holdsPatch(),
+        });
+      }
+    } catch (err) {
+      console.error(`anti-run: could not record the stop in the manifest: ${err.message}`);
+    }
+    console.error(`anti-run: ${name} — job đã dừng theo yêu cầu, conversation vẫn có thể còn chạy trong app`);
+    exit(1);
+  };
+}
+
+export async function main(argv, { deps = {} } = {}) {
   let opts = {};
   let result = null;
   let claimed = false;
+  let onTerm = null;
+  let onInt = null;
+  const releaseSignals = () => {
+    if (onTerm) process.off("SIGTERM", onTerm);
+    if (onInt) process.off("SIGINT", onInt);
+  };
   // Captured before the job starts so a failed job still has a duration; the
   // failure path never sees the timestamps that antiRun() builds internally.
   const dispatchedAt = new Date().toISOString();
@@ -427,9 +554,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // so a guard that only covered the sandboxed runtime would cover the safer
   // one -- the reasoning STRIPPED_ENV already spells out in crew-guards.mjs.
   //
-  // Two exit paths here, not three: anti-run has no signal handler, so a job
-  // whose adapter is killed records nothing at all -- credential check
-  // included. That gap predates this guard and is not narrowed by it.
+  // Job app có đường thoát thứ ba, bằng signal (xem `stopHandler` bên dưới); job
+  // headless thì chưa: nó đợi trong spawnSync, chặn event loop nên signal không
+  // được giao tới handler nào, và đăng ký handler ở đó chỉ làm SIGTERM mất tác dụng.
   const credentialsBefore = snapshotCredentialStore();
   /**
    * The credential finding, as a patch fragment to spread into updateJob.
@@ -456,7 +583,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     return changes.length ? { credentialTamper: changes.map((c) => ({ ...c, dir })) } : {};
   };
   try {
-    opts = parseArgv(process.argv.slice(2));
+    opts = parseArgv(argv);
     // Recorded before the job spawns, not after it returns. A job that is still
     // working has no result to write, so without this the manifest showed it as
     // `pending` with no start time -- and the collect gate cannot tell a live
@@ -484,8 +611,36 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       // own error handler is not a guard.
       claimed = true;
     }
-    result = antiRun(opts);
+
+    // Chỉ job app: vòng poll của nó bất đồng bộ nên signal đến được. Đăng ký ngay
+    // sau claim, gỡ khi antiRun trả về (xem finally bên dưới).
+    let runOpts = opts;
+    if (claimed && (opts.mode ?? "headless") === "app") {
+      const seq = Number(opts.job);
+      const stop = makeStopHandler({
+        manifestPath: opts.manifest, seq, dispatchedAt,
+        credentialPatch, holdsPatch: () => holdsTamperPatch(opts.manifest, seq),
+      });
+      onTerm = () => stop("SIGTERM");
+      onInt = () => stop("SIGINT");
+      process.on("SIGTERM", onTerm);
+      process.on("SIGINT", onInt);
+
+      const job = readManifest(opts.manifest).jobs.find((j) => j.seq === seq);
+      const workspace = resolve(opts.workspace ?? process.cwd());
+      const evidenceAbs = validateEvidencePath(opts.evidence, workspace);
+      const sidecarPath = join(resolveLogDir(evidenceAbs, workspace), `${basename(evidenceAbs).replace(/\.[^.]+$/, "")}.anti-watch.jsonl`);
+      runOpts = {
+        ...opts,
+        filesMayModify: job?.filesMayModify ?? [],
+        // Id vào manifest trước vòng poll; nhánh timeout và nhánh lỗi giữ nguyên nó.
+        onConversation: ({ conversationId, resumedFrom }) => updateJobSync(opts.manifest, seq, { conversationId, resumedFrom }),
+        onWatch: makeWatchSink({ manifestPath: opts.manifest, seq, sidecarPath }),
+      };
+    }
+    result = await antiRun(runOpts, deps);
   } catch (err) {
+    releaseSignals();
     // A failed job must be recorded, or collect cannot tell a job that broke
     // from one that never started -- both would read as "pending" forever.
     if (opts.manifest && opts.job) {
@@ -500,6 +655,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           startedAt: dispatchedAt,
           endedAt: new Date().toISOString(),
           failure: err.message,
+          // Số đo nền cho ngưỡng im: có từ vòng poll của job app (timeout cũng có).
+          ...(err.quietMaxSec != null ? { quietMaxSec: err.quietMaxSec } : {}),
           ...credentialPatch(),
           // Only for a job this process claimed: an unclaimed one carries the
           // fingerprint of some earlier attempt, and holds legitimately moved since.
@@ -513,6 +670,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
 
+  releaseSignals();
   // Recording the outcome is deliberately outside the try above: the job has
   // already finished by now, so a manifest write that fails must be reported as
   // a bookkeeping problem, never as a failed job.
@@ -558,6 +716,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         agentDurationSec: result.agentDurationSec ?? null,
         usage: result.usage ?? null,
         evidenceBytes: result.evidenceBytes,
+        ...(result.quietMaxSec != null ? { quietMaxSec: result.quietMaxSec } : {}),
         ...credentialPatch(),
         // Compared against the fingerprint taken at claim. A worker has no
         // business touching `holds`, and this is the exit it would be caught on.
@@ -592,4 +751,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // Background dispatch made the exit code the ping, so a job that needs a human
   // must not ping as a clean success.
   process.exit(needsHuman(result) ? 3 : 0);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  await main(process.argv.slice(2));
 }
