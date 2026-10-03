@@ -7,10 +7,16 @@
  *   Codex        Stop                     ~/.codex/hooks.json  (GLOBAL — Codex
  *                                         không nạp .codex/hooks.json của repo,
  *                                         đo 22/09; xem rào existsSync bên dưới)
- *   Antigravity  UserPromptSubmit         .agents/hooks.json
+ *   Antigravity  PreInvocation + Stop     .agents/hooks.json
+ *                (app bỏ cả file nếu sai schema: không có UserPromptSubmit,
+ *                 key ngoài cùng là TÊN hook. Xem docs/hooks.md của app)
  *
- * Payload vào qua stdin, mang sẵn `session_id`, `transcript_path`, `cwd` — nên
- * script không phải đi dò transcript trong thư mục nào cả.
+ * Payload vào qua stdin, mang sẵn id phiên, đường dẫn transcript và workspace — nên
+ * script không phải đi dò transcript trong thư mục nào cả. Claude/Codex gửi
+ * snake_case (`session_id`, `transcript_path`, `cwd`); Antigravity gửi camelCase
+ * (`conversationId`, `transcriptPath`, `workspacePaths`) và **bắt buộc** stdout là
+ * JSON — nên với `--agent anti` script luôn in `{}` trước khi thoát, kể cả khi
+ * bỏ qua việc ghi.
  *
  * Hai luật cứng, ngược chiều nhau:
  *
@@ -45,8 +51,10 @@ async function main() {
   if (!AGENTS.has(agent)) return quiet(`--agent phải là một trong ${[...AGENTS].join("|")}`);
 
   const payload = readPayload();
+  // Anti chạy hook với cwd = thư mục chứa hooks.json (`.agents/`), không phải gốc repo.
+  const payloadWorkspace = payload.cwd || (Array.isArray(payload.workspacePaths) ? payload.workspacePaths[0] : null);
   const workspace = resolve(
-    argv.includes("--workspace") ? argv[argv.indexOf("--workspace") + 1] : (payload.cwd || process.cwd()),
+    argv.includes("--workspace") ? argv[argv.indexOf("--workspace") + 1] : (payloadWorkspace || process.cwd()),
   );
   // Opt-in theo thư mục, và đây là điều kiện để đăng ký hook này ở phạm vi
   // global được. Codex KHÔNG nạp `.codex/hooks.json` của repo (đo 22/09: số hook
@@ -62,7 +70,7 @@ async function main() {
     return quiet(`${workspace} không có ${STATE_DIR_REL} — bỏ qua`);
   }
 
-  const session = payload.session_id ?? payload.sessionId ?? "unknown";
+  const session = payload.session_id ?? payload.sessionId ?? payload.conversationId ?? "unknown";
   const transcript = payload.transcript_path ?? payload.transcriptPath ?? null;
 
   // Fail-closed. Không có bộ che thì không ghi — không có bản "ghi tạm rồi che sau".
@@ -74,7 +82,7 @@ async function main() {
   }
   if (typeof sanitize !== "function") return quiet("module redact không có sanitize() — không ghi gì");
 
-  const facts = deriveFromTranscript(transcript);
+  const facts = deriveFromTranscript(transcript, { workspace });
   if (!facts.lastDid && !facts.files.length) return quiet("chưa có gì để ghi");
 
   const body = renderState({
@@ -99,4 +107,11 @@ async function main() {
 }
 
 // Bọc kín: mọi lỗi đều nuốt. Hook này không có quyền làm hỏng lượt của người dùng.
-main().catch((e) => quiet(`lỗi ngoài dự kiến, bỏ qua: ${e.message}`)).finally(() => process.exit(0));
+// Anti đòi JSON trên stdout cho mọi hook; thiếu thì app coi hook là lỗi.
+const wantsJson = process.argv.includes("--agent") && process.argv[process.argv.indexOf("--agent") + 1] === "anti";
+main()
+  .catch((e) => quiet(`lỗi ngoài dự kiến, bỏ qua: ${e.message}`))
+  .finally(() => {
+    if (wantsJson) process.stdout.write("{}");
+    process.exit(0);
+  });

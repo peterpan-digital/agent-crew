@@ -5,11 +5,14 @@
  * chế này sinh ra để tiết kiệm. Đo 21/09 cho thấy suy được: transcript Claude
  * và transcript Codex đều phân biệt được lượt user / trả lời assistant / tool.
  *
- * Hai định dạng, nhận diện bằng cách ngửi dòng đầu thay vì tin phần mở rộng:
+ * Ba định dạng, nhận diện bằng cách ngửi dòng đầu thay vì tin phần mở rộng:
  *
  *   Claude  {"type":"assistant","message":{"content":[{"type":"text",...}]}}
  *   Codex   {"type":"response_item","payload":{"type":"message","role":"assistant",
  *            "content":[{"type":"output_text","text":...}]}}
+ *   Anti    {"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","content":"...",
+ *            "tool_calls":[{"name":"run_command","args":{...}}]}
+ *           (`brain/{conversationId}/.system_generated/logs/transcript_full.jsonl`)
  */
 import { existsSync, readFileSync } from "node:fs";
 
@@ -18,6 +21,8 @@ const TASK_RE = /(?:^|[\s"'`(])((?:tasks\/[0-9]{6}-[a-z0-9-]+)(?:\/work-items\/[
 export function sniffFormat(firstLine) {
   try {
     const d = JSON.parse(firstLine);
+    // Anti trước Claude: cả hai đều có `type`, nhưng chỉ Anti có `step_index` + `source`.
+    if (typeof d.step_index === "number" && typeof d.source === "string") return "anti";
     if (d.type === "response_item" || d.type === "session_meta" || d.payload) return "codex";
     if (d.type || d.message) return "claude";
   } catch { /* dòng hỏng thì để caller quyết */ }
@@ -31,6 +36,12 @@ function textOfClaude(entry) {
   return parts.length ? parts.join("\n\n") : null;
 }
 
+/** Lượt trả lời của model; các bước GENERIC là kết quả tool, không phải lời model. */
+function textOfAnti(entry) {
+  if (entry.type !== "PLANNER_RESPONSE") return null;
+  return typeof entry.content === "string" && entry.content.trim() ? entry.content : null;
+}
+
 function textOfCodex(payload) {
   const c = payload?.content;
   if (!Array.isArray(c)) return null;
@@ -39,9 +50,12 @@ function textOfCodex(payload) {
 }
 
 /**
+ * `workspace` chỉ dùng cho Anti: tham số tool của Anti là đường dẫn tuyệt đối, còn
+ * bộ nhặt đường dẫn chỉ khớp dạng tương đối, nên phải cắt tiền tố workspace trước.
+ *
  * @returns {{lastDid: string|null, files: string[], task: string|null, lines: number, format: string}}
  */
-export function deriveFromTranscript(path) {
+export function deriveFromTranscript(path, { workspace = null } = {}) {
   const empty = { lastDid: null, files: [], task: null, lines: 0, format: "unknown" };
   if (!path || !existsSync(path)) return empty;
 
@@ -59,7 +73,16 @@ export function deriveFromTranscript(path) {
     let d;
     try { d = JSON.parse(line); } catch { continue; }
 
-    if (format === "codex") {
+    if (format === "anti") {
+      push(texts, textOfAnti(d));
+      // Tham số tool của Anti là map phẳng; giá trị có thể là chuỗi JSON đã bọc nháy.
+      for (const call of Array.isArray(d.tool_calls) ? d.tool_calls : []) {
+        if (!call?.args || typeof call.args !== "object") continue;
+        let args = Object.values(call.args).join(" ");
+        if (workspace) args = args.split(`${workspace.replace(/\/+$/, "")}/`).join("");
+        collect(args, fileHits, taskHits);
+      }
+    } else if (format === "codex") {
       const p = d.payload;
       if (!p || typeof p !== "object") continue;
       if (p.type === "message" && p.role === "assistant") push(texts, textOfCodex(p));
