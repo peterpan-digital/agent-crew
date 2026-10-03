@@ -8,12 +8,15 @@
  * Mục đích là cắt vòng "agent mới phải scout lại docs để hiểu hiện trạng" —
  * scout tốn cỡ 15k token, đọc mấy file này tốn vài trăm.
  *
+ * Với `--agent claude` còn in bảng "crew còn dở" (hold, job kẹt, run chưa nghiệm thu).
+ *
  * Luôn thoát 0. Không có gì để in thì im lặng.
  *
  * Run: agent-state-read.mjs --agent claude   (payload JSON qua stdin)
  */
 import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
+import { crewDigest } from "./lib/crew-digest.mjs";
 import { AGENTS, formatAge, readStates, stateDir, statePath, STALE_HOURS } from "./lib/state-file.mjs";
 
 function readPayload() {
@@ -51,6 +54,17 @@ try {
       out.push(s.body.replace(/^---[\s\S]*?^---\n/m, "").trim(), "");
     }
     process.stdout.write(out.join("\n"));
+  }
+
+  // Bảng crew còn dở, chỉ cho Claude đang làm dispatcher. Codex/Anti không đọc nó:
+  // họ không điều phối. Dưới vai worker thì không in: worker không quyết hold, và
+  // một worker thấy câu hỏi của owner là thêm một đường cho text chảy qua nó.
+  // try riêng: lỗi ở đây không được làm mất khối trạng thái đã in ở trên.
+  if (agent === "claude" && !process.env.MWG_CREW_ROLE) {
+    try {
+      const lines = crewDigest(workspace);
+      if (lines.length) process.stdout.write(`${states.length ? "\n\n" : ""}${lines.join("\n")}\n`);
+    } catch { /* im lặng */ }
   }
 } catch {
   // Im lặng. Không nạp được trạng thái thì phiên vẫn phải chạy bình thường.
