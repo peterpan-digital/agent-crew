@@ -14,6 +14,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
+import { holdsFingerprint, supersedeSeq } from "./lib/holds.mjs";
 
 const LOCK_STALE_MS = 60_000;
 const LOCK_WAIT_MS = 10_000;
@@ -356,6 +357,7 @@ function resolveRouting(job) {
  */
 const SEALED_JOB_FIELDS = new Set([
   "seq", "worker", "role", "transport", "evidence", "status", "filesMayModify",
+  "holdsFingerprint", "holdsTamper",
 ]);
 
 /**
@@ -587,13 +589,51 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs }) {
         "  → wait for one to finish; if one of those is a corpse, run crew-reconcile first",
       );
     }
+    // Lần chạy mới của seq này làm các hold của lần chạy cũ hết tác dụng. Đây là
+    // một lần ghi `holds` HỢP LỆ khi job khác đang chạy, nên vân tay của những job
+    // đó phải được đóng dấu lại -- nhưng chỉ job nào còn khớp vân tay trước lần ghi:
+    // job đã lệch từ trước (worker sửa holds) giữ nguyên chỗ lệch để adapter bắt.
+    const before = holdsFingerprint(m.holds);
+    const changed = supersedeSeq(m, seq, startedAt);
+    const after = holdsFingerprint(m.holds);
+    if (changed) {
+      for (const j of m.jobs) {
+        if (j.seq !== seq && j.status === "running" && j.holdsFingerprint === before) j.holdsFingerprint = after;
+      }
+    }
     job.status = "running";
     job.startedAt = startedAt;
     job.timeoutMs = timeoutMs;
+    // Vân tay `holds` lúc claim. Adapter so lại ở mọi đường thoát (xem holdsTamperPatch).
+    job.holdsFingerprint = after;
     claimed = job;
     return m;
   });
   return claimed;
+}
+
+/**
+ * Mảnh patch cho `updateJob` ở mọi đường thoát của adapter: `holdsTamper` nếu
+ * `holds` khác với lúc job này claim, còn không thì {} -- không ghi `undefined`,
+ * vì Object.assign sẽ xoá một phát hiện đã ghi ở lượt trước (cùng lý do với
+ * `credentialPatch`).
+ *
+ * Hold chỉ đổi được khi run không còn job chạy (crew-hold từ chối, collect hoãn
+ * tạo), nên với một job đang chạy mọi thay đổi `holds` không do claim hợp lệ đều
+ * là của worker. Đọc cả `holds` lẫn vân tay từ MỘT lần đọc manifest để hai vế
+ * cùng một thời điểm. Không đọc được manifest thì trả {}: lúc đó updateJob ngay
+ * sau cũng sẽ lỗi và adapter báo exit 2.
+ */
+export function holdsTamperPatch(manifestPath, seq) {
+  try {
+    const m = readManifest(manifestPath);
+    const job = m.jobs.find((j) => j.seq === seq);
+    if (!job?.holdsFingerprint) return {};
+    if (holdsFingerprint(m.holds) === job.holdsFingerprint) return {};
+    return { holdsTamper: { at: new Date().toISOString(), holdIdsAtExit: (m.holds ?? []).map((h) => h.id) } };
+  } catch {
+    return {};
+  }
 }
 
 /**

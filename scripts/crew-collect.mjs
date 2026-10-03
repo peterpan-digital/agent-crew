@@ -20,6 +20,7 @@ import { readManifest, updateJob, updateManifest, appendNote } from "./crew-mani
 import { readWorkerStatus, CREDENTIAL_STORE_DIR } from "./crew-guards.mjs";
 import { reconcileRun, resolveEvidence } from "./crew-reconcile.mjs";
 import { collectWriteScope, headMovement } from "./crew-scope.mjs";
+import { ensureCostGateHold, extractCostGateApi, holdFor, holdVerdict, liveJobs } from "./lib/holds.mjs";
 
 /** Report language matches the rest of the gate's output, which is Vietnamese. */
 const VI_CHANGE = { modified: "bị sửa", deleted: "bị XOÁ", created: "bị tạo mới", unreadable: "không đọc được nữa" };
@@ -65,8 +66,12 @@ const IN_FLIGHT = new Set(["pending", "running"]);
 const PASS = new Set(["done", "done_with_concerns", "done_verified_manually"]);
 /** Verdicts a human has to resolve; these block, but they are not failures. */
 const NEEDS_HUMAN = new Set(["blocked", "needs_context"]);
-/** Verdicts that stop the run from being reported. */
-const BLOCKING = new Set(["FAIL", "STALE", "NO_STATUS", "BLOCKED", "NEEDS_HUMAN", "RUNNING"]);
+/**
+ * Verdicts that stop the run from being reported. DEFERRED blocks on purpose: a
+ * hold put off for later that opened the gate would be a way around COST_GATE.
+ * WAIVED and COVERED do not -- each needs an owner's recorded sentence to exist.
+ */
+const BLOCKING = new Set(["FAIL", "STALE", "NO_STATUS", "BLOCKED", "NEEDS_HUMAN", "RUNNING", "DEFERRED"]);
 
 /**
  * `evidence_path` must be unique per job, compared after resolution. Comparing
@@ -198,24 +203,20 @@ function judgeOne(job, workspace, now, manifestVersion) {
   return row;
 }
 
-/** Why a BLOCKED job stopped, when the reason is a paid API waiting on the user. */
+/**
+ * Why a BLOCKED job stopped, when the reason is a paid API waiting on the user.
+ *
+ * Reads the evidence and the recorded `failure`, and nothing else. `notes` is left
+ * out on purpose: it holds the dispatcher's own prediction ("this branch may hit
+ * COST_GATE"), and a guess turned into a hold would ask the owner to approve a
+ * spend nobody has asked for. The name is cut down to a few characters of text by
+ * `extractCostGateApi`, which is the only way evidence text reaches stdout here.
+ */
 function costGateReason(job, workspace) {
   const evidenceAbs = resolveEvidence(job, workspace);
   // The evidence text counts too: a worker can stop at a cost gate while its
   // runtime exits cleanly, in which case the manifest carries no failure at all.
-  const text = [
-    job.failure ?? "", ...(job.notes ?? []),
-    evidenceAbs ? readEvidence(evidenceAbs).text : "",
-  ].join("\n");
-  const hit = /COST_GATE\s*[—:-]?\s*([^\n]*)/.exec(text);
-  if (!hit) return null;
-  // This is the one place evidence text is allowed to reach stdout, so it is
-  // the one place an evidence file could try to write instructions into the
-  // reader's context. What is needed here is only which API is waiting, so the
-  // value is cut to a name: word characters, spaces and a few separators, 40
-  // characters at most. Anything else is dropped rather than quoted.
-  const named = hit[1].replace(/[^\w .\/-]+/gu, " ").trim().replace(/\s+/g, " ").slice(0, 40).trim();
-  return named || "không nêu tên API";
+  return extractCostGateApi([job.failure ?? "", evidenceAbs ? readEvidence(evidenceAbs).text : ""].join("\n"));
 }
 
 export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, now = Date.now(), notOurs = [], ackRuntime = [], reason = null } = {}) {
@@ -225,7 +226,7 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   const reconciled = reconcileRun(abs, { dryRun });
   if (notOurs.length && !dryRun) recordDismissals(abs, notOurs, reason);
   if (ackRuntime.length && !dryRun) recordRuntimeAcks(abs, ackRuntime, reason);
-  const manifest = readManifest(abs);
+  let manifest = readManifest(abs);
   const ws = workspace ?? manifest.workspace;
 
   const rows = manifest.jobs.map((job) => judgeOne(job, ws, now, manifest.version));
@@ -240,6 +241,34 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
     .filter((j) => rows.find((r) => r.seq === j.seq)?.verdict === "BLOCKED")
     .map((j) => ({ seq: j.seq, api: costGateReason(j, ws) }))
     .filter((g) => g.api);
+
+  // Holds. Created only when nothing is running and this is not a dry run: while
+  // a worker is alive `holds` must not change at all (that is what the adapters'
+  // fingerprint relies on), and a dry run writes nothing by definition.
+  const jobOf = (seq) => manifest.jobs.find((j) => j.seq === seq);
+  const missing = costGates.filter((g) => !holdFor(manifest, jobOf(g.seq), g.api));
+  const holdsDeferred = missing.length > 0 && !dryRun && liveJobs(manifest).length > 0;
+  if (missing.length && !dryRun && !holdsDeferred) {
+    const at = new Date(now);
+    updateManifest(abs, (m) => {
+      for (const g of missing) ensureCostGateHold(m, m.jobs.find((j) => j.seq === g.seq), g.api, at);
+      return m;
+    });
+    manifest = readManifest(abs);
+  }
+  // Verdicts of the jobs as judged, taken before any row is rewritten: a cover job
+  // counts only if it passed on its own, never because another hold covered it.
+  const judged = new Map(rows.map((r) => [r.seq, r.verdict]));
+  for (const g of costGates) {
+    const hold = holdFor(manifest, jobOf(g.seq), g.api);
+    g.hold = hold ? { id: hold.id, status: hold.status } : null;
+    if (!hold) continue;
+    const row = rows.find((r) => r.seq === g.seq);
+    const v = holdVerdict(manifest, hold, (seq) => judged.get(seq));
+    row.verdict = v.verdict;
+    row.detail = v.detail;
+    row.holdId = hold.id;
+  }
 
   const blocking = rows.some((r) => BLOCKING.has(r.verdict));
   // A runtime that recorded failure over evidence that passed used to be a WARN
@@ -265,8 +294,14 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   const credentialTamper = manifest.jobs
     .filter((j) => Array.isArray(j.credentialTamper) && j.credentialTamper.length > 0)
     .map((j) => ({ seq: j.seq, worker: j.worker, changes: j.credentialTamper }));
+  // Same shape of finding for the hold queue: the adapter fingerprints `holds` at
+  // claim and on every exit, and a difference means a worker rewrote an answer
+  // that belongs to the owner. Nothing here can say which worker, so none is named.
+  const holdsTamper = manifest.jobs
+    .filter((j) => j.holdsTamper)
+    .map((j) => ({ seq: j.seq, worker: j.worker, at: j.holdsTamper.at ?? null }));
   const violation = scope.outOfScope.length > 0 || scope.protectedHits.length > 0
-    || dupes.length > 0 || credentialTamper.length > 0;
+    || dupes.length > 0 || credentialTamper.length > 0 || holdsTamper.length > 0;
   // 3 is not "worse than 2" -- it is both. Folding the two into one code let a
   // reader who fixed the scope problem believe the run was clean while jobs were
   // still unresolved underneath.
@@ -274,7 +309,10 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   const exitCode = violation && stopped ? 3 : violation ? 2 : stopped ? 1 : 0;
   const unchecked = rows.length > 0 && scope.intervals.length === 0;
 
-  return { runId: manifest.runId, task: manifest.task, dryRun, reconciled, rows, dupes, scope, costGates, unchecked, head, unread, credentialTamper, exitCode };
+  return {
+    runId: manifest.runId, task: manifest.task, dryRun, reconciled, rows, dupes, scope, costGates, unchecked, head, unread,
+    credentialTamper, holdsTamper, holdsDeferred, holds: manifest.holds ?? [], exitCode,
+  };
 }
 
 /**
@@ -422,6 +460,12 @@ function report(r) {
     console.log('    GOOGLE_WORKSPACE_CLI_CONFIG_DIR="$HOME/.config/gws" command gws auth status');
     console.log("  Worker tự đặt GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND là nguyên nhân đã xảy ra thật — xem worker-brief.md.");
   }
+  if (r.holdsTamper?.length) {
+    console.log("\nHOLDS BỊ SỬA — hàng chờ quyết định đổi trong lúc job chạy, mà lúc đó chỉ có worker mới ghi được:");
+    for (const h of r.holdsTamper) console.log(`  job ${h.seq} (${h.worker}) thấy holds khác lúc claim${h.at ? `, lúc ${h.at}` : ""}`);
+    console.log("  Không quy được cho một worker cụ thể nếu nhiều job chạy cùng lúc. Câu trả lời trong holds KHÔNG còn đáng tin:");
+    console.log("  đọc lại từng hold, và hỏi lại owner những câu đã có `answer` mà owner không nhớ đã gõ.");
+  }
   if (r.scope.protectedHits.length) {
     console.log("\nGHI VÀO FILE ĐƯỢC BẢO VỆ — không worker nào được phép:");
     for (const h of r.scope.protectedHits) console.log(`  ${h.path} — ${why(h)}`);
@@ -470,10 +514,26 @@ function report(r) {
   }
   if (r.unchecked) console.log("  CHƯA KIỂM ĐƯỢC: không job nào có startedAt, nên không quy được file nào cho run này.");
 
-  if (r.costGates.length) {
+  const asking = r.costGates.filter((g) => !g.hold || g.hold.status === "open");
+  if (asking.length) {
     console.log("\nCỔNG CHI PHÍ — không phải lỗi, đang chờ user quyết:");
-    for (const g of r.costGates) {
-      console.log(`  job ${g.seq} dừng ở ${g.api}. Hỏi user: "Job ${g.seq} cần gọi ${g.api} (tốn tiền). Chạy tiếp không?"`);
+    for (const g of asking) {
+      const api = g.api === "unknown" ? "một API tốn tiền (evidence không nêu tên)" : g.api;
+      console.log(`  job ${g.seq} dừng ở ${api}${g.hold ? ` [${g.hold.id}]` : ""}. Hỏi user: "Job ${g.seq} cần gọi ${api} (tốn tiền). Chạy tiếp không?"`);
+    }
+    if (asking.some((g) => g.hold)) {
+      console.log("  Ghi đúng câu user gõ, không diễn đạt lại:");
+      console.log('    crew-hold.mjs <manifest> answer <id> --words "<câu user gõ>" --outcome drop|resume');
+      console.log("  resume xong thì nối job làm tiếp: crew-hold.mjs <manifest> cover <id> --by <seq>");
+    }
+    if (r.holdsDeferred) console.log("  Hold chưa được tạo cho job nào chưa có: run còn job đang chạy — sẽ tạo khi run hết job chạy.");
+  }
+  const waiting = (r.holds ?? []).filter((h) => (h.status === "open" && h.kind === "decision") || h.status === "deferred");
+  if (waiting.length) {
+    console.log("\nQUYẾT ĐỊNH ĐANG CHỜ — việc cần owner chốt, không phải lỗi:");
+    for (const h of waiting) {
+      const opts = h.options?.length ? ` [${h.options.join(" | ")}]` : "";
+      console.log(`  ${h.id} (job ${h.seq}, ${h.kind}${h.status === "deferred" ? `, hoãn tới ${h.until}` : ""}): ${h.question}${opts}`);
     }
   }
 
@@ -488,19 +548,38 @@ function report(r) {
   const pass = r.rows.filter((x) => x.verdict === "PASS").length;
   const warn = r.rows.filter((x) => x.flags.includes("WARN")).length;
   const cancelled = r.rows.filter((x) => x.verdict === "CANCELLED").length;
+  const waived = r.rows.filter((x) => x.verdict === "WAIVED").length;
+  const covered = r.rows.filter((x) => x.verdict === "COVERED").length;
   const counted = r.rows.length - cancelled;
-  console.log(`\n${pass}/${counted} job đạt${cancelled ? `, ${cancelled} job bỏ có chủ ý` : ""}${warn ? `, ${warn} job cần đọc mắt (WARN)` : ""} — exit ${r.exitCode}`);
+  console.log(`\n${pass}/${counted} job đạt${cancelled ? `, ${cancelled} job bỏ có chủ ý` : ""}${waived ? `, ${waived} job owner bỏ (WAIVED)` : ""}${covered ? `, ${covered} job được lượt resume làm tiếp (COVERED)` : ""}${warn ? `, ${warn} job cần đọc mắt (WARN)` : ""} — exit ${r.exitCode}`);
   if (r.exitCode === 1) console.log("Chưa được viết report tổng: còn job chưa xong, đang chờ quyết định, hoặc runtime lệch evidence chưa ai đọc.");
-  if (r.exitCode === 2) console.log("Chưa được viết report tổng: có vi phạm phạm vi ghi hoặc trùng evidence.");
+  if (r.exitCode === 2) console.log("Chưa được viết report tổng: có vi phạm phạm vi ghi, trùng evidence, kho credential bị đổi hoặc holds bị sửa.");
   if (r.exitCode === 3) {
     console.log("Chưa được viết report tổng: vướng CẢ HAI —");
     console.log("  (1) còn job chưa xong hoặc đang chờ quyết định;");
-    console.log("  (2) có vi phạm phạm vi ghi hoặc trùng evidence.");
+    console.log("  (2) có vi phạm phạm vi ghi, trùng evidence, kho credential bị đổi hoặc holds bị sửa.");
     console.log("  Sửa xong một bên vẫn ra exit khác 0; xử cả hai rồi chạy lại.");
   }
 }
 
 /** Flags with a value, so a manifest path is never read out of one. */
+/**
+ * The hold queue as report lines: one per live hold, with the owner's words kept
+ * verbatim for the answered ones. Empty when the run never had a hold, so a
+ * report for an ordinary run is unchanged.
+ */
+function renderHoldLines(holds) {
+  const live = (holds ?? []).filter((h) => h.status !== "superseded");
+  if (!live.length) return "";
+  const line = (h) => {
+    const state = h.status === "answered"
+      ? `đã trả lời ${h.answer?.outcome}${h.coveredBy != null ? `, job ${h.coveredBy} làm tiếp` : ""}: "${h.answer?.words ?? ""}"`
+      : h.status === "deferred" ? `hoãn tới ${h.until}` : "đang chờ";
+    return `- ${h.id} (job ${h.seq}, ${h.kind}): ${h.question} — ${state}`;
+  };
+  return `\n<!-- Khối dưới do crew-collect.mjs sinh từ manifest.holds. -->\n${live.map(line).join("\n")}\n<!-- Hết khối sinh tự động. -->\n`;
+}
+
 /**
  * Write the report the run is allowed to have, with the facts already verified.
  *
@@ -575,6 +654,7 @@ export function writeRunReport(r, manifest, { path, workspace, now = new Date() 
     ? `${rt.atDispatch.mode} lúc dispatch → ${rt.atSettle?.mode ?? "không đo được"} lúc settle`
     : "không đo (không có job Codex app)";
 
+  const holdLines = renderHoldLines(manifest.holds);
   const body = `# Nghiệm thu run ${r.runId} — task ${r.task}
 
 Ngày ${now.toISOString().slice(0, 10)}. Cổng \`crew-collect\` trả exit 0.
@@ -606,7 +686,7 @@ ${jobs.join("\n")}
 ## Việc tiếp
 
 ## Câu hỏi treo
-`;
+${holdLines}`;
   mkdirSync(dirname(abs), { recursive: true });
   // `wx` = create, fail if it exists. The existsSync check above is a good
   // error message, not the guarantee: two collects racing on the same name both
@@ -621,6 +701,25 @@ ${jobs.join("\n")}
     throw err;
   }
   return { path: relative(workspace, abs), jobs: manifest.jobs.length, totalSec };
+}
+
+/**
+ * The "this run was accepted at" mark: `lastCollect` on every real collect, and
+ * `reports[]` when a report was written. Optional fields that do not move
+ * MANIFEST_VERSION -- a reader that has never heard of them skips them.
+ *
+ * Not written on `--dry-run`, which promises to leave the manifest alone. Without
+ * these a run that was collected and reported looked identical, on disk, to one
+ * nobody had looked at, which is why 22 of 97 runs could not be told from dead.
+ */
+function recordCollectMark(manifestPath, { dryRun, exitCode, report = null }) {
+  if (dryRun) return;
+  const at = new Date().toISOString();
+  updateManifest(manifestPath, (m) => {
+    m.lastCollect = { at, exitCode };
+    if (report) m.reports = [...(m.reports ?? []), { path: report, at }];
+    return m;
+  });
 }
 
 function parseArgs(argv) {
@@ -682,9 +781,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       // After report(), so the table is on screen either way, and inside the
       // same try so a refusal exits 2 rather than pretending the run is clean.
       const m = readManifest(manifestPath);
-      const out = writeRunReport(r, m, { path: opts.values.get("--report"), workspace: m.workspace });
+      let out;
+      try {
+        out = writeRunReport(r, m, { path: opts.values.get("--report"), workspace: m.workspace });
+      } catch (err) {
+        // The mark is written AFTER the report step, and carries what this
+        // process really exits with: a refused report exits 2 whatever the gate said.
+        recordCollectMark(manifestPath, { dryRun, exitCode: 2 });
+        throw err;
+      }
+      recordCollectMark(manifestPath, { dryRun, exitCode: r.exitCode, report: out.path });
       console.log(`\nđã tạo khung report: ${out.path}`);
       console.log("  khối số liệu đã điền sẵn; phần văn còn trống, đọc evidence rồi viết vào");
+    } else {
+      recordCollectMark(manifestPath, { dryRun, exitCode: r.exitCode });
     }
     process.exit(r.exitCode);
   } catch (err) {

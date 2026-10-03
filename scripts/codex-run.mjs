@@ -32,7 +32,7 @@ import { resolveCompanion } from "./codex-companion-path.mjs";
 // Static, unlike the `await import` calls further down: a signal handler runs
 // with no chance to await, so the one write it needs has to be resolved before
 // the signal ever arrives.
-import { updateJob as updateJobSync } from "./crew-manifest.mjs";
+import { updateJob as updateJobSync, holdsTamperPatch } from "./crew-manifest.mjs";
 import {
   DEFAULT_TIMEOUT,
   GuardError,
@@ -1428,6 +1428,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     return changes.length ? { credentialTamper: changes.map((c) => ({ ...c, dir })) } : {};
   };
 
+  // Whether `holds` moved since this job claimed its slot, as a patch fragment.
+  // Sync like the credential check, so the signal handler can use it too. Empty
+  // for a job this process never claimed: that one carries the fingerprint of an
+  // earlier attempt, and holds legitimately changed in between.
+  const holdsPatch = () => (claimed && opts.manifest && opts.job
+    ? holdsTamperPatch(opts.manifest, Number(opts.job))
+    : {});
+
   // The adapter exists so that a death is recorded rather than read as
   // `pending` forever -- and until now its own death was the one death nobody
   // recorded. A SIGTERM (session closed, supervisor stopping the tree) does not
@@ -1459,6 +1467,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           // A job killed mid-flight is the most suspect one there is; skipping
           // the check here would leave exactly that group unexamined.
           ...credentialPatch(),
+          ...holdsPatch(),
         });
       } catch { /* nothing left to do about it from inside a signal */ }
     }
@@ -1530,6 +1539,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           ...sandboxPatch(),
           ...threadPatch(),
           ...credentialPatch(),
+          ...holdsPatch(),
         });
       } catch (manifestErr) {
         console.error(`codex-run: could not record the failure in the manifest: ${manifestErr.message}`);
@@ -1609,6 +1619,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         settleRetries: result.settleRetries,
         settleRaceWhy: result.settleRaceWhy,
         ...credentialPatch(),
+        ...holdsPatch(),
         notes: result.runtimeVerdict
           ? [...prior, `runtime báo fail (${result.runtimeVerdict}) nhưng evidence tự phán ${result.reportedStatus} — cần người đọc`]
           : prior,

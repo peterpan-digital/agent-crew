@@ -490,7 +490,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // from one that never started -- both would read as "pending" forever.
     if (opts.manifest && opts.job) {
       try {
-        const { updateJob, recordUnclaimedFailure } = await import("./crew-manifest.mjs");
+        const { updateJob, recordUnclaimedFailure, holdsTamperPatch } = await import("./crew-manifest.mjs");
         // A job this process claimed is its own to write. One it never claimed
         // may belong to another invocation that is still running, and that one
         // must not be overwritten -- see recordUnclaimedFailure.
@@ -501,6 +501,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           endedAt: new Date().toISOString(),
           failure: err.message,
           ...credentialPatch(),
+          // Only for a job this process claimed: an unclaimed one carries the
+          // fingerprint of some earlier attempt, and holds legitimately moved since.
+          ...(claimed ? holdsTamperPatch(opts.manifest, Number(opts.job)) : {}),
         });
       } catch (manifestErr) {
         console.error(`anti-run: could not record the failure in the manifest: ${manifestErr.message}`);
@@ -515,7 +518,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // a bookkeeping problem, never as a failed job.
   if (opts.manifest && opts.job) {
     try {
-      const { readManifest, updateJob } = await import("./crew-manifest.mjs");
+      const { readManifest, updateJob, holdsTamperPatch } = await import("./crew-manifest.mjs");
       const priorJob = readManifest(opts.manifest).jobs.find((j) => j.seq === Number(opts.job)) ?? {};
       const prior = [
         ...(priorJob.notes ?? []),
@@ -556,6 +559,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         usage: result.usage ?? null,
         evidenceBytes: result.evidenceBytes,
         ...credentialPatch(),
+        // Compared against the fingerprint taken at claim. A worker has no
+        // business touching `holds`, and this is the exit it would be caught on.
+        ...holdsTamperPatch(opts.manifest, Number(opts.job)),
       });
     } catch (manifestErr) {
       console.error(
