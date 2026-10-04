@@ -14,7 +14,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createRun, addJob, updateJob, readManifest, claimRunSlot, holdsTamperPatch, MANIFEST_VERSION } from "../scripts/crew-manifest.mjs";
 import { collectRun } from "../scripts/crew-collect.mjs";
-import { extractCostGateApi, holdsFingerprint } from "../scripts/lib/holds.mjs";
+import { costGateKind, extractCostGateApi, holdsFingerprint, quotaApiName } from "../scripts/lib/holds.mjs";
 import { FIXTURE_BIN, MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
 
 const t = makeChecker("holds");
@@ -225,6 +225,34 @@ t.check("API: cắt ở 40 ký tự", extractCostGateApi(`COST_GATE — ${"a".re
   t.check("...hold cũ vẫn superseded", hs[0].status, "superseded");
   t.check("...exit 1", r.exit, 1);
   t.check("attempt cũ khác attempt mới", oldAttempt === retryAt, false);
+}
+
+// --------------------------------------- hết lượt miễn phí ≠ tốn tiền
+{
+  t.check("kind: quota trên dòng COST_GATE", costGateKind("Concerns/Blockers: COST_GATE — Gemini API (free tier 20 RPD hết)"), "quota");
+  t.check("kind: 429 cũng là quota", costGateKind("COST_GATE: OpenRouter 429"), "quota");
+  t.check("kind: chỉ tên API → cost", costGateKind("Concerns/Blockers: COST_GATE — Ahrefs"), "cost");
+  t.check("kind: chữ quota ở dòng khác không tính", costGateKind("quota còn nhiều\nConcerns/Blockers: COST_GATE — Ahrefs"), "cost");
+  t.check("kind: không có COST_GATE → cost", costGateKind(""), "cost");
+  for (const [raw, want] of [["Gemini API 20 RPD free tier quota exhaus", "Gemini API"], ["Gemini API free tier daily quota exhaust", "Gemini API"],
+    ["OpenRouter 429", "OpenRouter"], ["Ahrefs", "Ahrefs"], ["quota", "quota"]]) t.check(`tên gọn: ${raw}`, quotaApiName(raw), want);
+
+  const { manifestPath } = newRun([
+    { status: "blocked", conversationId: "q", body: gated("Gemini API — free tier quota exhausted") },
+    { status: "blocked", conversationId: "c", body: gated("Ahrefs") },
+  ]);
+  const r = collect(manifestPath);
+  const [q, c] = holdsOf(manifestPath);
+  t.check("hold quota mang reason", `${q?.reason}:${c?.reason}`, "quota:cost");
+  t.check("...câu hỏi trong hold nói hết lượt miễn phí", q?.question?.includes("hết lượt miễn phí, chưa tốn tiền"), true);
+  t.check("...hold Ahrefs vẫn câu chi phí cũ", c?.question, "Job 2 chờ duyệt chi phí Ahrefs");
+  const qLine = r.out.split("\n").find((l) => l.startsWith("  job 1 dừng")) ?? "";
+  t.check("collect: dòng job quota không nói tốn tiền", /tốn tiền/.test(qLine), false);
+  t.check("...và nói hết lượt miễn phí", qLine.includes("hết lượt miễn phí"), true);
+  t.check("...tên API cắt gọn, không lặp lý do", qLine.includes("job 1 dừng vì Gemini API hết lượt miễn phí"), true);
+  t.check("...nhưng khoá hold giữ nguyên chuỗi gốc", q?.api, extractCostGateApi(gated("Gemini API — free tier quota exhausted")));
+  t.check("collect: dòng Ahrefs vẫn hỏi tốn tiền", r.out.includes(`"Job 2 cần gọi Ahrefs (tốn tiền). Chạy tiếp không?"`), true);
+  t.check("...vẫn exit 1 (cổng chi phí còn mở)", r.exit, 1);
 }
 
 // --------------------------------------- worker không đổi được holds

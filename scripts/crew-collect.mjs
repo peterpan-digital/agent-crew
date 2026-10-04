@@ -20,7 +20,7 @@ import { readManifest, updateJob, updateManifest, appendNote } from "./crew-mani
 import { readWorkerStatus, CREDENTIAL_STORE_DIR } from "./crew-guards.mjs";
 import { reconcileRun, resolveEvidence } from "./crew-reconcile.mjs";
 import { collectWriteScope, headMovement } from "./crew-scope.mjs";
-import { ensureCostGateHold, extractCostGateApi, holdFor, holdVerdict, liveJobs } from "./lib/holds.mjs";
+import { costGateKind, ensureCostGateHold, quotaApiName, extractCostGateApi, holdFor, holdVerdict, liveJobs } from "./lib/holds.mjs";
 
 /** Report language matches the rest of the gate's output, which is Vietnamese. */
 const VI_CHANGE = { modified: "bị sửa", deleted: "bị XOÁ", created: "bị tạo mới", unreadable: "không đọc được nữa" };
@@ -211,12 +211,15 @@ function judgeOne(job, workspace, now, manifestVersion) {
  * COST_GATE"), and a guess turned into a hold would ask the owner to approve a
  * spend nobody has asked for. The name is cut down to a few characters of text by
  * `extractCostGateApi`, which is the only way evidence text reaches stdout here.
+ * `kind` says whether the API ran out of free quota or is about to cost money; it
+ * is a fixed label, so it carries no evidence text at all.
  */
 function costGateReason(job, workspace) {
   const evidenceAbs = resolveEvidence(job, workspace);
   // The evidence text counts too: a worker can stop at a cost gate while its
   // runtime exits cleanly, in which case the manifest carries no failure at all.
-  return extractCostGateApi([job.failure ?? "", evidenceAbs ? readEvidence(evidenceAbs).text : ""].join("\n"));
+  const text = [job.failure ?? "", evidenceAbs ? readEvidence(evidenceAbs).text : ""].join("\n");
+  return { api: extractCostGateApi(text), kind: costGateKind(text) };
 }
 
 export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, now = Date.now(), notOurs = [], ackRuntime = [], reason = null } = {}) {
@@ -239,7 +242,7 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   const head = headMovement(manifest, ws);
   const costGates = manifest.jobs
     .filter((j) => rows.find((r) => r.seq === j.seq)?.verdict === "BLOCKED")
-    .map((j) => ({ seq: j.seq, api: costGateReason(j, ws) }))
+    .map((j) => ({ seq: j.seq, ...costGateReason(j, ws) }))
     .filter((g) => g.api);
 
   // Holds. Created only when nothing is running and this is not a dry run: while
@@ -251,7 +254,7 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   if (missing.length && !dryRun && !holdsDeferred) {
     const at = new Date(now);
     updateManifest(abs, (m) => {
-      for (const g of missing) ensureCostGateHold(m, m.jobs.find((j) => j.seq === g.seq), g.api, at);
+      for (const g of missing) ensureCostGateHold(m, m.jobs.find((j) => j.seq === g.seq), g.api, at, g.kind);
       return m;
     });
     manifest = readManifest(abs);
@@ -518,8 +521,15 @@ function report(r) {
   if (asking.length) {
     console.log("\nCỔNG CHI PHÍ — không phải lỗi, đang chờ user quyết:");
     for (const g of asking) {
-      const api = g.api === "unknown" ? "một API tốn tiền (evidence không nêu tên)" : g.api;
-      console.log(`  job ${g.seq} dừng ở ${api}${g.hold ? ` [${g.hold.id}]` : ""}. Hỏi user: "Job ${g.seq} cần gọi ${api} (tốn tiền). Chạy tiếp không?"`);
+      const tag = g.hold ? ` [${g.hold.id}]` : "";
+      if (g.kind === "quota") {
+        const api = g.api === "unknown" ? "một API (evidence không nêu tên)" : quotaApiName(g.api);
+        console.log(`  job ${g.seq} dừng vì ${api} hết lượt miễn phí${tag}. Hỏi user: "Job ${g.seq} dừng vì ${api} hết lượt miễn phí, chưa tốn đồng nào. Chờ hôm sau, làm cách khác không cần API này, hay bỏ việc?"`);
+        console.log("    chờ hôm sau → defer · làm cách khác → resume · bỏ → drop");
+      } else {
+        const api = g.api === "unknown" ? "một API tốn tiền (evidence không nêu tên)" : g.api;
+        console.log(`  job ${g.seq} dừng ở ${api}${tag}. Hỏi user: "Job ${g.seq} cần gọi ${api} (tốn tiền). Chạy tiếp không?"`);
+      }
     }
     if (asking.some((g) => g.hold)) {
       console.log("  Ghi đúng câu user gõ, không diễn đạt lại:");

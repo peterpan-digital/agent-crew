@@ -206,6 +206,22 @@ tên là `unknown`. Nên worker phải ghi đúng dạng, trên dòng `Concerns/
 Concerns/Blockers: COST_GATE — Ahrefs
 ```
 
+### Hết lượt miễn phí khác với tốn tiền (thêm 2026-10-04)
+
+Cùng là `COST_GATE`, nhưng hai ca cần hỏi owner hai câu khác nhau. Trên chính dòng
+`COST_GATE` có chữ `quota`, `429`, `free tier`, `rate limit`, `RPD`/`RPM` hay `hết lượt`
+thì hold mang `reason: "quota"`. Không có thì `reason: "cost"`, và hold cũ không có
+field này cũng đọc như `cost`.
+
+| `reason` | Collect hỏi owner |
+| --- | --- |
+| `cost` | "Job N cần gọi {API} (tốn tiền). Chạy tiếp không?" |
+| `quota` | "Job N dừng vì {API} hết lượt miễn phí, chưa tốn đồng nào. Chờ hôm sau, làm cách khác không cần API này, hay bỏ việc?" Ba lựa chọn ứng với `defer`, `resume`, `drop` |
+
+Chỉ đọc dòng `COST_GATE`, không đọc cả evidence: evidence hay kể chuyện quota ở chỗ khác
+trong khi job vẫn dừng vì chi phí. Câu hỏi cắt tên API về phần đầu ("Gemini API 20 RPD
+free tier…" thành "Gemini API"), còn khoá của hold vẫn là chuỗi gốc.
+
 ### Verdict
 
 | Trạng thái hold | Verdict job bị chặn |

@@ -170,6 +170,18 @@ t.check("DIGEST_EPOCH là ngày P1 lên", DIGEST_EPOCH, "2026-10-03");
   t.check("decision dài: cắt ở 120 ký tự", out.split("\n").some((l) => /h3/.test(l) && l.length < 200 && /x{100,}/.test(l) && !/x{121}/.test(l)), true);
 }
 
+// -------------------------------------------------- cost_gate hết lượt miễn phí
+{
+  const w = ws();
+  addRun(w, "quota", { ...accepted, holds: [
+    hold({ id: "h1", api: "Gemini API", reason: "quota" }),
+    hold({ id: "h2", seq: 2, api: "Ahrefs", reason: "bịa`$(x)" }),
+  ] });
+  const out = digest(w).join("\n");
+  t.check("reason quota → câu hết lượt miễn phí", out.includes("h1: Job 1 dừng vì Gemini API hết lượt miễn phí, chưa tốn tiền"), true);
+  t.check("reason lạ → câu chi phí, không chép reason", out.includes("h2: Job 2 chờ duyệt chi phí Ahrefs") && !out.includes("bịa"), true);
+}
+
 // -------------------------------------------------- manifest hỏng, work-items, bố cục
 {
   const w = ws();

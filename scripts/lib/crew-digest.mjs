@@ -20,7 +20,7 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { sanitizeApi } from "./holds.mjs";
+import { costGateQuestion, sanitizeApi } from "./holds.mjs";
 
 /** Ngày P1 (holds, lastCollect, reports) lên. Run tạo trước ngày này không có dấu nghiệm thu. */
 export const DIGEST_EPOCH = "2026-10-03";
@@ -85,7 +85,8 @@ function cleanQuestion(q) {
 }
 
 function holdText(h) {
-  if (h.kind === "cost_gate") return `Job ${Number(h.seq)} chờ duyệt chi phí ${sanitizeApi(h.api)}`;
+  // `reason` chỉ được so bằng ===, nên giá trị lạ trong manifest rơi về câu "chi phí".
+  if (h.kind === "cost_gate") return costGateQuestion(Number(h.seq), sanitizeApi(h.api), h.reason);
   return cleanQuestion(h.question) || "(câu hỏi trống)";
 }
 

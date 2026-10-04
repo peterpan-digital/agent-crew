@@ -77,6 +77,41 @@ export function extractCostGateApi(text) {
   return "unknown";
 }
 
+/**
+ * Job dừng ở COST_GATE vì API **hết lượt miễn phí** ("quota") hay vì **sắp tốn tiền**
+ * ("cost"). Hai ca hỏi owner hai câu khác nhau: hết lượt thì chưa ai bị tính tiền, và
+ * lựa chọn thật là chờ hôm sau, làm cách khác, hay bỏ.
+ *
+ * Trả về nhãn cố định, không trả chữ nào của evidence. Chỉ đọc chính các dòng có
+ * `COST_GATE —`: evidence hay kể chuyện quota ở chỗ khác trong khi job vẫn dừng vì
+ * chi phí, và đọc cả file thì một câu kể lạc chỗ đổi được câu hỏi.
+ */
+const QUOTA_HINT = /quota|\b429\b|resource_exhausted|free[ -]?tier|rate[ -]?limit|\bRP[DM]\b|hết lượt|hạn ngạch/i;
+
+export function costGateKind(text) {
+  for (const hit of String(text ?? "").matchAll(/COST_GATE[ \t]*[—–:-][ \t]*([^\n]*)/g)) {
+    if (QUOTA_HINT.test(hit[1])) return "quota";
+  }
+  return "cost";
+}
+
+/**
+ * Worker hay ghi luôn lý do sau tên API ("Gemini API 20 RPD free tier quota…"), và
+ * `api` của hold giữ nguyên chuỗi đó vì nó là khoá của `holdFor`. Chỉ câu hiển thị
+ * cắt về tên, để câu hỏi không lặp "quota … hết lượt miễn phí".
+ */
+export function quotaApiName(api) {
+  const name = String(api ?? "").split(/[\s,;(]+(?=\d|quota|free|rate|429|RP[DM]\b|resource|daily|hết|hạn)/i)[0].trim();
+  return name || String(api ?? "");
+}
+
+/** Câu hỏi của hold cổng chi phí. Hold cũ không có `reason` vẫn đọc như "cost". */
+export function costGateQuestion(seq, api, reason) {
+  return reason === "quota"
+    ? `Job ${seq} dừng vì ${quotaApiName(api)} hết lượt miễn phí, chưa tốn tiền`
+    : `Job ${seq} chờ duyệt chi phí ${api}`;
+}
+
 const isLiveHold = (h) => h.status !== "superseded";
 
 export const liveJobs = (m) => m.jobs.filter((j) => j.status === "pending" || j.status === "running");
@@ -130,7 +165,7 @@ export function holdFor(m, job, api) {
  * Evidence của chính lần chạy này đổi sang API khác thì hold cũ không còn khớp
  * câu hỏi nữa nên bị `superseded`.
  */
-export function ensureCostGateHold(m, job, api, now = new Date()) {
+export function ensureCostGateHold(m, job, api, now = new Date(), reason = "cost") {
   m.holds = m.holds ?? [];
   const found = holdFor(m, job, api);
   if (found) return { hold: found, created: false };
@@ -144,7 +179,8 @@ export function ensureCostGateHold(m, job, api, now = new Date()) {
     attempt,
     kind: "cost_gate",
     api,
-    question: `Job ${job.seq} chờ duyệt chi phí ${api}`,
+    reason,
+    question: costGateQuestion(job.seq, api, reason),
     options: [],
     status: "open",
     createdAt: now.toISOString(),
