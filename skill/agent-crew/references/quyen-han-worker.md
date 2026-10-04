@@ -112,7 +112,7 @@ lúc *dùng*, không phải lúc *thấy*. Nên đừng đi tìm cách "thêm to
 duy nhất cần đổi là bậc sandbox.
 
 `--mode app` **không** phải lối thoát: bị sandbox y hệt headless, và trình duyệt còn
-hỏng hẳn. Bằng chứng: `tasks/260818-agent-crew-build/reports/260922-1340-tool-parity-3-be-mat.md`.
+hỏng hẳn. Bằng chứng: phép đo so tool 3 bề mặt ngày 22/09 (report nội bộ, không phát hành cùng module).
 
 ## Job cần trình duyệt / Computer Use — `--sandbox-mode danger-full-access`
 

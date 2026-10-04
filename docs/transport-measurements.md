@@ -46,7 +46,7 @@ Hệ quả cho mọi thứ đọc "worker đã ghi file nào":
   `stream-json` (`step_type: "tool"` + `tool_info.parameters`), nhưng đó là viết lại toàn bộ
   đường parse của `anti-run.mjs` kể cả phép phát hiện silent-fail — chưa làm.
 
-Bằng chứng: `tasks/260825-crew-app-mode-acceptance/data/260825-2150-probe-anti-stream-json.jsonl`.
+Bằng chứng: bản ghi probe stream-json của Anti ngày 25/08 (dữ liệu nội bộ, không phát hành cùng module).
 
 ### `result` của companion — đo 2026-08-25 (bản 1.0.5)
 
