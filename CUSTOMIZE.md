@@ -25,9 +25,9 @@ quyết tiêu tiền — nhưng nó chỉ chặn được thứ nó biết tên.
 | # | Ở đâu | Khai gì |
 | --- | --- | --- |
 | 4 | `SKILL.md` → *Scope* | Tên công cụ quản lý task/sổ đăng ký mà crew **không** được tự sửa |
-| 5 | `SKILL.md` → *Connector có sẵn của worker* | Connector nào bị cấm, đường thay thế là gì |
+| 5 | `references/quyen-han-worker.md` → *Connector có sẵn của worker* | Connector nào bị cấm, đường thay thế là gì |
 | 6 | `SKILL.md` → *Bước 8* | Công cụ đóng task / ghi log định kỳ mà crew **không** tự gọi |
-| 7 | `SKILL.md` → *Input từ job list* | File hợp đồng mô tả hình dạng job list, nếu workspace bạn có |
+| 7 | `references/dispatch-playbook.md` → *Input từ một job list có sẵn* | File hợp đồng mô tả hình dạng job list, nếu workspace bạn có |
 | 8 | `references/collect-contract.md` → bảng *Ranh giới* | Hai dòng cuối: tên công cụ thật |
 
 Mục 5 đáng đọc kỹ dù bạn thấy không liên quan. Worker thường được nhà cung cấp bật sẵn

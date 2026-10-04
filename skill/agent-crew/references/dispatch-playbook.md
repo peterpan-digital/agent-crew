@@ -188,3 +188,118 @@ ghi, bảng cost gate, và dòng `Status:` cuối file — đó là thứ bướ
 3. `## Được ghi` là hàng rào duy nhất còn hiệu lực với Antigravity. Viết cụ thể.
 4. `evidence_path` là file duy nhất job ghi kết quả; hai job không trùng.
 5. Render xong phải **thay hết placeholder**. Brief còn `{...}` là brief chưa viết.
+
+## Input từ một job list có sẵn
+
+Nếu workspace của bạn có công cụ tự sinh danh sách việc (plan tuần, hàng đợi ticket,
+backlog đã chấm ưu tiên), dùng **thẳng** file đó. **Không bắt user list lại việc** —
+cái đã chấm ưu tiên bằng dữ liệu thì crew chỉ việc route.
+
+Crew cần mỗi job mang đủ các field sau. Tên field là quy ước của skill này; nguồn nào
+xuất ra cũng được, miễn ánh xạ đủ:
+
+| Field | Việc |
+| --- | --- |
+| `title` | Một dòng, dùng luôn làm dòng đầu brief |
+| `priority` | Thứ tự chạy khi vượt `MAX_JOBS` |
+| `worker_hint` | Gợi ý worker. **Chỉ là gợi ý** — Bước 3 mới quyết |
+| `why` | Vì sao làm việc này. Thiếu thì worker không tự cân nhắc được |
+| `evidence` | Đường dẫn file bằng chứng job phải ghi |
+| `acceptance` | Điều kiện nghiệm thu, đo được |
+| `goal_link` | Việc này nối về mục tiêu workspace ra sao |
+| `cost_gate` | Có mặt = job chạm API tốn tiền |
+
+`ĐIỀN VÀO`: nếu workspace bạn có file hợp đồng mô tả hình dạng job list, trỏ nó ở đây.
+
+Ba việc phải làm khi nhận job list, không được bỏ:
+
+1. **Kiểm field.** Job thiếu bất kỳ field bắt buộc nào → **từ chối job đó**, không
+   đoán bù. Đặc biệt `acceptance` và `goal_link`: thiếu là dấu hiệu job chưa chín.
+2. **Kiểm dữ liệu nguồn có cũ không.** Job list nào mang cờ báo "số liệu lập plan đã
+   cũ" thì nêu với user trước khi dispatch; user vẫn muốn chạy thì ghi nhãn cảnh báo
+   vào brief từng job, để worker không báo cáo số cũ như số mới.
+3. **Kiểm `cost_gate`.** Job có field này → `BLOCKED / COST_GATE`, xin xác nhận user
+   trước, không tự gọi.
+
+`worker_hint` là **gợi ý**. Bước 3 vẫn là nơi quyết cuối theo `routing-table.md`.
+
+Ngưỡng không đổi: `MAX_JOBS` 6, `MAX_PARALLEL` 3. Job list có `next_run` thì đó là lô
+sau — **không tự chạy nó**.
+
+## Ngưỡng job: code ép từ 26/08
+
+Quá `MAX_JOBS` job thì dừng, báo user, không tự chạy tiếp. Từ 26/08 `addJob` tự từ chối
+job thứ 7, `claimRunSlot` tự từ chối adapter thứ 4, và `readPrompt` tự từ chối brief quá
+2048 B — nên ba ngưỡng này không còn phụ thuộc vào việc người điều phối có nhớ hay không.
+
+## Ba dòng bắt buộc: adapter tự ghép
+
+**Hai adapter tự ghép 3 dòng này vào prompt** (`appendWorkerContract`), nên quên chép tay
+không còn giết job nữa. Vẫn nên viết vào brief để bản lưu đọc lại được đủ nghĩa — adapter
+bỏ qua dòng đã có, không nhân đôi. Ba dòng ghép thêm **không tính** vào trần 2 KB: trần
+đo phần dispatcher tự viết.
+
+Vì sao phải ép bằng code: run `crew-260909-1450` mất **cả 3 job**, kể cả job không dính
+sandbox — `brief-codex-1.md` thiếu đúng dòng "Chỉ được ghi đúng file", worker soạn xong
+báo cáo rồi trả lời trong chat thay vì ghi ra file. `readPrompt` khi đó chỉ đo **kích
+thước** brief.
+
+## Lệnh chạm guard: cấp sẵn nguyên văn
+
+`MWG_CREW_ROLE=worker` chặn `createRun`, nên worker **không chạy được test của
+`mwg-agent-crew/`**. Job nào cần chạy test thì brief thêm mục `## Lệnh được cấp sẵn`
+với lệnh nguyên văn:
+
+```text
+## Lệnh được cấp sẵn
+- env -u MWG_CREW_ROLE node mwg-agent-crew/tests/collect-gate.test.mjs
+```
+
+Vì sao cấp sẵn thay vì để worker tự xử: đo 25/08, cả hai worker Codex đều vướng guard;
+một con tự lách bằng `env -u` rồi khai ra. Để worker tự suy ra rằng nó được phép gỡ guard
+là dạy nó sai thứ — lần sau nó gỡ guard khác mà không hỏi. Cấp sẵn giữ được cả hai: test
+chạy được, và việc gỡ vẫn là quyết định của dispatcher, nằm trong brief để audit.
+
+Chỉ cấp cho **đúng lệnh test**, không cấp chung cho cả job. Chốt chặn đệ quy thật là
+`depth` trong manifest; cấp `env -u` cho một lệnh test không nới `depth`.
+
+## Guard: vì sao nằm đầu file
+
+Guard `MWG_CREW_ROLE` là mục đầu tiên của `SKILL.md`. Lý do guard nằm ở đây thay vì cuối file: skill này được mirror sang cả 4 runtime
+(`.claude`, `.codex`, `.agents`, `.gemini`), nên một worker đọc được chính nó và
+có thể dispatch tiếp thành đệ quy. Manifest cũng chặn tầng hai bằng `depth`:
+`depth > 1` là từ chối.
+
+## `model`/`effort`: vì sao bắt buộc
+
+**`model`/`effort` là bắt buộc.** Trước đây mọi job trong mọi manifest đều `null`, nên
+không có cách nào biết model nào hay fail ngoài đoán. Bảng bậc ở
+`mwg-agent-crew/routing-table.md` mục *Model* — chọn theo lượng phán đoán cần, không
+theo cảm giác nặng nhẹ.
+
+## Trần 2 KB của brief
+
+Trần **2 KB**. Dài hơn gần như luôn có nghĩa là đang kê thuật toán hộ worker — đúng cái
+làm brief phình lên 7.2 KB hôm 24/08. Ba loại brief và ví dụ đối chiếu: mục "Brief: ba loại" ở trên.
+
+## Bước 4: ghi `role` và `transport`
+
+**`role` là bắt buộc** (`owner` | `assist`). Thiếu là `addJob` từ chối. `transport`
+mặc định `headless` cho cả hai role, và được ghi tường minh vào manifest để lần sau đọc
+không phải suy lại.
+
+Muốn `app` thì truyền `transport: "app"` **kèm `note`** nói ca nào trong 3 ca ở Bước 3.
+Ghi đè không `note` bị từ chối, và lời từ chối liệt kê luôn 3 ca — đó đúng là đường quay
+lại chọn theo cảm tính.
+
+## `--mode` khớp `transport`
+
+**`--mode` phải khớp `transport` đã ghi ở Bước 4.** Ghi một transport rồi bắn đường
+khác là để lại một dòng sai trong sổ — và sổ đó là thứ duy nhất sau này đo được.
+
+## Ca `app` thứ ba: resume làm tiếp buổi sau
+
+3. **Cần thread resume làm tiếp buổi sau** — `codex resume <id>` cho Codex,
+   `--resume <id>` (xem Bước 6). Từ 23/09 chạy được ở **cả 4 bề mặt** — cùng một cờ.
+   Nhưng Codex app chỉ resume được **trong cùng phiên Claude**, nên "làm tiếp buổi
+   sau" vẫn phải chọn Anti app.

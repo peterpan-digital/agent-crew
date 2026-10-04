@@ -15,6 +15,7 @@ Cài trên máy mới: đọc [`INSTALL.md`](INSTALL.md).
 | `INSTALL.md` | Dựng module trên workspace mới: yêu cầu, cách đặt, cách kiểm. |
 | `CUSTOMIZE.md` | Chỗ nào trong skill generic phải khai theo workspace bạn, và chỗ nào đừng đụng. |
 | `routing-table.md` | Việc nào giao worker nào. **Sửa file này** khi muốn đổi phân việc. |
+| `docs/transport-measurements.md` | Nhật ký đo transport: các phép đo đã sinh ra luật ở `routing-table.md` và `references/` của skill. Không nạp khi vận hành. |
 | `worker-brief.md` | Format brief gửi worker. Dùng nguyên schema `~/.claude/rules/orchestration-protocol.md`. |
 | `cost-gate.md` | API tốn tiền worker không được tự gọi + ngưỡng cứng chống đốt credit. |
 | `scripts/` | Adapter gọi Antigravity (phase 2). |
@@ -142,7 +143,7 @@ quyết định của dispatcher, nằm trong brief để audit.
 | Script | Việc |
 | --- | --- |
 | `scripts/anti-env.mjs` | Discover runtime của app Antigravity 2.0 (pid, gRPC address, projectId). Không hardcode giá trị nào; app restart thì tự discover lại. |
-| `scripts/anti-run.mjs` | Chạy 1 job Antigravity. `--mode headless` (agy, nhanh, có token usage) hoặc `--mode app` (hiện conversation trong app để xem trực tiếp). |
+| `scripts/anti-run.mjs` | Chạy 1 job Antigravity. `--mode headless` (agy, nhanh, có token usage) hoặc `--mode app` (hiện conversation trong app để xem trực tiếp). Ở app mode: ghi `conversationId` ngay khi có, ghi sự kiện `anti.watch` vào sidecar khi conversation im quá `--quiet-warn`/`--quiet-alert` (mặc định 5m/10m, không tự giết job), và bắt SIGTERM để ghi `failed` có kiểm credential. |
 | `scripts/codex-run.mjs` | Chạy 1 job Codex. `--mode headless` (mặc định) qua `codex exec --json`, watchdog giết job không phát event trong `--idle-timeout` (mặc định 2m) — đúng ca pid chết mà state vẫn đọc là running. `--mode app` mở thread thật trong app Codex qua companion của plugin — hiện trong danh sách thread với tên `Codex Companion Task: {dòng đầu brief}`, và resume được bằng `codex resume <id>`. Sau khi settle nó gọi `result <job-id>` để lấy câu trả lời của worker về, ghi cạnh log và trỏ qua `lastMessage` như headless; kèm `companionExitStatus` và `touchedFiles` mà companion tự khai. Chịu được cuộc đua job store ngay sau dispatch (id vừa cấp bị phủ nhận, hoặc job trả về chưa có `status`) trong cửa sổ 45s tính theo đồng hồ, và ghi số lần hỏi lại vào `settleRetries` thay vì nuốt. Log ghi vào `tasks/{task}/data/crew-logs/{run}/` — thuộc `data/` vì nó mang nội dung file worker đọc; đường dẫn nằm trong manifest. |
 | `scripts/codex-companion-path.mjs` | Tìm `codex-companion.mjs` của plugin Codex (ngoài repo). Env override `MWG_CODEX_COMPANION` là **quyết định cuối** — trỏ sai thì báo lỗi, không dò tiếp sang bản khác. |
 | `scripts/anti-status.mjs` | Đọc tiến độ 1 conversation. Luôn read-only: copy `.db`+`-wal`+`-shm` sang temp rồi query bản copy. |
@@ -150,7 +151,11 @@ quyết định của dispatcher, nằm trong brief để audit.
 | `scripts/crew-manifest.mjs` | State chung của 1 run. Ghi atomic (tmp+rename) dưới lock có owner token nên nhiều job kết thúc cùng lúc không mất update. |
 | `scripts/crew-reconcile.mjs` | Vá manifest từ evidence trên đĩa khi runtime chết hoặc bỏ cuộc trước lúc ghi sổ. Idempotent. Không ghi đè phán quyết đã đậu. Job không có evidence thì hỏi runtime bằng `companionJobId` để phân biệt job còn sống với job mồ côi; hủy ở runtime là tự chọn (`--cancel-orphans`), mặc định chỉ báo. |
 | `scripts/crew-runtime-probe.mjs` | Đọc runtime Codex mà run đang ngồi lên: `shared`/`direct`/`unknown`, và đếm app-server **có quy chủ** (của broker mình vs của ChatGPT.app / VS Code). Không bao giờ throw — một số liệu chẩn đoán không được phép làm chết dispatch. |
-| `scripts/crew-collect.mjs` | Cổng nghiệm thu cuối run: reconcile → phán từng job → kiểm trùng `evidence_path` → kiểm phạm vi ghi → in bảng verdict. Exit 0 mới được viết report tổng. |
+| `scripts/crew-collect.mjs` | Cổng nghiệm thu cuối run: reconcile → phán từng job → kiểm trùng `evidence_path` → kiểm phạm vi ghi → in bảng verdict. Exit 0 mới được viết report tổng. Tự tạo hold cho job `BLOCKED` vì `COST_GATE` khi run hết job chạy, và ghi dấu `lastCollect`/`reports` vào manifest. |
+| `scripts/crew-hold.mjs` | Hàng chờ quyết định của một run: `list`, `add`, `answer`, `defer`, `cover`. Ghi quyết định của owner thành dữ liệu thay vì sửa tay manifest. Từ chối dưới vai worker và khi run còn job chạy. |
+| `scripts/lib/holds.mjs` | Logic hold: tạo hold cổng chi phí, đọc tên API từ dòng `COST_GATE`, trả lời/hoãn/cover, vân tay `holds` mà adapter so ở mọi đường thoát, và verdict `WAIVED`/`COVERED`/`DEFERRED`. |
+| `scripts/lib/crew-digest.mjs` | Bảng "Crew còn dở" (tối đa 15 dòng) cho đầu phiên Claude: hold đang chờ, job kẹt, run chưa nghiệm thu. Đọc thẳng manifest, không chép text evidence. |
+| `scripts/lib/progress-watch.mjs` | Hai hàm thuần đo độ im của job Anti app: vân tay `byStatus` của conversation là tín hiệu chính, mtime file riêng của job chỉ được hoãn báo động. |
 | `scripts/crew-scope.mjs` | Quy file thay đổi trong working tree về từng job: ưu tiên `touchedFiles` runtime tự khai, còn lại theo mtime nằm trong khoảng job đó chạy. Tách khỏi collect vì đây là logic quy trách nhiệm, không phải logic phán quyết. |
 | `scripts/claude-session-export.mjs` | Xuất transcript của 1 session Claude thành markdown gầy để bàn giao sang agent khác. Gộp 3 nguồn (dòng chính, `subagents/`, `tool-results/`), bỏ `attachment`/`thinking`/`image`/tool output replay được, redact theo hình dạng giá trị, trần tuyệt đối 200 KB có assert. Rào chống injection mang nonce mỗi lần chạy. Thiếu module redact thì **abort**, không xuất file; `--out` trỏ vào path git đang theo dõi thì **từ chối**, không có cờ bỏ qua. |
 | `scripts/lib/redact-values.mjs` | Bộ dò bí mật **theo hình dạng giá trị**, vendored trong repo. Không phải bộ dò từ khoá — `secret-keywords.cjs` của hooks là bộ dò chủ đề prompt, nó vừa để lọt key đứng một mình vừa phá 5,9% text block nói về LLM token. |
@@ -287,8 +292,8 @@ thúc bằng `/` và chỉ áp cho **chính job đã khai** — khai `docs` khô
 | Exit | Nghĩa |
 | --- | --- |
 | 0 | được viết report tổng |
-| 1 | còn job chưa xong, đang chờ người quyết, hoặc runtime lệch evidence chưa ai đọc |
-| 2 | vi phạm phạm vi ghi, trùng evidence, hoặc chạm file được bảo vệ |
+| 1 | còn job chưa xong, đang chờ người quyết (hold mở hoặc `DEFERRED`), hoặc runtime lệch evidence chưa ai đọc |
+| 2 | vi phạm phạm vi ghi, trùng evidence, chạm file được bảo vệ, kho credential bị đổi, hoặc holds bị sửa trong lúc job chạy |
 | 3 | **cả 1 và 2** |
 
 3 không phải bậc nặng hơn 2. Trước đó hai loại vấn đề gộp vào một mã, nên người
@@ -377,6 +382,28 @@ Adapter cũng ghi `status: "running"` + `startedAt` **trước khi** spawn. Khô
 bước đó, job đang chạy nằm trong manifest với `startedAt: null` — gate không phân
 biệt được job đang làm với job chưa từng khởi động, và mọi file nó ghi trong lúc
 chạy đều không quy được cho ai.
+
+Job Anti app còn có báo động **sớm hơn** ngưỡng đó, nhưng chỉ báo, không phán: adapter
+đo độ im của chính conversation (vân tay `byStatus`) và ghi sự kiện `anti.watch` vào
+sidecar `data/crew-logs/` khi im quá 5 phút (`warn`) và 10 phút (`alert`). Không dùng mtime
+làm tín hiệu chính, vì manifest, log dispatch và evidence của job khác làm mtime nhảy liên
+tục. Dừng hay không là việc của dispatcher (SIGTERM vào adapter); verdict vẫn do collect
+phán. Đo 04/10 trên app thật: việc thường đổi bước mỗi 5-10 giây, còn một lệnh terminal
+dài làm im đúng bằng độ dài lệnh, nên job có lệnh dài phải nâng `--quiet-*`.
+
+### Hàng chờ quyết định: câu trả lời của owner là dữ liệu
+
+Job dừng ở `COST_GATE` từng để run đỏ mãi: `--abandon` chỉ nhận `STALE`, nên không có
+đường exit 0 nào ngoài viết report tay. Giờ collect tạo một hold cho job đó, và owner trả
+lời qua `crew-hold.mjs`: `drop` → `WAIVED`, `resume` + job cover cùng conversation đã `PASS`
+→ `COVERED`, `defer` → `DEFERRED` (vẫn chặn). `--words` chỉ nhận câu owner gõ trong lượt
+chat đó, nên report trích được nguyên văn ai quyết gì.
+
+Rào chính không phải biến môi trường: `MWG_CREW_ROLE` không tới được worker Anti app (đo
+01/10). Rào chính là dữ liệu: lệnh ghi bị từ chối khi run còn job chạy, và mỗi adapter
+chụp vân tay `holds` lúc claim rồi so lại ở mọi đường thoát; lệch là `holdsTamper` → exit 2.
+Cover ở Anti app yếu hơn vì `conversationId` do dispatcher gõ vào `--resume`: người chấm
+liếc evidence job cover trước khi chốt.
 
 ### `headless` là mặc định; `app` là ngoại lệ có lý do viết ra
 
@@ -480,6 +507,9 @@ nội dung manifest — nên một runner spawn được process và so được
 | `tests/codex-lifecycle.test.mjs` | Vòng đời `codex-run.mjs` qua `codex` giả: grandchild giữ stdout, brief 200KB vào child không đọc stdin, watchdog trước stderr rác, retry đè sidecar cũ, log dir sai quyền, `BLOCKED` phải exit 3, và manifest phải ghi được ca bị giết. |
 | `tests/agent-state.test.mjs` | Hai luật ngược chiều và cả hai phải giữ: hook **không được chặn phiên** (mọi ca hỏng đều exit 0) nhưng cũng **không được ghi khi chưa che được**. Thêm: ba phiên ghi cùng lúc ra ba file không mất cái nào, trần 4 KB, file cũ bị đánh dấu, và đoạn text cuối là câu dẫn cụt thì không được chọn làm tóm tắt. |
 | `tests/session-export.test.mjs` | Redactor trước, exporter sau. Hai ca ngược nhau: credential **không kèm từ tiếng Anh nào** phải chết sạch, và văn xuôi nói về LLM token phải còn nguyên. Rồi: gộp subagent/sidecar, từ chối path dưới `subagents/`, gỡ module redact → exit ≠ 0 và **không** sinh file, trần byte tính trên cả file chứ không riêng phần thân. |
+| `tests/holds.test.mjs` | Hold từ đầu tới cuối: tạo hold cổng chi phí khi run hết job chạy, đọc tên API (kể cả dòng luật brief đứng trước dòng `Concerns`), `answer`/`defer`/`cover`, supersede khi claim lại, từ chối dưới vai worker và khi còn job chạy, và vân tay `holds` lệch qua `codex-run.mjs` thật phải ra exit 2. |
+| `tests/crew-digest.test.mjs` | Bảng đầu phiên: thứ tự hold → job kẹt → run chưa nghiệm thu, trần 15 dòng, run trước mốc không hiện vì "chưa nghiệm thu", câu hỏi bị lọc trước khi vào ngữ cảnh, manifest hỏng không làm chết hook. |
+| `tests/anti-stall.test.mjs` | Báo im của job Anti app với đồng hồ giả: ghi manifest, log dispatch hay evidence job khác không reset được đồng hồ; mtime file riêng của job chỉ hoãn; `conversationId` ghi trước vòng poll; và SIGTERM thật vào một job app giả đang đợi phải ra `failed`. |
 | `tests/fixtures/fake-codex` | `codex` giả, chọn hình dạng lỗi bằng `FAKE_MODE`. `tests/fixtures/bin/codex` là symlink trỏ vào nó — phải đúng tên `codex`, không thì PATH rơi xuống CLI thật và bộ test không đo gì cả. |
 
 5 lỗi lifecycle nặng nhất của phase 1 đều nằm ở chỗ không có script nào chạm tới, và

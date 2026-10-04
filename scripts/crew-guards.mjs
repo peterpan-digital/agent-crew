@@ -153,7 +153,7 @@ export function diffCredentialStore(before, after) {
  * Removes the unsafe vars from an env object that is otherwise already built.
  *
  * Split from workerEnv on purpose: anti-run has never set MWG_CREW_ROLE itself
- * (its caller does, see routing-table.md), and quietly starting to set it here
+ * (its caller does, see the crew skill's SKILL.md, Bước 6), and quietly starting to set it here
  * would be a behaviour change smuggled in under a security fix.
  */
 export function stripUnsafeEnv(env) {
