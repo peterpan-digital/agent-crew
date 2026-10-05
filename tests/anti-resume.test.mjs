@@ -138,6 +138,7 @@ const argvOf = (evidence) => readFileSync(join(ws, evidence), "utf8");
   const bad = jobs.find((j) => j.seq === 2);
 
   t.check("an honoured resume records what it continued", ok.resumedFrom, "conv-keep");
+  t.check("job không --chat thì không mang nhãn chat", "chat" in ok, false);
   t.check("...and is not marked mismatched", Boolean(ok.resumeMismatch), false);
 
   // conversationId alone cannot show this: it reports the session that RAN, not
@@ -154,6 +155,17 @@ const argvOf = (evidence) => readFileSync(join(ws, evidence), "utf8");
     Boolean(bad.runtimeVerdict), true);
   t.check("...with a failure a reader can act on",
     /conv-asked/.test(bad.failure ?? "") && /conv-other/.test(bad.failure ?? ""), true);
+}
+
+{
+  // Nhãn chat của lượt trước không được dính sang lượt dispatch lại không --chat.
+  const runDir = join(ws, RUN_DIR_REL, "c");
+  mkdirSync(runDir, { recursive: true });
+  const { manifestPath } = createRun({ runDir, runId: "crew-c", task: "t", workspace: ws, depth: 0 });
+  const ev = join(RUN_DIR_REL, "c", "c-1.md");
+  addJob(manifestPath, { worker: "antigravity", role: "owner", title: "x", evidence: ev, extra: { chat: true } });
+  run({ evidence: ev, manifest: manifestPath, job: 1 });
+  t.check("dispatch lại không --chat: nhãn chat thành false", readManifest(manifestPath).jobs[0].chat, false);
 }
 
 process.exit(t.finish() ? 0 : 1);

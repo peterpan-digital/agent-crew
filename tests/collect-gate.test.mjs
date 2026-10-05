@@ -12,10 +12,10 @@
  * Run: node mwg-agent-crew/tests/collect-gate.test.mjs
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createRun, addJob, updateJob, readManifest } from "../scripts/crew-manifest.mjs";
-import { collectRun, abandonJob, writeRunReport } from "../scripts/crew-collect.mjs";
+import { collectRun, abandonJob, writeRunReport, hasSection } from "../scripts/crew-collect.mjs";
 import { MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
 
 const CLI = join(MODULE_ROOT, "scripts", "crew-collect.mjs");
@@ -812,6 +812,54 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   t.check("...so the run passes", r.exitCode, 0);
 }
 
+// --- a manifest-shaped file cannot excuse a control-plane write ---------------
+{
+  // Any file named manifest.json under */reports/crew-* counts as another run.
+  // A worker can write one inside its own task folder, so its claim must not be
+  // able to clear a write that no run is allowed to make.
+  const ws = tmpWorkspace("fake-foreign-");
+  execFileSync("git", ["init", "-q"], { cwd: ws });
+  const mine = join("tasks", TASK, "reports", "crew-mine");
+  const { manifestPath } = createRun({ runDir: join(ws, mine), runId: "mine", task: TASK, workspace: ws, depth: 0 });
+  const j = addJob(manifestPath, { worker: "codex", role: "assist", title: "my job", evidence: join(mine, "w1.md") });
+  writeFile(join(ws, mine, "w1.md"), DONE);
+  writeFile(join(ws, "harness", "gate.mjs"), "// sửa cổng\n");
+  writeFile(join(ws, "their-file.md"), "x\n");
+  writeFile(join(ws, "tasks", TASK, "data", "reports", "crew-zz", "manifest.json"), JSON.stringify({
+    runId: "zz", createdAt: new Date().toISOString(),
+    jobs: [{ seq: 1, touchedFiles: ["harness/gate.mjs", "their-file.md"] }],
+  }));
+  updateJob(manifestPath, j.seq, {
+    status: "done", startedAt: new Date(Date.now() - 60_000).toISOString(), endedAt: new Date().toISOString(), exitCode: 0,
+  });
+  const r = collectRun(manifestPath, { workspace: ws });
+  t.check("claim giả không miễn được file control plane", r.scope.outOfScope.some((e) => e.path === "harness/gate.mjs"), true);
+  t.check("...nên gate đỏ", r.exitCode, 2);
+  t.check("...file thường vẫn được claim như trước", r.scope.ownedElsewhere.map((e) => e.path).join(","), "their-file.md");
+}
+
+// --- hasSection: biến thể tiêu đề và cách ghi "không có" ----------------------
+{
+  const T = "Thay đổi từ owner";
+  const cases = [
+    ["### Thay đổi từ owner\nbỏ mục 3", true], ["## Thay đổi từ owner:\nbỏ mục 3", true],
+    ["## 2. Thay đổi từ owner\nbỏ", true], ["## **Thay đổi từ owner** (10:12)\nbỏ", true],
+    ["##Thay đổi từ owner\nbỏ", true], ["## Thay đổi từ owner\nbỏ".normalize("NFD"), true],
+    ["## Thay đổi từ owner\r\nbỏ\r\n", true],
+    ["## Thay đổi từ owner\nKhông có\n## Thay đổi từ owner\nbỏ mục 3", true],
+    ["## Thay đổi từ owner\nStatus: owner đổi cột X", true],
+    ["## Thay đổi từ owner\n### 10:12\nowner bỏ mục 3", true],
+    ["## Thay đổi từ owner\nKhông đổi mục tiêu nhưng thêm bảng giá", true],
+    ["## Thay đổi từ owner\n_Không có_", false], ["## Thay đổi từ owner\n**Không có**", false],
+    ["## Thay đổi từ owner\n—", false], ["## Thay đổi từ owner\nKhông có thay đổi nào.", false],
+    ["## Thay đổi từ owner\nKhông có thay đổi gì.", false], ["## Thay đổi từ owner\nOwner không đổi gì.", false],
+    ["## Thay đổi từ owner\n> Không có", false], ["## Thay đổi từ owner\n- Không có\n## Việc còn mở\nlàm tiếp", false],
+    ["## Thay đổi từ owner\nKhông có.\n\nStatus: DONE\nbỏ", false], ["## Tóm tắt\nThay đổi từ owner: x", false],
+  ];
+  const wrong = cases.filter(([text, want]) => hasSection(text, T) !== want).map(([text]) => JSON.stringify(text));
+  t.check(`hasSection: ${cases.length} biến thể đọc đúng`, wrong.join(" | "), "");
+}
+
 // --- dismissal: the escape hatch that leaves a trace ------------------------
 {
   // The real case this exists for, reproduced: four byte-identical copies of one
@@ -924,18 +972,44 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
 // --- protected means everything under a protected directory -----------------
 {
   const { ws, manifestPath } = newRun({
-    jobs: [{
-      evidence: join(RUN_REL, "w1.md"), body: DONE, status: "done",
-      // Declared as allowed on purpose: a declaration must not be able to buy
-      // write access to a protected directory. Before 25/08 it could.
-      filesMayModify: [".claude/skills/"],
-    }],
+    jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, status: "done" }],
   });
+  // Declared as allowed on purpose: a declaration must not be able to buy
+  // write access to a protected directory. Before 25/08 it could. addJob now
+  // refuses this prefix outright, so it is written the way an older manifest
+  // would carry it -- the collect side must still hold on its own.
+  const raw = JSON.parse(readFileSync(manifestPath, "utf8"));
+  raw.jobs[0].filesMayModify = [".claude/skills/"];
+  writeFileSync(manifestPath, JSON.stringify(raw, null, 2));
   writeFile(join(ws, ".claude", "skills", "seo-crew", "SKILL.md"), "# đổi\n");
   const r = collectRun(manifestPath, { workspace: ws });
   t.check("a declared prefix cannot unprotect a protected directory", r.exitCode, 2);
   t.check("...the write is charged as protected", r.scope.protectedHits.length, 1);
   t.check("...and never as in-scope", r.scope.inScope.some((p) => p.path.includes("SKILL.md")), false);
+}
+
+// --- lời owner qua lời worker: tín hiệu để đọc, không đổi verdict -----------
+{
+  const changed = "work\n\n## Thay đổi từ owner\nOwner bảo bỏ mục 3, làm thêm bảng giá (10:12)\n\n## Ghi ngoài brief\n- docs/x.md\n\nStatus: DONE\nSummary: ok\n";
+  const empty = "work\n\n## Tóm tắt trao đổi\nhỏi đáp\n\n## Thay đổi từ owner\nKhông có\n\n## Ghi ngoài brief\n- Không có.\n\n## Việc còn mở\nKhông có\n\nStatus: DONE\nSummary: ok\n";
+  const { ws, manifestPath } = newRun({
+    jobs: [
+      { evidence: join(RUN_REL, "w1.md"), body: changed, status: "done", patch: { exitCode: 0 } },
+      { evidence: join(RUN_REL, "w2.md"), body: empty, status: "done", patch: { exitCode: 0, chat: true } },
+      { evidence: join(RUN_REL, "w3.md"), body: DONE, status: "done", patch: { exitCode: 0 } },
+    ],
+  });
+  const baseline = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, status: "done", patch: { exitCode: 0 } }] });
+  const r = collectRun(manifestPath, { workspace: ws });
+  t.check("mục có nội dung thật thì bật cờ", `${r.rows[0].briefChanged}:${r.rows[0].outsideBrief}`, "true:true");
+  t.check("mục ghi \"Không có\" thì không bật", `${r.rows[1].briefChanged}:${r.rows[1].outsideBrief}`, "false:false");
+  t.check("job chat hiện cờ CHAT", r.rows[1].flags.includes("CHAT"), true);
+  t.check("cả 3 job vẫn PASS", r.rows.map((x) => x.verdict).join(","), "PASS,PASS,PASS");
+  const cli = runCli(manifestPath, ["--dry-run"]);
+  t.check("collect in BRIEF ĐỔI", /BRIEF ĐỔI/.test(cli.out) && /job 1 \(codex\)/.test(cli.out), true);
+  t.check("collect in GHI NGOÀI BRIEF", /GHI NGOÀI BRIEF/.test(cli.out), true);
+  t.check("không chép lời worker ra stdout", cli.out.includes("bảng giá"), false);
+  t.check("exit code giống run sạch tương đương", cli.exit, runCli(baseline.manifestPath, ["--dry-run"]).exit);
 }
 
 // --- HEAD movement: naming the blind spot instead of covering it ------------

@@ -97,6 +97,45 @@ function readEvidence(path) {
   return { bytes: stat.size, text: stat.size === 0 ? "" : readFileSync(path, "utf8") };
 }
 
+/**
+ * True when evidence carries a `## {title}` section with real content. A chat
+ * evidence always writes all four sections and fills the empty ones with "Không
+ * có", so the heading alone would fire on every chat job and teach the reader to
+ * skip the line.
+ */
+export function hasSection(text, title) {
+  const want = fold(title);
+  const lines = String(text).normalize("NFC").split(/\r?\n/);
+  let found = false;
+  // Level of the matched heading, or 0 outside it. A deeper heading ("### 10:12")
+  // is a sub-part of the section; only one at the same level or higher ends it.
+  let level = 0;
+  for (const line of lines) {
+    const head = /^(#{1,6})\s*(.*)$/.exec(line.trim());
+    if (head) {
+      const depth = head[1].length;
+      // "## 2. Thay đổi từ owner:", "## **Thay đổi từ owner** (10:12)" đều là nó.
+      const isIt = depth >= 2 && depth <= 4 && fold(head[2].replace(/^\d+[.)]\s*/, "")).startsWith(want);
+      if (isIt) level = depth;
+      else if (level && depth <= level) level = 0;
+      continue;
+    }
+    if (STATUS_VERDICT.test(line.trim())) { level = 0; continue; }
+    if (!level) continue;
+    const bare = fold(line).replace(/^(>|[-•])\s*/, "").replace(/[.:;!]+$/, "").trim();
+    if (bare && !EMPTY_SECTION.test(bare)) found = true;
+  }
+  return found;
+}
+
+/** Lower-cased, markdown emphasis and dashes stripped, so wording variants compare equal. */
+function fold(s) {
+  return String(s).normalize("NFC").replace(/[*_`—–]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+/** Only a real verdict line ends a section; "Status: owner đổi cột X" is content. */
+const STATUS_VERDICT = /^Status:\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)\b/;
+const EMPTY_SECTION = /^\(?((owner )?không( có)?( thay đổi| đổi)?( gì| nào)?|không có việc gì|none|n\/a|chưa có|-)\)?$/i;
+
 function judgeOne(job, workspace, now, manifestVersion) {
   const row = { seq: job.seq, worker: job.worker, title: job.title, status: job.status, flags: [], detail: "" };
 
@@ -110,6 +149,7 @@ function judgeOne(job, workspace, now, manifestVersion) {
   if (job.sandboxMode && job.sandboxMode !== "workspace-write" && job.sandboxMode !== "app-managed") {
     row.flags.push("FULL-ACCESS");
   }
+  if (job.chat) row.flags.push("CHAT");
 
   const evidenceAbs = resolveEvidence(job, workspace);
 
@@ -139,6 +179,11 @@ function judgeOne(job, workspace, now, manifestVersion) {
     row.detail = `evidence rỗng: ${job.evidence}`;
     return row;
   }
+  // Tín hiệu để Claude đọc, không phải verdict: lời owner tới đây qua lời worker
+  // kể lại, nên nó không được tự đổi đạt/không đạt của job.
+  row.evidencePath = job.evidence;
+  row.briefChanged = hasSection(evidence.text, "Thay đổi từ owner");
+  row.outsideBrief = hasSection(evidence.text, "Ghi ngoài brief");
 
   // The evidence is the verdict. The manifest is consulted only when the
   // evidence cannot speak -- that ordering is the fix for the two jobs that
@@ -538,6 +583,17 @@ function report(r) {
     }
     if (r.holdsDeferred) console.log("  Hold chưa được tạo cho job nào chưa có: run còn job đang chạy — sẽ tạo khi run hết job chạy.");
   }
+  const changed = r.rows.filter((row) => row.briefChanged);
+  if (changed.length) {
+    console.log("\nBRIEF ĐỔI — theo lời owner, worker kể lại; đọc trước khi nhận, không tự đổi verdict:");
+    for (const row of changed) console.log(`  job ${row.seq} (${row.worker}): mục "## Thay đổi từ owner" trong ${row.evidencePath}`);
+  }
+  const outside = r.rows.filter((row) => row.outsideBrief);
+  if (outside.length) {
+    console.log("\nGHI NGOÀI BRIEF — worker khai đã/cần ghi thứ brief gốc không giao; owner ok trong chat Claude mới nhận:");
+    for (const row of outside) console.log(`  job ${row.seq} (${row.worker}): mục "## Ghi ngoài brief" trong ${row.evidencePath}`);
+  }
+
   const waiting = (r.holds ?? []).filter((h) => (h.status === "open" && h.kind === "decision") || h.status === "deferred");
   if (waiting.length) {
     console.log("\nQUYẾT ĐỊNH ĐANG CHỜ — việc cần owner chốt, không phải lỗi:");

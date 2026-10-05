@@ -6,9 +6,9 @@
  * came out of the 25/08 review of `crew-manifest.mjs`, where each guard turned
  * out to protect the field next to the one that mattered.
  */
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   createRun, addJob, updateJob, updateManifest, readManifest, writeManifest, MAX_DEPTH,
   claimRunSlot, MAX_JOBS, MAX_PARALLEL,
@@ -99,6 +99,56 @@ const threw = (fn) => { try { fn(); return null; } catch (err) { return err.mess
     /all be strings/.test(threw(() => addJob(manifestPath, { ...base, filesMayModify: ["docs", 3] })) ?? ""), true);
   t.check("a proper list is accepted",
     addJob(manifestPath, { ...base, filesMayModify: ["docs/"] }).filesMayModify.length, 1);
+}
+
+// --- filesMayModify không được chạm control plane ---------------------------
+{
+  const { manifestPath } = freshRun();
+  const base = { worker: "codex", role: "assist", transport: "headless", title: "x", evidence: EV };
+  const seq = addJob(manifestPath, { ...base, filesMayModify: ["mwg-content-editor/content-workspaces/x/"] }).seq;
+  for (const bad of [".claude/", ".claude/settings.json", "harness/x", ".", "./", "../x", "/abs", "CLAUDE.md", "mwg-agent-crew/", ".agents/hooks/", ".claude/skills/seo-crew/",
+    // Đĩa macOS không phân biệt hoa thường: `.Claude/` là đúng thư mục `.claude/`.
+    ".Claude/", "claude.md", "Harness/", "mod/CLAUDE.md", ".codex/hooks.json", ".git/",
+    // Manifest của run khác, và mọi thư mục cha có thể chứa nó.
+    "tasks/", "tasks/other/", "tasks/other/reports/crew-1/", "tasks/other/work-items/b/reports/crew-2/manifest.json"]) {
+    const msg = threw(() => updateJob(manifestPath, seq, { filesMayModify: ["tasks/t/", bad] })) ?? "";
+    t.check(`updateJob từ chối ${bad}`, msg.length > 0, true);
+  }
+  t.check("lỗi nói rõ đây là control plane",
+    /control plane — owner sửa tay, không qua crew/.test(threw(() => updateJob(manifestPath, seq, { filesMayModify: [".claude/"] })) ?? ""), true);
+  t.check("...và danh sách cũ còn nguyên", JSON.stringify(readManifest(manifestPath).jobs[0].filesMayModify), '["mwg-content-editor/content-workspaces/x/"]');
+  t.check("addJob cũng từ chối", /control plane/.test(threw(() => addJob(manifestPath, { ...base, filesMayModify: ["harness/"] })) ?? ""), true);
+  t.check("updateJob nhận prefix hợp lệ",
+    updateJob(manifestPath, seq, { filesMayModify: ["mwg-content-editor/content-workspaces/y/", "docs/"] }).filesMayModify.length, 2);
+  t.check("patch không đụng filesMayModify thì không bị kiểm", updateJob(manifestPath, seq, { status: "running" }).status, "running");
+  t.check("thư mục con không chứa manifest vẫn nhận", updateJob(manifestPath, seq, { filesMayModify: ["tasks/other/data/raw/", "tasks/other/reports/crew-1/fake-store/"] }).filesMayModify.length, 2);
+  t.check("tên chỉ trùng tiền tố vẫn nhận", updateJob(manifestPath, seq, { filesMayModify: ["harnessX/", "harness.config.json.bak/"] }).filesMayModify.length, 2);
+  t.check("phần tử rỗng báo đúng lỗi", /phần tử rỗng/.test(threw(() => updateJob(manifestPath, seq, { filesMayModify: ["docs/", ""] })) ?? ""), true);
+}
+{
+  // File chỉ dẫn agent nằm sâu trong prefix khai báo: danh sách tĩnh không thấy, git thấy.
+  const { ws, manifestPath } = freshRun();
+  execFileSync("git", ["init", "-q"], { cwd: ws });
+  writeFileSync(join(ws, "keep.txt"), "x");
+  mkdirSync(join(ws, "mod", "inner"), { recursive: true });
+  writeFileSync(join(ws, "mod", "AGENTS.md"), "# dặn agent\n");
+  writeFileSync(join(ws, "mod", "inner", "a.txt"), "x");
+  execFileSync("git", ["add", "-A"], { cwd: ws });
+  const base = { worker: "codex", role: "assist", transport: "headless", title: "x", evidence: EV };
+  const msg = threw(() => addJob(manifestPath, { ...base, filesMayModify: ["mod/"] })) ?? "";
+  t.check("prefix chứa AGENTS.md đã theo dõi bị từ chối", /chứa mod\/AGENTS\.md/.test(msg), true);
+  t.check("...kể cả viết hoa khác", /control plane/.test(threw(() => addJob(manifestPath, { ...base, filesMayModify: ["MOD/"] })) ?? ""), true);
+  t.check("thư mục con không chứa nó vẫn nhận", addJob(manifestPath, { ...base, filesMayModify: ["mod/inner/"] }).filesMayModify[0], "mod/inner/");
+}
+{
+  // Manifest cũ đã lỡ khai prefix nay bị cấm: vẫn đọc được, chỉ không sửa thêm được.
+  const { manifestPath } = freshRun();
+  const added = addJob(manifestPath, { worker: "codex", role: "assist", transport: "headless", title: "x", evidence: EV, filesMayModify: ["docs/"] });
+  const raw = JSON.parse(readFileSync(manifestPath, "utf8"));
+  raw.jobs[0].filesMayModify = [".claude/skills/"];
+  writeFileSync(manifestPath, JSON.stringify(raw, null, 2));
+  t.check("manifest cũ có prefix bị cấm vẫn đọc được", readManifest(manifestPath).jobs[0].filesMayModify[0], ".claude/skills/");
+  t.check("...và cập nhật tiến độ vẫn chạy", updateJob(manifestPath, added.seq, { status: "done" }).status, "done");
 }
 
 // --- updateJob patches progress, never identity -----------------------------

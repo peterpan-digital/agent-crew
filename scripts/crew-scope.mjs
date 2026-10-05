@@ -43,7 +43,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { isAbsolute, join, posix, relative, sep } from "node:path";
 
 /** How long after a job ends a write can still plausibly be that job's. */
 export const DEFAULT_GRACE_MS = 120_000;
@@ -106,6 +106,117 @@ export const PROTECTED_DIRS = [
 export function isProtectedPath(path) {
   if (PROTECTED_PATHS.includes(path)) return true;
   return PROTECTED_DIRS.some((d) => path.startsWith(d));
+}
+
+/**
+ * Control plane: the files that decide what the crew is allowed to do -- harness
+ * settings, hooks, the gate code itself, and the agent instruction files. Unlike
+ * PROTECTED_PATHS this list is not about git being blind; it is about who may
+ * widen a job's write scope. `filesMayModify` is how the dispatcher accepts a
+ * write outside the task folder, and none of these may be accepted that way,
+ * whatever the owner said in a worker's chat. The owner edits them by hand.
+ * Entries ending in "/" are directories.
+ */
+export const CONTROL_PLANE_PATHS = [
+  ".claude/settings.json", ".claude/settings.local.json", ".claude/agents/", ".claude/agent-memory/",
+  ".agents/hooks.json", ".agents/hooks/", ".codex/hooks.json",
+  ".githooks/", ".git/", "harness/", "harness.config.json", "harness.config.example.json",
+  "mwg-agent-crew/scripts/",
+];
+
+/** Agent instruction files: control plane at any depth, since every module carries its own copy. */
+const INSTRUCTION_FILES = new Set(["claude.md", "agents.md", "gemini.md"]);
+
+/**
+ * Lower-cased, slash-separated, no leading `./`, no trailing `/`. Case is folded
+ * because the disk is case-insensitive on macOS: `.Claude/` names the same
+ * directory as `.claude/`, and a case-sensitive match let it through.
+ */
+function canonical(path) {
+  return posix.normalize(String(path).replaceAll("\\", "/")).replace(/^(\.\/)+/, "").replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * True when `dir` is a run manifest or a folder that can hold one:
+ * `tasks/{task}/reports/crew-{run}/manifest.json`, with any number of
+ * `work-items/{item}` levels before `reports`, and every ancestor of it. A worker that may write there can rewrite another run's
+ * status, holds and scope; its own task folder is already implicit, so a
+ * declaration here is only ever useful for reaching someone else's run.
+ */
+function reachesRunManifest(dir) {
+  const seg = dir.split("/");
+  if (seg[0] !== "tasks") return false;
+  let i = 2; // tasks/{task}
+  if (seg.length <= i) return true;
+  for (;;) {
+    if (seg[i] === "work-items") {
+      if (seg.length <= i + 2) return true;
+      i += 2;
+      continue;
+    }
+    if (seg[i] !== "reports") return false;
+    if (seg.length === i + 1) return true;
+    if (!seg[i + 1].startsWith("crew-")) return false;
+    if (seg.length === i + 2) return true;
+    // `manifest.json.lock/` is the mkdir lock: holding it stalls every adapter.
+    return seg.length >= i + 3 && seg[i + 2].startsWith("manifest.json");
+  }
+}
+
+/**
+ * True when a declared prefix reaches the control plane or a protected path, in
+ * either direction: the prefix sits under one (`harness/x`), or one sits under
+ * the prefix (`.claude/`, `.`). The second direction is the one an exact or
+ * one-way prefix match misses, and it is the one that hands over a whole tree.
+ * Instruction files deeper inside a prefix are found by `controlPlaneInside`,
+ * which needs the workspace; this check is static.
+ */
+/**
+ * True when a changed file is control plane: under or equal to a list entry, or
+ * an agent instruction file at any depth. Unlike `touchesControlPlane` it does
+ * not count run manifests -- other runs rewrite theirs all the time, and that
+ * is not a write this run made.
+ */
+export function isControlPlanePath(path) {
+  const file = canonical(path);
+  if (INSTRUCTION_FILES.has(file.split("/").at(-1))) return true;
+  return CONTROL_PLANE_PATHS.some((entry) => {
+    const bare = canonical(entry);
+    return file === bare || file.startsWith(`${bare}/`);
+  });
+}
+
+export function touchesControlPlane(prefix) {
+  const dir = canonical(prefix);
+  if (dir === "" || dir === "." || dir === ".." || dir.startsWith("../") || isAbsolute(dir)) return true;
+  if (dir.split("/").some((s) => INSTRUCTION_FILES.has(s))) return true;
+  if (reachesRunManifest(dir)) return true;
+  const under = `${dir}/`;
+  return [...CONTROL_PLANE_PATHS, ...PROTECTED_PATHS, ...PROTECTED_DIRS].some((entry) => {
+    const bare = canonical(entry);
+    return dir === bare || under.startsWith(`${bare}/`) || `${bare}/`.startsWith(under);
+  });
+}
+
+/**
+ * A tracked control-plane file somewhere below `prefix`, or null. Catches what
+ * the static list cannot: `mwg-content-editor/` holds that module's CLAUDE.md.
+ * Tracked files only -- the instruction files are all tracked -- and a workspace
+ * git cannot read answers null, leaving the static check as the only one.
+ */
+export function controlPlaneInside(workspace, prefix) {
+  const dir = canonical(prefix);
+  let out;
+  try {
+    // `literal`: a directory named with `[` or `*` must not turn into a glob.
+    // 5s, under the manifest lock's 10s wait, since this runs while holding it.
+    out = execFileSync("git", ["ls-files", "-z", "--", `:(icase,literal)${dir}/`], {
+      cwd: workspace, encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch {
+    return null;
+  }
+  return out.split("\0").filter(Boolean).find((f) => touchesControlPlane(f)) ?? null;
 }
 
 /** A prefix only means "this directory" if it ends in a separator. */
@@ -350,7 +461,11 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
 
     // A file this run's own worker named is this run's, whatever any other run
     // says, so the foreign check comes after the authored one.
-    if (!mine && foreign.has(path)) {
+    // ...and never for a protected or control-plane file. Ownership elsewhere is
+    // whatever another manifest claims, and a worker can write a manifest-shaped
+    // file inside its own task folder; a claim like that must not be able to
+    // excuse a write no run is allowed to make.
+    if (!mine && foreign.has(path) && !isProtectedPath(path) && !isControlPlanePath(path)) {
       result.ownedElsewhere.push({ path, owner: foreign.get(path) });
       continue;
     }

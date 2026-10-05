@@ -382,15 +382,28 @@ export async function runApp({
   };
 }
 
+/** Mặc định ngưỡng im của phiên chat: alert ở timeout − 1m, warn sớm hơn 1 phút. */
+export function chatQuietDefaults(timeoutMs) {
+  return { warnMs: timeoutMs - 2 * 60_000, alertMs: timeoutMs - 60_000 };
+}
+
 export async function antiRun(options, deps = {}) {
   const workspace = resolve(options.workspace ?? process.cwd());
   const evidenceAbs = validateEvidencePath(options.evidence, workspace);
   // Antigravity runs with --dangerously-skip-permissions (see buildArgs), so it
   // is ALWAYS outside a sandbox -- unlike Codex, where this is opt-in per job.
+  // `--chat on` là giá trị duy nhất, giống `--workspace-cli on` của Codex: cờ
+  // boolean thì parser ở đây không có, và một giá trị lạ phải bị từ chối chứ
+  // không được hiểu thành "tắt".
+  if (options.chat !== undefined && options.chat !== "on" && options.chat !== true) {
+    throw new AntiRunError(`--chat chỉ nhận "on", nhận "${options.chat}"`);
+  }
+  const chat = options.chat === "on" || options.chat === true;
   const promptText = appendWorkerContract(readPrompt(options), {
     evidenceAbs,
     workspace,
     unsandboxed: true,
+    chat,
   });
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
   parseDuration(timeout); // validate before spending anything
@@ -403,7 +416,7 @@ export async function antiRun(options, deps = {}) {
       worker: "antigravity", mode,
       // --quiet-* chỉ báo, còn headless không có vòng poll nào để báo. Tên cố ý khác
       // --idle của Codex: --idle GIẾT job, --quiet-* thì không bao giờ.
-      unsupported: { title: "--title", quietWarn: "--quiet-warn", quietAlert: "--quiet-alert" },
+      unsupported: { title: "--title", quietWarn: "--quiet-warn", quietAlert: "--quiet-alert", chat: "--chat" },
     });
     const resumeId = resolveResume(options, { worker: "antigravity", mode, supportsResume: true });
     return runHeadless({
@@ -416,11 +429,15 @@ export async function antiRun(options, deps = {}) {
       worker: "antigravity", mode, unsupported: { agyMode: "--agy-mode" },
     });
     const resumeId = resolveResume(options, { worker: "antigravity", mode, supportsResume: true });
-    const quietWarnMs = options.quietWarn ? parseDuration(options.quietWarn) : DEFAULT_QUIET_WARN_MS;
-    const quietAlertMs = options.quietAlert ? parseDuration(options.quietAlert) : DEFAULT_QUIET_ALERT_MS;
+    // Phiên chat: owner im khi đang nghĩ là bình thường, nên mặc định chỉ báo
+    // ngay trước timeout. Cờ truyền tay vẫn thắng, từng cờ một.
+    const chatDefaults = chat ? chatQuietDefaults(parseDuration(timeout)) : null;
+    const quietWarnMs = options.quietWarn ? parseDuration(options.quietWarn) : (chatDefaults?.warnMs ?? DEFAULT_QUIET_WARN_MS);
+    const quietAlertMs = options.quietAlert ? parseDuration(options.quietAlert) : (chatDefaults?.alertMs ?? DEFAULT_QUIET_ALERT_MS);
     if (quietWarnMs <= 0 || quietWarnMs >= quietAlertMs) {
       throw new AntiRunError(
-        `--quiet-warn phải nhỏ hơn --quiet-alert (và lớn hơn 0), nhận ${options.quietWarn ?? "5m"} và ${options.quietAlert ?? "10m"}`,
+        `--quiet-warn phải nhỏ hơn --quiet-alert (và lớn hơn 0), nhận ${Math.round(quietWarnMs / 1000)}s và ${Math.round(quietAlertMs / 1000)}s`,
+        chat ? "phiên chat mặc định warn = timeout − 2m, alert = timeout − 1m cho cờ nào không truyền tay; truyền cả hai --quiet-*, hoặc tăng --timeout" : undefined,
       );
     }
     return runApp({
@@ -438,7 +455,7 @@ export { parseDuration, validateEvidencePath } from "./crew-guards.mjs";
 const KNOWN_FLAGS = new Set([
   "prompt", "promptFile", "evidence", "workspace", "timeout",
   "mode", "agyMode", "model", "title", "manifest", "job", "resume",
-  "quietWarn", "quietAlert",
+  "quietWarn", "quietAlert", "chat",
 ]);
 
 /**
@@ -610,6 +627,16 @@ export async function main(argv, { deps = {} } = {}) {
       // still working. A guard whose refusal gets overwritten by the caller's
       // own error handler is not a guard.
       claimed = true;
+      // Chỉ để hiển thị: verdict của job chat đi đúng đường của mọi job khác. Ghi
+      // cả `false` khi lượt trước của seq này là chat mà lượt này không. Lỗi ghi
+      // (khoá manifest bận) chỉ cảnh báo: một nhãn hiển thị không được làm fail job.
+      const wantChat = opts.chat === "on" && (opts.mode ?? "headless") === "app";
+      try {
+        const prior = readManifest(opts.manifest).jobs.find((j) => j.seq === Number(opts.job));
+        if (wantChat || prior?.chat) updateJobSync(opts.manifest, Number(opts.job), { chat: wantChat });
+      } catch (err) {
+        console.error(`anti-run: không ghi được nhãn chat vào manifest (${err.message}); job vẫn chạy`);
+      }
     }
 
     // Chỉ job app: vòng poll của nó bất đồng bộ nên signal đến được. Đăng ký ngay

@@ -19,7 +19,8 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, utimesSync, writeFile
 import { join } from "node:path";
 import { addJob, claimRunSlot, createRun, readManifest, updateJob } from "../scripts/crew-manifest.mjs";
 import { newestOwnMtime, progressVerdict, statusFingerprint } from "../scripts/lib/progress-watch.mjs";
-import { AntiRunError, makeStopHandler, makeWatchSink, runApp } from "../scripts/anti-run.mjs";
+import { AntiRunError, antiRun, chatQuietDefaults, makeStopHandler, makeWatchSink, runApp } from "../scripts/anti-run.mjs";
+import { CHAT_LINE } from "../scripts/crew-guards.mjs";
 import { MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
 
 const t = makeChecker("anti-stall");
@@ -322,6 +323,40 @@ function claimedRun() {
   const inverted = cli(["--mode", "app", "--quiet-warn", "10m", "--quiet-alert", "5m"]);
   t.check("warn ≥ alert bị từ chối", /quiet-warn.*nhỏ hơn.*quiet-alert|quiet-warn must be/i.test(inverted.stderr), true);
   t.check("giá trị sai bị từ chối", cli(["--mode", "app", "--quiet-alert", "abc"]).status, 1);
+
+  // --chat: chỉ app mode, chỉ giá trị "on".
+  const chatHead = cli(["--mode", "headless", "--chat", "on"]);
+  t.check("--chat ở headless bị từ chối", `${chatHead.status}:${/--chat is not available on antigravity --mode headless/.test(chatHead.stderr)}`, "1:true");
+  t.check("--chat giá trị lạ bị từ chối", /--chat chỉ nhận "on"/.test(cli(["--mode", "app", "--chat", "yes"]).stderr), true);
+  const tooShort = cli(["--mode", "app", "--chat", "on", "--timeout", "2m"]);
+  t.check("--chat với timeout < 3m: mặc định im không hợp lệ, báo rõ", /phiên chat mặc định warn = timeout − 2m/.test(tooShort.stderr), true);
+  const codex = spawnSync("node", [join(MODULE_ROOT, "scripts", "codex-run.mjs"), "--prompt-file", brief, "--evidence", w.evidenceRel, "--workspace", w.ws, "--chat", "on"], { encoding: "utf8" });
+  t.check("codex không có --chat", `${codex.status !== 0}:${/unknown flag --chat/.test(codex.stderr)}`, "true:true");
+}
+
+// ------------------------------------------------- --chat: prompt + ngưỡng im
+{
+  t.check("mặc định chat: alert = timeout − 1m, warn = timeout − 2m", JSON.stringify(chatQuietDefaults(20 * MIN)), JSON.stringify({ warnMs: 18 * MIN, alertMs: 19 * MIN }));
+  const run = async (extra) => {
+    const w = appWorkspace();
+    const events = [];
+    let prompt = null;
+    const f = fakeDeps({ statuses: () => ({ steps: 3, byStatus: { 7: 1 }, state: "running" }) });
+    const deps = { ...f.deps, dispatch: (bin, args) => { prompt = args.at(-1); return f.deps.dispatch(bin, args); } };
+    try {
+      await antiRun({ mode: "app", prompt: "brief chat", evidence: w.evidenceRel, workspace: w.ws, timeout: "20m",
+        onWatch: (e) => events.push({ level: e.level, atMin: Math.round((f.clock.now - T0) / MIN) }), ...extra }, deps);
+    } catch { /* hết timeout: đúng như mong đợi */ }
+    return { events, prompt };
+  };
+  const chat = await run({ chat: "on" });
+  t.check("chat: prompt mang câu phiên chat", chat.prompt?.includes(CHAT_LINE), true);
+  t.check("chat: owner im 18 phút mới warn, 19 phút mới alert", chat.events.map((e) => `${e.level}@${e.atMin}`).join(","), "warn@18,alert@19");
+  const manual = await run({ chat: "on", quietWarn: "3m", quietAlert: "6m" });
+  t.check("chat: --quiet-* truyền tay vẫn thắng", manual.events.map((e) => `${e.level}@${e.atMin}`).join(","), "warn@3,alert@6");
+  const plain = await run({});
+  t.check("job thường: không có câu phiên chat, ngưỡng 5m/10m như cũ",
+    `${plain.prompt?.includes(CHAT_LINE)}:${plain.events.map((e) => `${e.level}@${e.atMin}`).join(",")}`, "false:warn@5,alert@10");
 }
 
 process.exit(t.finish() ? 0 : 1);

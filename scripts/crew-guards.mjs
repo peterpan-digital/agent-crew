@@ -386,6 +386,28 @@ function assertBriefFits(text, where) {
 }
 
 /**
+ * Hai dòng cho mọi job, vì owner chen vào conversation của worker được bất cứ lúc
+ * nào, kể cả khi job không phải phiên chat. Lời owner tới Claude chỉ qua lời worker
+ * kể lại, nên nó phải nằm ở một mục cố định thì collect mới thấy và báo được. Đo
+ * 01/10: worker chép cả câu hỏi bâng quơ vào mục này, nên câu chữ giới hạn nó vào
+ * việc đổi mục tiêu hoặc phạm vi.
+ */
+export const OWNER_CHANGE_LINE = "Owner đổi mục tiêu hoặc phạm vi giữa chừng → ghi mục `## Thay đổi từ owner` trong evidence:"
+  + " owner muốn đổi gì, lúc nào. Câu hỏi hay trò chuyện không đổi việc thì không ghi.";
+export const OUTSIDE_BRIEF_LINE = "Đã ghi hoặc cần ghi thứ brief không giao → liệt kê ở mục `## Ghi ngoài brief`:"
+  + " đường dẫn ngoài task folder, hoặc Sheet/CMS kèm URL/ID. Việc brief đã giao thì không liệt kê.";
+export const STATUS_LINE = "Dòng cuối evidence file phải là: Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT";
+/**
+ * Phiên chat thay dòng Status: adapter app thoát ngay khi evidence có `Status:`,
+ * nên worker chỉ được viết nó khi owner bảo. Bốn mục cố định để Claude tóm tắt
+ * phiên mà không phải đọc cả conversation.
+ */
+export const CHAT_LINE = "Đây là phiên chat với owner. Trả lời owner bình thường. CHỈ ghi evidence khi owner bảo báo Claude"
+  + " hoặc bảo xong. Evidence gồm `## Tóm tắt trao đổi`, `## Thay đổi từ owner`, `## Ghi ngoài brief`, `## Việc còn mở`;"
+  + " mục nào không có gì thì ghi \"Không có\". " + STATUS_LINE;
+
+
+/**
  * The three lines `seo-crew` Bước 5 requires in every brief, appended by the
  * adapter instead of trusted to the person writing the brief.
  *
@@ -410,7 +432,7 @@ function assertBriefFits(text, where) {
  * author's wording. Two copies of a write-scope rule is how a worker learns to
  * pick whichever it likes.
  */
-export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed = false }) {
+export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed = false, chat = false }) {
   const evidenceRel = evidenceAbs.startsWith(workspace + sep)
     ? evidenceAbs.slice(workspace.length + 1)
     : evidenceAbs;
@@ -422,7 +444,9 @@ export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed
       ? `Bạn là worker trong crew run ${runId}. Không được dispatch worker khác.`
       : "Bạn là worker trong một crew run. Không được dispatch worker khác.",
     `Chỉ được ghi đúng file: ${evidenceRel} (và data bạn tự sinh trong task folder).`,
-    "Dòng cuối evidence file phải là: Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT",
+    chat ? CHAT_LINE : STATUS_LINE,
+    OWNER_CHANGE_LINE,
+    OUTSIDE_BRIEF_LINE,
   ];
   // Owner chốt 22/09: gộp --workspace-cli on với --sandbox-mode danger-full-access
   // KHÔNG bị cấm, vì một job cần cả trình duyệt lẫn Sheet mà phải tách đôi là trả
@@ -435,7 +459,10 @@ export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed
         + " không đọc/ghi `~/.config/gws/`, `.env`, secret, token, hay config ngoài repo.",
     );
   }
-  const missing = lines.filter((line) => !text.includes(line));
+  // STATUS_LINE nằm trọn trong CHAT_LINE: một brief thường lỡ chép câu chat vào
+  // thì vẫn phải nhận dòng Status đứng riêng, không thì worker ngồi chờ owner tới timeout.
+  const present = (line) => (line === STATUS_LINE ? text.replaceAll(CHAT_LINE, "") : text).includes(line);
+  const missing = lines.filter((line) => !present(line));
   if (missing.length === 0) return text;
   return `${text}\n\n${missing.join("\n")}\n`;
 }

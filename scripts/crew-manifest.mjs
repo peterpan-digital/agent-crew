@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 import { holdsFingerprint, supersedeSeq } from "./lib/holds.mjs";
+import { controlPlaneInside, touchesControlPlane } from "./crew-scope.mjs";
 
 const LOCK_STALE_MS = 60_000;
 const LOCK_WAIT_MS = 10_000;
@@ -391,6 +392,46 @@ function assertEvidencePath(evidence) {
   }
 }
 
+/**
+ * What a job may write outside its task folder. Checked on add and on every
+ * update, because `updateJob` is where a dispatcher widens scope after the owner
+ * says ok -- the moment a worker's chat could talk it into handing over more.
+ */
+function assertFilesMayModify(list, workspace) {
+  if (list === undefined) return;
+  // A string here reaches `.map` in the scope gate and throws mid-collect,
+  // which turns a bad declaration into a dead gate.
+  if (!Array.isArray(list)) {
+    throw new ManifestError(`filesMayModify must be an array of path prefixes, got ${typeof list}`);
+  }
+  if (list.some((x) => typeof x !== "string")) {
+    throw new ManifestError("filesMayModify entries must all be strings");
+  }
+  // Hai việc đọc cùng danh sách này: cổng phạm vi ghi, và đồng hồ "job còn sống
+  // không" của adapter Anti app (mtime của các file khai ở đây). Một prefix
+  // tuyệt đối hoặc có `..` thì cả hai đều trỏ ra ngoài workspace.
+  for (const prefix of list) {
+    // Một dấu phẩy thừa khi ghép danh sách sinh ra phần tử rỗng, và rỗng nghĩa là
+    // cả workspace; báo đúng lỗi đó thay vì để nó rơi vào lỗi control plane.
+    if (prefix.trim() === "") {
+      throw new ManifestError("filesMayModify có phần tử rỗng (dấu phẩy thừa?) — rỗng nghĩa là cả workspace");
+    }
+    if (isAbsolute(prefix)) {
+      throw new ManifestError(`filesMayModify phải là đường dẫn tương đối trong workspace, nhận đường tuyệt đối ${prefix}`);
+    }
+    if (normalize(prefix).split(sep).includes("..") || prefix.split(/[\\/]/).includes("..")) {
+      throw new ManifestError(`filesMayModify không được chứa "..", nhận ${prefix}`);
+    }
+    const inside = touchesControlPlane(prefix) ? prefix : (workspace ? controlPlaneInside(workspace, prefix) : null);
+    if (inside) {
+      throw new ManifestError(
+        `filesMayModify chạm control plane hoặc file được bảo vệ: ${prefix}${inside === prefix ? "" : ` (chứa ${inside})`}\n` +
+        "  → control plane — owner sửa tay, không qua crew",
+      );
+    }
+  }
+}
+
 export function addJob(manifestPath, job) {
   let added;
   updateManifest(manifestPath, (m) => {
@@ -403,27 +444,7 @@ export function addJob(manifestPath, job) {
     const seq = m.jobs.length + 1;
     const { role, transport } = resolveRouting(job);
     assertEvidencePath(job.evidence);
-    // A string here reaches `.map` in the scope gate and throws mid-collect,
-    // which turns a bad declaration into a dead gate.
-    if (job.filesMayModify !== undefined && !Array.isArray(job.filesMayModify)) {
-      throw new ManifestError(
-        `filesMayModify must be an array of path prefixes, got ${typeof job.filesMayModify}`,
-      );
-    }
-    if (job.filesMayModify?.some((x) => typeof x !== "string")) {
-      throw new ManifestError("filesMayModify entries must all be strings");
-    }
-    // Hai việc đọc cùng danh sách này: cổng phạm vi ghi, và đồng hồ "job còn sống
-    // không" của adapter Anti app (mtime của các file khai ở đây). Một prefix
-    // tuyệt đối hoặc có `..` thì cả hai đều trỏ ra ngoài workspace.
-    for (const prefix of job.filesMayModify ?? []) {
-      if (isAbsolute(prefix)) {
-        throw new ManifestError(`filesMayModify phải là đường dẫn tương đối trong workspace, nhận đường tuyệt đối ${prefix}`);
-      }
-      if (normalize(prefix).split(sep).includes("..") || prefix.split(/[\\/]/).includes("..")) {
-        throw new ManifestError(`filesMayModify không được chứa "..", nhận ${prefix}`);
-      }
-    }
+    assertFilesMayModify(job.filesMayModify, m.workspace);
     const extra = { ...job.extra };
     for (const field of SEALED_JOB_FIELDS) {
       if (field in extra) {
@@ -550,6 +571,7 @@ export function updateJob(manifestPath, seq, patch) {
         );
       }
     }
+    if ("filesMayModify" in patch) assertFilesMayModify(patch.filesMayModify, m.workspace);
     Object.assign(job, patch);
     if (job.startedAt && job.endedAt) {
       job.durationSec = Math.round((Date.parse(job.endedAt) - Date.parse(job.startedAt)) / 1000);

@@ -8,7 +8,7 @@
  * size was the only thing it measured.
  */
 import { join, sep } from "node:path";
-import { appendWorkerContract, readPrompt, MAX_BRIEF_BYTES } from "../scripts/crew-guards.mjs";
+import { appendWorkerContract, readPrompt, MAX_BRIEF_BYTES, CHAT_LINE, OUTSIDE_BRIEF_LINE, OWNER_CHANGE_LINE, STATUS_LINE } from "../scripts/crew-guards.mjs";
 import { makeChecker } from "./helpers.mjs";
 
 const t = makeChecker("worker-contract");
@@ -80,6 +80,24 @@ const ctx = { evidenceAbs: EV, workspace: WS };
       && /Dòng cuối evidence file phải là/.test(loose), true);
   t.check("...and stays idempotent",
     appendWorkerContract(loose, { ...ctx, unsandboxed: true }), loose);
+}
+
+{
+  // Owner chen vào conversation được ở mọi job, nên 2 dòng này có ở mọi job.
+  const out = appendWorkerContract("brief", ctx);
+  t.check("job thường: có dòng Thay đổi từ owner", out.includes(OWNER_CHANGE_LINE), true);
+  t.check("job thường: có dòng Ghi ngoài brief", out.includes(OUTSIDE_BRIEF_LINE), true);
+  t.check("job thường: vẫn là dòng Status cũ, không có câu phiên chat", `${out.split("\n").includes(STATUS_LINE)}:${out.includes(CHAT_LINE)}`, "true:false");
+  t.check("dòng owner chỉ nhận đổi mục tiêu/phạm vi, không chép chuyện phiếm", /không đổi việc thì không ghi/.test(OWNER_CHANGE_LINE), true);
+
+  const chat = appendWorkerContract("brief", { ...ctx, chat: true });
+  t.check("chat: có câu phiên chat", chat.includes(CHAT_LINE), true);
+  t.check("chat: dòng Status đứng riêng bị thay, không có hai lời dặn khác nhau", chat.split("\n").includes(STATUS_LINE), false);
+  t.check("chat: 4 mục evidence được nêu tên", ["Tóm tắt trao đổi", "Thay đổi từ owner", "Ghi ngoài brief", "Việc còn mở"].every((s) => CHAT_LINE.includes(`## ${s}`)), true);
+  t.check("chat: vẫn có rào ghi + không dispatch", /Chỉ được ghi đúng file/.test(chat) && /Không được dispatch/.test(chat), true);
+  t.check("chat: chạy lại không đổi gì", appendWorkerContract(chat, { ...ctx, chat: true }), chat);
+  const pasted = appendWorkerContract(`brief\n${CHAT_LINE}`, ctx);
+  t.check("brief thường lỡ chép câu chat: vẫn có dòng Status đứng riêng", pasted.split("\n").includes(STATUS_LINE), true);
 }
 
 process.exit(t.finish() ? 0 : 1);
