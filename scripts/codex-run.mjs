@@ -1572,6 +1572,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         // named here is this job's, a file not named here may still be.
         touchedFiles: result.touchedFiles,
         evidenceBytes: result.evidenceBytes,
+        evidenceSha256: result.evidenceSha256,
         // Recorded so the collect step can find the log without guessing its name.
         stream: result.stream,
         lastMessage: result.lastMessage,

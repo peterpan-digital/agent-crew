@@ -17,7 +17,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { resolve, dirname, relative, join } from "node:path";
 import { readManifest, updateJob, updateManifest, appendNote } from "./crew-manifest.mjs";
-import { readWorkerStatus, CREDENTIAL_STORE_DIR } from "./crew-guards.mjs";
+import { evidenceDigest, readWorkerStatus, CREDENTIAL_STORE_DIR } from "./crew-guards.mjs";
 import { reconcileRun, resolveEvidence } from "./crew-reconcile.mjs";
 import { collectWriteScope, headMovement } from "./crew-scope.mjs";
 import { costGateKind, ensureCostGateHold, quotaApiName, extractCostGateApi, holdFor, holdVerdict, liveJobs } from "./lib/holds.mjs";
@@ -88,6 +88,26 @@ function duplicateEvidence(manifest) {
     else seen.set(key, job.seq);
   }
   return dupes;
+}
+
+/**
+ * Evidence đã đổi kể từ lúc adapter chấm job xong. Đo 07/10: worker app ghi đè
+ * evidence 28 giây sau khi adapter thoát, và gate đọc bản mới như thể đó là bản
+ * đã được chấm. Job không có `evidenceSha256` (manifest cũ, job ghi tay, đường
+ * timeout) thì không có gì để so — không suy diễn.
+ */
+function evidenceChange(job, workspace) {
+  if (typeof job.evidenceSha256 !== "string") return null;
+  const abs = resolveEvidence(job, workspace);
+  if (!abs) return null; // mất evidence là chuyện judgeOne chấm FAIL, không phải ở đây
+  let now;
+  try { now = evidenceDigest(abs); } catch { return null; }
+  return now === job.evidenceSha256 ? null : { why: `evidence-changed:${now}`, was: job.evidenceSha256, now };
+}
+
+/** Mọi điều một người phải nói "đã đọc" trên job này, mỗi điều là một khoá ack. */
+function readsNeeded(job, workspace) {
+  return [job.runtimeVerdict ?? job.disagreement ?? null, evidenceChange(job, workspace)?.why ?? null].filter(Boolean);
 }
 
 /** Evidence is a file with a verdict in it; anything else cannot be judged. */
@@ -182,6 +202,14 @@ function judgeOne(job, workspace, now, manifestVersion) {
   // Tín hiệu để Claude đọc, không phải verdict: lời owner tới đây qua lời worker
   // kể lại, nên nó không được tự đổi đạt/không đạt của job.
   row.evidencePath = job.evidence;
+  // Chặn bất kể verdict: bản ghi đè có thể biến một job adapter chấm hỏng thành đạt.
+  row.reads = [];
+  const changed = evidenceChange(job, workspace);
+  if (changed) {
+    row.flags.push("EVIDENCE-ĐỔI");
+    row.evidenceChanged = changed;
+    row.reads.push({ kind: "evidence", why: changed.why });
+  }
   row.briefChanged = hasSection(evidence.text, "Thay đổi từ owner");
   row.outsideBrief = hasSection(evidence.text, "Ghi ngoài brief");
 
@@ -222,6 +250,7 @@ function judgeOne(job, workspace, now, manifestVersion) {
   // recorded a failure while the evidence judged itself a pass. That one is
   // gating (see `unread` below); the other two are not.
   row.runtimeDisagreement = Boolean(job.runtimeVerdict || job.disagreement);
+  if (row.runtimeDisagreement) row.reads.push({ kind: "runtime", why: job.runtimeVerdict ?? job.disagreement });
   const warn = job.runtimeVerdict ? `runtime báo fail nhưng evidence đạt`
     : job.disagreement ? job.disagreement
     : job.failure ? `manifest có ghi lỗi nhưng evidence đạt`
@@ -273,7 +302,7 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   // judged a stale manifest would fail jobs that had already finished.
   const reconciled = reconcileRun(abs, { dryRun });
   if (notOurs.length && !dryRun) recordDismissals(abs, notOurs, reason);
-  if (ackRuntime.length && !dryRun) recordRuntimeAcks(abs, ackRuntime, reason);
+  if (ackRuntime.length && !dryRun) recordRuntimeAcks(abs, ackRuntime, reason, workspace);
   let manifest = readManifest(abs);
   const ws = workspace ?? manifest.workspace;
 
@@ -328,12 +357,10 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   // Keyed by what was acknowledged, not by which job. An ack recorded against
   // one disagreement must not cover a different one that shows up later on the
   // same job -- otherwise the reader vouched for something they never saw.
-  const acked = new Map((manifest.runtimeAcks ?? []).map((a) => [a.seq, a.why ?? null]));
-  const unread = rows.filter((r) => {
-    if (!r.runtimeDisagreement) return false;
-    const job = manifest.jobs.find((j) => j.seq === r.seq);
-    return acked.get(r.seq) !== (job.runtimeVerdict ?? job.disagreement ?? null);
-  });
+  // Một job có thể cần đọc hai điều (runtime lệch, evidence đổi), nên khoá là cặp.
+  const acked = new Set((manifest.runtimeAcks ?? []).map((a) => `${a.seq}\u0000${a.why ?? ""}`));
+  for (const r of rows) r.unreadKinds = (r.reads ?? []).filter((x) => !acked.has(`${r.seq}\u0000${x.why}`)).map((x) => x.kind);
+  const unread = rows.filter((r) => r.unreadKinds.length > 0);
   // The credential store is watched by fingerprint, not by write attribution:
   // `crew-scope` only reasons about paths inside the repo, and this store sits
   // in the owner's home. The adapters compare a before/after hash on every exit
@@ -373,7 +400,19 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
  * from a reader, kept next to the run, rather than a flag that turns the check
  * off. Same shape as `--not-ours`, for the same reason.
  */
-function recordRuntimeAcks(abs, seqs, reason) {
+/**
+ * `3` hoặc `3@<sha>`. Reviewer tái hiện 07/10: ack không ghim sha thì ký luôn bản
+ * worker vừa ghi đè SAU lúc gate in — đúng bản chưa ai đọc. Ghim ít nhất 8 ký tự hex.
+ */
+export function parseAckSpec(v) {
+  if (typeof v === "number") return { seq: v, sha: null };
+  if (v && typeof v === "object") return { seq: v.seq, sha: v.sha ?? null };
+  const m = /^(\d+)(?:@([0-9a-f]{8,64}))?$/.exec(String(v).trim());
+  if (!m) throw new Error(`--ack-runtime cần <seq> hoặc <seq>@<sha ≥8 ký tự hex>, nhận "${v}"`);
+  return { seq: Number(m[1]), sha: m[2] ?? null };
+}
+
+function recordRuntimeAcks(abs, seqs, reason, workspace) {
   if (typeof reason !== "string" || !reason.trim()) {
     throw new Error(
       "--ack-runtime cần --reason \"<đọc evidence rồi, vì sao vẫn tính đạt>\"\n" +
@@ -384,20 +423,34 @@ function recordRuntimeAcks(abs, seqs, reason) {
   updateManifest(abs, (m) => {
     const bySeq = new Map(m.jobs.map((j) => [j.seq, j]));
     const acks = [];
-    for (const seq of seqs) {
+    for (const spec of seqs) {
+      const { seq, sha } = parseAckSpec(spec);
       const job = bySeq.get(seq);
       if (!job) throw new Error(`--ack-runtime ${seq}: run này không có job ${seq}`);
       // An ack aimed at a job with nothing to acknowledge used to sit in the
       // manifest waiting: when a disagreement appeared afterwards it was
       // already covered, and the gate opened on a mismatch nobody had read.
-      const why = job.runtimeVerdict ?? job.disagreement ?? null;
-      if (!why) {
+      const whys = readsNeeded(job, workspace ?? m.workspace);
+      if (!whys.length) {
         throw new Error(
-          `--ack-runtime ${seq}: job này chưa có bất đồng runtime nào để nhận\n` +
+          `--ack-runtime ${seq}: job này chưa có bất đồng runtime hay evidence đổi nào để nhận\n` +
           "  → chỉ ack sau khi gate nêu tên job đó; ack trước là ký khống cho lần lệch sau",
         );
       }
-      acks.push({ seq, why, reason: reason.trim(), at });
+      const change = evidenceChange(job, workspace ?? m.workspace);
+      if (change && !sha) {
+        throw new Error(
+          `--ack-runtime ${seq}: evidence job này đổi sau khi xong — ack phải ghim sha bản đã đọc\n` +
+          `  → dùng đúng dòng --ack-runtime ${seq}@<sha> mà mục EVIDENCE ĐỔI của lần collect gần nhất in ra`,
+        );
+      }
+      if (change && !change.now.startsWith(sha)) {
+        throw new Error(
+          `--ack-runtime ${seq}@${sha}: evidence đã đổi lại từ lần gate in (giờ ${change.now.slice(0, 12)})\n` +
+          "  → chạy collect lại, đọc bản hiện tại rồi mới ack",
+        );
+      }
+      for (const why of whys) acks.push({ seq, why, reason: reason.trim(), at });
     }
     const existing = (m.runtimeAcks ?? []).filter((a) => !acks.some((x) => x.seq === a.seq && x.why === a.why));
     m.runtimeAcks = [...existing, ...acks];
@@ -604,11 +657,21 @@ function report(r) {
   }
 
   if (r.unread?.length) {
-    console.log("\nRUNTIME LỆCH EVIDENCE — chặn cho tới khi có người đọc:");
-    for (const row of r.unread) {
-      console.log(`  job ${row.seq}: ${row.detail}`);
+    const runtime = r.unread.filter((row) => row.unreadKinds.includes("runtime"));
+    if (runtime.length) {
+      console.log("\nRUNTIME LỆCH EVIDENCE — chặn cho tới khi có người đọc:");
+      for (const row of runtime) console.log(`  job ${row.seq}: ${row.detail}`);
     }
-    console.log(`  Đọc xong mà vẫn tính đạt thì chạy: --ack-runtime ${r.unread.map((x) => x.seq).join(" --ack-runtime ")} --reason "..."`);
+    const rewritten = r.unread.filter((row) => row.unreadKinds.includes("evidence"));
+    if (rewritten.length) {
+      console.log("\nEVIDENCE ĐỔI SAU KHI JOB XONG — bản đang đọc không phải bản adapter đã chấm; chặn cho tới khi có người đọc:");
+      for (const row of rewritten) {
+        console.log(`  job ${row.seq}: ${row.evidencePath} (sha lúc xong ${row.evidenceChanged.was.slice(0, 12)}, giờ ${row.evidenceChanged.now.slice(0, 12)})`);
+      }
+    }
+    // Job có evidence đổi thì lệnh in sẵn ghim sha bản vừa in, để ack không ký bản sau.
+    const spec = (row) => (row.evidenceChanged ? `${row.seq}@${row.evidenceChanged.now.slice(0, 12)}` : `${row.seq}`);
+    console.log(`  Đọc xong mà vẫn tính đạt thì chạy: --ack-runtime ${r.unread.map(spec).join(" --ack-runtime ")} --reason "..."`);
   }
 
   const pass = r.rows.filter((x) => x.verdict === "PASS").length;
@@ -618,7 +681,7 @@ function report(r) {
   const covered = r.rows.filter((x) => x.verdict === "COVERED").length;
   const counted = r.rows.length - cancelled;
   console.log(`\n${pass}/${counted} job đạt${cancelled ? `, ${cancelled} job bỏ có chủ ý` : ""}${waived ? `, ${waived} job owner bỏ (WAIVED)` : ""}${covered ? `, ${covered} job được lượt resume làm tiếp (COVERED)` : ""}${warn ? `, ${warn} job cần đọc mắt (WARN)` : ""} — exit ${r.exitCode}`);
-  if (r.exitCode === 1) console.log("Chưa được viết report tổng: còn job chưa xong, đang chờ quyết định, hoặc runtime lệch evidence chưa ai đọc.");
+  if (r.exitCode === 1) console.log("Chưa được viết report tổng: còn job chưa xong, đang chờ quyết định, runtime lệch evidence, hoặc evidence đổi sau khi xong mà chưa ai đọc.");
   if (r.exitCode === 2) console.log("Chưa được viết report tổng: có vi phạm phạm vi ghi, trùng evidence, kho credential bị đổi hoặc holds bị sửa.");
   if (r.exitCode === 3) {
     console.log("Chưa được viết report tổng: vướng CẢ HAI —");
@@ -815,7 +878,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (!manifestPath || opts.positional.length > 1) {
       console.error(
         "usage: crew-collect.mjs <manifest.json> [--abandon <seq>] [--grace <ms>] [--dry-run]\n" +
-        "                            [--not-ours <path>]... [--ack-runtime <seq>]... --reason \"<vì sao>\"\n" +
+        "                            [--not-ours <path>]... [--ack-runtime <seq>[@sha]]... --reason \"<vì sao>\"\n" +
         "                            [--report tasks/{task}/reports/{yymmdd-hhmm}-{type}-{slug}.md]\n" +
         "exit: 0 = được report | 1 = còn job chưa xong hoặc runtime lệch evidence | 2 = vi phạm phạm vi ghi | 3 = cả 1 và 2",
       );
@@ -834,11 +897,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (!Number.isFinite(graceMs) || graceMs < 0) throw new Error(`--grace cần số ms ≥ 0, nhận "${opts.values.get("--grace")}"`);
     }
     const notOurs = opts.lists.get("--not-ours") ?? [];
-    const ackRuntime = (opts.lists.get("--ack-runtime") ?? []).map((v) => {
-      const seq = Number(v);
-      if (!Number.isInteger(seq)) throw new Error(`--ack-runtime cần số seq, nhận "${v}"`);
-      return seq;
-    });
+    const ackRuntime = (opts.lists.get("--ack-runtime") ?? []).map(parseAckSpec);
     const r = collectRun(manifestPath, {
       graceMs, dryRun, notOurs, ackRuntime, reason: opts.values.get("--reason") ?? null,
     });

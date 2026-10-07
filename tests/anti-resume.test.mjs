@@ -20,6 +20,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createRun, addJob, readManifest } from "../scripts/crew-manifest.mjs";
 import { FIXTURE_BIN, MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
@@ -139,6 +140,7 @@ const argvOf = (evidence) => readFileSync(join(ws, evidence), "utf8");
 
   t.check("an honoured resume records what it continued", ok.resumedFrom, "conv-keep");
   t.check("job không --chat thì không mang nhãn chat", "chat" in ok, false);
+  t.check("anti-run ghi sha bản evidence đã chấm", ok.evidenceSha256, createHash("sha256").update(readFileSync(join(ws, okEv))).digest("hex"));
   t.check("...and is not marked mismatched", Boolean(ok.resumeMismatch), false);
 
   // conversationId alone cannot show this: it reports the session that RAN, not

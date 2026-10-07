@@ -261,6 +261,57 @@ function claimedRun() {
   t.check("warn không ghi note", notes.some((n) => /warn/.test(n)), false);
 }
 
+// ------------------------------------------------- done mà chưa có evidence → idle
+{
+  // Đo 07/10: worker thôi lượt (conversation done) mà không ghi evidence, adapter chờ
+  // tới timeout. Giờ báo `idle` sau 2 phút, một lần mỗi đợt done, và vẫn không dừng.
+  const w = appWorkspace();
+  const events = [];
+  const f = fakeDeps({ statuses: (ms) => ({ steps: 4, byStatus: { 3: 4 }, state: ms < 3 * MIN ? "running" : "done" }) });
+  let err = null;
+  try { await runApp(runOpts(w, { timeout: "10m", onWatch: (e) => events.push({ ...e, atMs: f.clock.now - T0 }) }), f.deps); } catch (e) { err = e; }
+  const idle = events.filter((e) => e.level === "idle");
+  t.check("done không evidence: đúng một sự kiện idle", idle.length, 1);
+  t.check("idle ra sau ~2 phút kể từ lúc done (trong 1 chu kỳ poll)", idle[0].atMs >= 5 * MIN && idle[0].atMs <= 5 * MIN + 5_000, true);
+  t.check("idle mang conversationId, state, evidence=false", `${idle[0].conversationId}:${idle[0].state}:${idle[0].evidence}`, "conv-new-0001:done:false");
+  t.check("idle không dừng job: vẫn tới timeout", err instanceof AntiRunError && f.clock.now - T0 >= 10 * MIN, true);
+}
+{
+  // Chờ lệnh nền hợp lệ: done 1 phút rồi app đánh thức lại → không báo.
+  const w = appWorkspace();
+  const events = [];
+  const f = fakeDeps({ statuses: (ms) => ({ steps: 4, byStatus: { 3: Math.floor(ms / MIN) }, state: ms >= 2 * MIN && ms < 3 * MIN ? "done" : "running" }) });
+  try { await runApp(runOpts(w, { timeout: "6m", onWatch: (e) => events.push(e.level) }), f.deps); } catch { /* timeout */ }
+  t.check("done ngắn hơn ngưỡng rồi chạy tiếp: không idle", events.includes("idle"), false);
+}
+{
+  // Hai đợt done dài, xen giữa là lúc worker dậy: mỗi đợt báo một lần.
+  const w = appWorkspace();
+  const events = [];
+  const doneAt = (ms) => (ms >= 1 * MIN && ms < 5 * MIN) || ms >= 7 * MIN;
+  const f = fakeDeps({ statuses: (ms) => ({ steps: 4, byStatus: { 3: 1 }, state: doneAt(ms) ? "done" : "running" }) });
+  try { await runApp(runOpts(w, { timeout: "12m", onWatch: (e) => events.push(e.level) }), f.deps); } catch { /* timeout */ }
+  t.check("hai đợt done: hai sự kiện idle", events.filter((l) => l === "idle").length, 2);
+}
+{
+  // Evidence đã có (thiếu Status): đường fallback cũ lo, không báo idle.
+  const w = appWorkspace();
+  writeFile(w.evidenceAbs, "chưa xong\n");
+  const events = [];
+  const f = fakeDeps({ statuses: () => ({ steps: 4, byStatus: { 3: 4 }, state: "done" }) });
+  try { await runApp(runOpts(w, { timeout: "6m", onWatch: (e) => events.push(e.level) }), f.deps); } catch { /* không quan trọng */ }
+  t.check("done có evidence: không idle", events.includes("idle"), false);
+}
+{
+  const r = claimedRun();
+  const sidecar = join(r.ws, "tasks", "t", "data", "crew-logs", "idle.watch");
+  const sink = makeWatchSink({ manifestPath: r.manifestPath, seq: 1, sidecarPath: sidecar });
+  sink({ type: "anti.watch", level: "idle", at: "x", idleSec: 120, conversationId: "c" });
+  sink({ type: "anti.watch", level: "idle", at: "y", idleSec: 130, conversationId: "c" });
+  const notes = readManifest(r.manifestPath).jobs[0].notes;
+  t.check("idle ghi note vào job đúng 1 lần, nêu conversation", notes.filter((n) => /done .* chưa có evidence/.test(n) && /conversation c /.test(n)).length, 1);
+}
+
 // ------------------------------------------------------------------ stopHandler
 {
   const r = claimedRun();

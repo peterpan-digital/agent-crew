@@ -21,7 +21,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { readManifest, updateJob, appendNote } from "./crew-manifest.mjs";
-import { readWorkerStatus } from "./crew-guards.mjs";
+import { evidenceDigest, readWorkerStatus } from "./crew-guards.mjs";
 import { probeCompanionJob, COMPANION_ACTIVE, COMPANION_TERMINAL } from "./crew-runtime-probe.mjs";
 import { resolveCompanion } from "./codex-companion-path.mjs";
 
@@ -212,6 +212,9 @@ export function reconcileRun(manifestPath, { dryRun = false, cancelOrphans = fal
       updateJob(abs, job.seq, {
         status: verdict.status,
         reportedStatus: verdict.reported,
+        // Ở đây reconcile chính là người chấm, nên nó ghim bản đã chấm. Thiếu dòng này,
+        // một worker app còn sống sau timeout ghi tiếp evidence mà gate không thấy.
+        evidenceSha256: evidenceDigest(candidate),
         endedAt: job.endedAt ?? new Date().toISOString(),
         // A filled-in end time is bookkeeping, not an observation, and it must
         // say so: the write-scope check derives each job's interval from it, and

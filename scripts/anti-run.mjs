@@ -194,12 +194,21 @@ function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMo
     response: String(parsed?.response ?? "").trim() || null,
     evidence: evidenceAbs,
     evidenceBytes,
+    evidenceSha256: verdict.evidenceSha256,
     status: verdict.status,
     resumeMismatch: resumeMismatch || undefined,
     reportedStatus: verdict.reportedStatus,
     runtimeVerdict: verdict.runtimeVerdict,
   };
 }
+
+/**
+ * Conversation `done` mà chưa có evidence quá chừng này thì báo `idle`. Đo 07/10:
+ * owner chen vào lúc worker đang chờ lệnh nền, app không đánh thức worker nữa và
+ * adapter chờ thêm 14 phút tới timeout. Ngưỡng không thể là 0: lúc worker chờ lệnh
+ * nền hợp lệ, conversation cũng `done` một lúc rồi được app đánh thức.
+ */
+const IDLE_NO_EVIDENCE_MS = 2 * 60_000;
 
 /**
  * Mọi thứ runApp chạm vào bên ngoài, gom một chỗ để test thay bằng hàm giả. Cố ý là
@@ -224,6 +233,7 @@ const REAL_DEPS = {
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
   now: () => Date.now(),
   pollMs: POLL_INTERVAL_MS,
+  idleNoEvidenceMs: IDLE_NO_EVIDENCE_MS,
 };
 
 /**
@@ -308,6 +318,8 @@ export async function runApp({
   let lastProgressAt = d.now();
   let level = "ok";
   let maxQuietMs = 0;
+  let idleSince = null;
+  let idleEmitted = false;
   for (;;) {
     if (existsSync(evidenceAbs) && statSync(evidenceAbs).size > 0 && readWorkerStatus(evidenceAbs).reported) {
       break;
@@ -340,8 +352,33 @@ export async function runApp({
         onWatch?.({
           type: "anti.watch", level: v.emit, at: new Date(now).toISOString(),
           quietSec: Math.round(v.quietMs / 1000), conversationId,
+          // `done` + chưa có evidence: worker đã thôi lượt. Đo 07/10: chen vào lúc
+          // worker chờ lệnh nền thì nó không được đánh thức nữa, chờ tiếp là chờ
+          // tới timeout. Cảnh báo phải nói được ca đó để Claude nhắc chứ không đợi.
+          state: last?.state ?? null,
+          evidence: existsSync(evidenceAbs),
         });
       } catch { /* sidecar hỏng không được giết một job đang chạy */ }
+    }
+
+    // Chỉ báo, không dừng: Claude nhắc worker hoặc tự SIGTERM. Báo một lần mỗi đợt
+    // `done`; worker dậy lại (state đổi) thì đợt sau báo lại được.
+    if (last?.state === "done" && !existsSync(evidenceAbs)) {
+      idleSince ??= now;
+      if (!idleEmitted && now - idleSince >= d.idleNoEvidenceMs) {
+        idleEmitted = true;
+        try {
+          onWatch?.({
+            type: "anti.watch", level: "idle", at: new Date(now).toISOString(),
+            idleSec: Math.round((now - idleSince) / 1000), conversationId,
+            state: "done", evidence: false,
+          });
+        } catch { /* như trên */ }
+      }
+    } else if (last) {
+      // `last` null là đọc DB hụt một nhịp, không phải worker dậy: giữ nguyên đợt.
+      idleSince = null;
+      idleEmitted = false;
     }
 
     if (now > deadline) {
@@ -367,6 +404,7 @@ export async function runApp({
   return {
     worker: "antigravity",
     mode: "app",
+    evidenceSha256: verdict.evidenceSha256,
     resumedFrom: resumeId ?? null,
     conversationId,
     startedAt: started.toISOString(),
@@ -505,14 +543,20 @@ function needsHuman(result) {
 /**
  * Sidecar mà Claude nghe bằng Monitor: mỗi sự kiện `anti.watch` một dòng JSON, nằm
  * ở `data/crew-logs/` của task (đã được gitignore), không phải cạnh evidence trong
- * `reports/`. Mức `alert` còn ghi một note vào job, đúng một lần, để người đọc
+ * `reports/`. Mức `alert` và `idle` mỗi mức ghi một note vào job, đúng một lần, để người đọc
  * manifest sau này thấy job từng im lâu mà không cần đọc sidecar.
  */
 export function makeWatchSink({ manifestPath = null, seq = null, sidecarPath }) {
   let noted = false;
+  let notedIdle = false;
   return (event) => {
     mkdirSync(join(sidecarPath, ".."), { recursive: true });
     appendFileSync(sidecarPath, `${JSON.stringify(event)}\n`, "utf8");
+    if (event.level === "idle" && !notedIdle && manifestPath && seq != null) {
+      notedIdle = true;
+      appendNote(manifestPath, seq,
+        `anti-run: conversation ${event.conversationId} đã done ${Math.round(event.idleSec / 60)} phút mà chưa có evidence — xem bước cuối: chờ lệnh nền thì để yên, không thì nhắn nó ghi evidence hoặc SIGTERM`);
+    }
     if (event.level === "alert" && !noted && manifestPath && seq != null) {
       noted = true;
       appendNote(manifestPath, seq,
@@ -743,6 +787,7 @@ export async function main(argv, { deps = {} } = {}) {
         agentDurationSec: result.agentDurationSec ?? null,
         usage: result.usage ?? null,
         evidenceBytes: result.evidenceBytes,
+        evidenceSha256: result.evidenceSha256,
         ...(result.quietMaxSec != null ? { quietMaxSec: result.quietMaxSec } : {}),
         ...credentialPatch(),
         // Compared against the fingerprint taken at claim. A worker has no

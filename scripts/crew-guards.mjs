@@ -396,6 +396,13 @@ export const OWNER_CHANGE_LINE = "Owner đổi mục tiêu hoặc phạm vi gi�
   + " owner muốn đổi gì, lúc nào. Câu hỏi hay trò chuyện không đổi việc thì không ghi.";
 export const OUTSIDE_BRIEF_LINE = "Đã ghi hoặc cần ghi thứ brief không giao → liệt kê ở mục `## Ghi ngoài brief`:"
   + " đường dẫn ngoài task folder, hoặc Sheet/CMS kèm URL/ID. Việc brief đã giao thì không liệt kê.";
+/**
+ * Đo 07/10: owner bảo "báo Claude" trong một job thường thì worker không biết làm
+ * gì, và đi đọc code adapter để tự tìm cách. Ghi evidence chính là cách báo.
+ */
+export const REPORT_LINE = "Owner bảo \"báo Claude\" hoặc \"xong\" → dừng việc, ghi evidence kèm dòng Status"
+  + " (chưa xong thì Status: BLOCKED hoặc DONE_WITH_CONCERNS, nêu phần còn lại). Ghi evidence chính là báo Claude;"
+  + " không cần tìm cách nào khác. Đã ghi Status thì không làm tiếp, không sửa evidence nữa.";
 export const STATUS_LINE = "Dòng cuối evidence file phải là: Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT";
 /**
  * Phiên chat thay dòng Status: adapter app thoát ngay khi evidence có `Status:`,
@@ -444,7 +451,7 @@ export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed
       ? `Bạn là worker trong crew run ${runId}. Không được dispatch worker khác.`
       : "Bạn là worker trong một crew run. Không được dispatch worker khác.",
     `Chỉ được ghi đúng file: ${evidenceRel} (và data bạn tự sinh trong task folder).`,
-    chat ? CHAT_LINE : STATUS_LINE,
+    ...(chat ? [CHAT_LINE] : [STATUS_LINE, REPORT_LINE]),
     OWNER_CHANGE_LINE,
     OUTSIDE_BRIEF_LINE,
   ];
@@ -465,6 +472,16 @@ export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed
   const missing = lines.filter((line) => !present(line));
   if (missing.length === 0) return text;
   return `${text}\n\n${missing.join("\n")}\n`;
+}
+
+/**
+ * sha256 of the evidence as the adapter judged it. Collect compares it with the
+ * file it reads later: measured 07/10, an Anti app worker rewrote its evidence
+ * 28 seconds after the adapter had recorded the job as done, and the gate read
+ * the new version as if it were the one judged.
+ */
+export function evidenceDigest(evidenceAbs) {
+  return createHash("sha256").update(readFileSync(evidenceAbs)).digest("hex");
 }
 
 /**
@@ -496,6 +513,7 @@ export function judgeJob(evidenceAbs, { runtimeOk, runtimeDetail = null, context
     );
   }
   const evidenceBytes = statSync(evidenceAbs).size;
+  const evidenceSha256 = evidenceDigest(evidenceAbs);
   const verdict = readWorkerStatus(evidenceAbs);
 
   if (!verdict.reported && !runtimeOk) {
@@ -509,6 +527,7 @@ export function judgeJob(evidenceAbs, { runtimeOk, runtimeDetail = null, context
     status: verdict.status,
     reportedStatus: verdict.reported,
     evidenceBytes,
+    evidenceSha256,
     // Set only when the runtime disagreed with evidence that judged itself.
     runtimeVerdict: runtimeOk ? null : (runtimeDetail ?? "runtime reported failure"),
   };

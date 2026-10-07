@@ -637,6 +637,11 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs }) {
     job.status = "running";
     job.startedAt = startedAt;
     job.timeoutMs = timeoutMs;
+    // `evidenceSha256` và `reportedStatus` của lượt trước cố ý GIỮ. Xoá `reportedStatus`
+    // thì reconcile chấm job đang chạy lại theo evidence cũ của lượt trước (holds test
+    // bắt được). Xoá sha thì lượt này hết giờ rồi worker ghi muộn qua cổng exit 0, vì
+    // reconcile bỏ qua job đã có reportedStatus. Giữ sha thì ca đó bị chặn (EVIDENCE-ĐỔI);
+    // lượt này xong bình thường thì adapter ghi đè sha.
     // Vân tay `holds` lúc claim. Adapter so lại ở mọi đường thoát (xem holdsTamperPatch).
     job.holdsFingerprint = after;
     claimed = job;

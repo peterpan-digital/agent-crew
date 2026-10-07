@@ -8,6 +8,8 @@
  * wrong or could get wrong again.
  */
 import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { judgeJob } from "../scripts/crew-guards.mjs";
 import { makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
 
@@ -49,5 +51,11 @@ t.check("no Status + runtime failed", judge(noStatus, false, "codex killed: idle
 t.check("empty evidence + runtime ok", judge(empty, true), "throw:the worker created an empty evidence file");
 t.check("missing evidence + runtime ok", judge(missing, true), "throw:the worker reported success but wrote no evidence file");
 t.check("missing evidence + runtime failed", judge(missing, false, "died"), "throw:the job did not finish and left no usable evidence");
+
+// Collect so lại digest này để biết evidence có bị ghi đè sau khi chấm không.
+{
+  const v = judgeJob(done, { runtimeOk: true, context: "test" });
+  t.check("verdict mang sha256 của đúng file đã chấm", v.evidenceSha256, createHash("sha256").update(readFileSync(done)).digest("hex"));
+}
 
 process.exit(t.finish() ? 0 : 1);

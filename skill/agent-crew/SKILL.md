@@ -353,7 +353,11 @@ done
 
 **Job Anti app treo thì làm gì:** `warn` (im 5 phút) thì liếc qua; `alert` (im 10 phút)
 thì mở conversation trong app Antigravity xem kẹt ở đâu, thường là prompt permission chờ
-người bấm; `recovered` là có bước mới trở lại. Adapter **không** tự dừng job. Quyết dừng
+người bấm; `recovered` là có bước mới trở lại; `idle` là conversation đã `done` hơn 2 phút
+mà chưa có evidence. Mở conversation xem bước cuối trước: đang chờ một lệnh nền thì **để
+yên** — chen vào đúng lúc đó chính là thứ làm app không đánh thức worker nữa (đo 07/10);
+không chờ gì thì worker đã thôi lượt, nhắn nó ghi evidence hoặc dừng. Adapter **không** tự
+dừng job. Quyết dừng
 thì gửi SIGTERM vào **đúng tiến trình node** (pattern rộng hơn giết luôn shell bọc):
 `pkill -TERM -f '(^|/)node .*anti-run\.mjs.*crew-{run_id}/worker-anti-{seq}\.md'`. Job thành
 `failed`, adapter exit 1, claim lại được ngay; conversation trong app có thể vẫn chạy.
@@ -374,7 +378,9 @@ node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json"
 Một lệnh làm đủ 4 việc: reconcile manifest theo evidence trên đĩa, phán từng job,
 kiểm `evidence_path` không trùng, và kiểm phạm vi ghi. In ra bảng verdict.
 
-Gate ra exit 1 vì **runtime lệch evidence** thì đọc evidence rồi nhận trách nhiệm
+Gate ra exit 1 vì **runtime lệch evidence**, hoặc vì **evidence đổi sau khi job xong** (cờ
+`EVIDENCE-ĐỔI`: sha lúc adapter chấm khác file hiện tại; ack phải ghim sha, chép đúng
+dòng `--ack-runtime {seq}@{sha}` gate in ra), thì đọc evidence rồi nhận trách nhiệm
 bằng một câu, không phải bằng cách bỏ qua exit code:
 
 ```bash
@@ -387,7 +393,7 @@ node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json" \
 | Exit | Nghĩa | Làm gì |
 | --- | --- | --- |
 | 0 | mọi job đạt, không vi phạm phạm vi | được viết report tổng |
-| 1 | còn job `FAIL` / `STALE` / `NO_STATUS` / `BLOCKED` / `NEEDS_HUMAN` / `DEFERRED` / `RUNNING`, **hoặc** có job runtime lệch evidence chưa ai đọc | **chưa được report** — xử theo bảng verdict trước; ca runtime lệch xem `--ack-runtime` ở trên; ca `BLOCKED` vì `COST_GATE` xem mục `crew-hold` bên dưới |
+| 1 | còn job `FAIL` / `STALE` / `NO_STATUS` / `BLOCKED` / `NEEDS_HUMAN` / `DEFERRED` / `RUNNING`, **hoặc** có job runtime lệch evidence / evidence đổi sau khi xong chưa ai đọc | **chưa được report** — xử theo bảng verdict trước; ca runtime lệch hay evidence đổi xem `--ack-runtime` ở trên; ca `BLOCKED` vì `COST_GATE` xem mục `crew-hold` bên dưới |
 | 2 | trùng evidence, ghi ngoài phạm vi, ghi vào file được bảo vệ, kho credential bị đổi, hoặc holds bị sửa trong lúc job chạy | **chưa được report** — đọc danh sách file, sửa nguyên nhân |
 | 3 | **cả 1 và 2** — không phải "nặng hơn 2" | **chưa được report** — xử cả hai; sửa một bên vẫn ra exit khác 0 |
 

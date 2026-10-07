@@ -14,6 +14,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { readdirSync, renameSync, mkdirSync } from "node:fs";
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createRun, addJob, claimRunSlot, readManifest } from "../scripts/crew-manifest.mjs";
 import { resolveLogDir } from "../scripts/codex-run.mjs";
@@ -548,6 +549,8 @@ t.check("...and the message prints real CLI spellings", typo.stderr.includes("--
   t.check("...as a deletion", j.credentialTamper?.[0]?.change, "deleted");
   t.check("...naming the directory it watched", j.credentialTamper?.[0]?.dir, storeDir);
   t.check("...and carrying no digest", /[0-9a-f]{64}/.test(JSON.stringify(j.credentialTamper)), false);
+  // Thiếu dòng này ở main thì cổng "evidence đổi sau khi xong" tắt im lặng với Codex.
+  t.check("codex-run ghi sha bản evidence đã chấm", j.evidenceSha256, createHash("sha256").update(readFileSync(join(ws, ev))).digest("hex"));
 }
 
 {

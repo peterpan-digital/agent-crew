@@ -11,6 +11,7 @@ Verdict cần đọc kỹ:
 | --- | --- | --- |
 | `PASS + WARN` | evidence đạt nhưng có chỗ ghi lỗi, hoặc **không ai bảo lãnh evidence** (manifest thiếu `exitCode`/`conversationId` → file không do runtime giao; chỉ hỏi với manifest version ≥ 2) | **đọc evidence bằng mắt** rồi mới kết luận — không cho đậu im lặng, cũng không đánh fail theo runtime |
 | `PASS + WARN` **kèm exit 1** | runtime (hoặc manifest) báo fail mà evidence phán DONE. Job vẫn đạt — evidence outrank runtime — nhưng run chưa được viết report khi chưa ai đọc | đọc evidence, rồi `--ack-runtime {seq} --reason "..."`. Không có `--reason` là bị từ chối |
+| `PASS + EVIDENCE-ĐỔI` **kèm exit 1** | evidence bị ghi lại sau khi adapter chấm xong (adapter lưu `evidenceSha256`, gate so lại). Bản đang đọc không phải bản đã chấm; có thể lật một job hỏng thành đạt | đọc bản hiện tại, rồi `--ack-runtime {seq}@{sha} --reason "..."` (gate in sẵn dòng này). Không ghim sha, hoặc file đã đổi lại từ lúc gate in, là bị từ chối; đổi tiếp sau ack là chặn lại. Phiên chat (`CHAT`) và job owner đã bỏ vẫn có thể dính cờ này: worker chat ghi evidence nhiều lần là bình thường, vẫn đọc rồi ack |
 | `STALE` | job `pending`/`running` im lặng quá `timeout` của chính nó + 10 phút, không có evidence | xác nhận job chết rồi `--abandon <seq>` |
 | `RUNNING` | job còn trong ngưỡng thời gian của chính nó, chưa có evidence | chờ, chạy lại collect |
 | `NO_STATUS` | evidence có nội dung nhưng thiếu dòng `Status:` | đọc file, phán tay, không đoán |

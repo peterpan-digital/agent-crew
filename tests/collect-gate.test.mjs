@@ -14,8 +14,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createRun, addJob, updateJob, readManifest } from "../scripts/crew-manifest.mjs";
+import { createRun, addJob, claimRunSlot, updateJob, readManifest } from "../scripts/crew-manifest.mjs";
 import { collectRun, abandonJob, writeRunReport, hasSection } from "../scripts/crew-collect.mjs";
+import { evidenceDigest } from "../scripts/crew-guards.mjs";
 import { MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
 
 const CLI = join(MODULE_ROOT, "scripts", "crew-collect.mjs");
@@ -224,6 +225,93 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   const bare = (() => { try { collectRun(manifestPath, { workspace: ws, ackRuntime: [2] }); return null; }
     catch (err) { return err.message; } })();
   t.check("an ack with no reason is refused", /cần --reason/.test(bare ?? ""), true);
+}
+
+// --- evidence rewritten after the adapter judged it ------------------------
+{
+  // Đo 07/10: worker app ghi đè evidence 28 giây sau khi adapter đã chấm xong.
+  // Adapter giờ lưu sha256 lúc chấm; gate so lại và chặn tới khi có người đọc.
+  const { ws, manifestPath } = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE }] });
+  const sha = evidenceDigest(join(ws, RUN_REL, "w1.md"));
+  updateJob(manifestPath, 1, { status: "done", exitCode: 0, evidenceSha256: sha });
+  const same = collectRun(manifestPath, { workspace: ws });
+  t.check("evidence y như lúc chấm: sạch", `${same.exitCode}:${same.rows[0].flags.join(",")}`, "0:");
+
+  writeFile(join(ws, RUN_REL, "w1.md"), "work + pwd\n\nStatus: DONE\nSummary: ok\n");
+  const moved = collectRun(manifestPath, { workspace: ws });
+  t.check("evidence đổi sau khi xong: vẫn PASS theo bản mới", moved.rows[0].verdict, "PASS");
+  t.check("...gắn cờ EVIDENCE-ĐỔI", moved.rows[0].flags.join(","), "EVIDENCE-ĐỔI");
+  t.check("...và chặn tới khi có người đọc", `${moved.exitCode}:${moved.unread.map((x) => x.seq).join(",")}`, "1:1");
+  const cli = runCli(manifestPath, ["--dry-run"]);
+  t.check("CLI in mục EVIDENCE ĐỔI kèm đường dẫn", /EVIDENCE ĐỔI SAU KHI JOB XONG/.test(cli.out) && cli.out.includes("w1.md"), true);
+
+  const shaNow = evidenceDigest(join(ws, RUN_REL, "w1.md"));
+  t.check("lệnh ack in sẵn ghim sha bản vừa in", cli.out.includes(`--ack-runtime 1@${shaNow.slice(0, 12)}`), true);
+  const bare = (() => { try { collectRun(manifestPath, { workspace: ws, ackRuntime: [1], reason: "x" }); return null; } catch (e) { return e.message; } })();
+  t.check("ack không ghim sha khi evidence đổi: từ chối", /phải ghim sha/.test(bare ?? ""), true);
+
+  // Reviewer tái hiện: gate in bản v2, worker ghi v3, ack ký luôn v3 chưa ai đọc.
+  const seen = shaNow.slice(0, 12);
+  writeFile(join(ws, RUN_REL, "w1.md"), "v3 chưa ai đọc\n\nStatus: DONE\nSummary: ok\n");
+  const race = (() => { try { collectRun(manifestPath, { workspace: ws, ackRuntime: [`1@${seen}`], reason: "x" }); return null; } catch (e) { return e.message; } })();
+  t.check("ghi đè giữa lúc gate in và lúc ack: từ chối", /đã đổi lại từ lần gate in/.test(race ?? ""), true);
+  t.check("...và không ghi ack nào", (readManifest(manifestPath).runtimeAcks ?? []).length, 0);
+
+  const v3 = evidenceDigest(join(ws, RUN_REL, "w1.md")).slice(0, 12);
+  const acked = collectRun(manifestPath, { workspace: ws, ackRuntime: [`1@${v3}`], reason: "đọc bản mới, chỉ thêm kết quả pwd" });
+  t.check("ack ghim đúng sha bản hiện tại mở gate", acked.exitCode, 0);
+  t.check("CLI nhận <seq>@<sha>, từ chối sha ngắn", `${runCli(manifestPath, ["--dry-run", "--ack-runtime", `1@${v3}`, "--reason", "x"]).exit}:${runCli(manifestPath, ["--ack-runtime", "1@abc", "--reason", "x"]).exit}`, "0:2");
+  t.check("...và vẫn để cờ cho người đọc sau", acked.rows[0].flags.join(","), "EVIDENCE-ĐỔI");
+
+  // Ack gắn với bản đã đọc: sửa thêm lần nữa là một bản khác chưa ai đọc.
+  writeFile(join(ws, RUN_REL, "w1.md"), "lần ba\n\nStatus: DONE\nSummary: ok\n");
+  t.check("evidence đổi lần nữa sau ack: chặn lại", collectRun(manifestPath, { workspace: ws }).exitCode, 1);
+
+  // Ghi đè có thể biến một job adapter chấm hỏng thành đạt — vẫn phải chặn.
+  const flip = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: "chưa xong\n" }] });
+  updateJob(flip.manifestPath, 1, { status: "done_unverified", exitCode: 0, evidenceSha256: evidenceDigest(join(flip.ws, RUN_REL, "w1.md")) });
+  writeFile(join(flip.ws, RUN_REL, "w1.md"), DONE);
+  const flipped = collectRun(flip.manifestPath, { workspace: flip.ws });
+  t.check("bản ghi đè lật NO_STATUS thành PASS: chặn", `${flipped.rows[0].verdict}:${flipped.exitCode}`, "PASS:1");
+
+  // Job chưa từng có sha (manifest cũ, job ghi tay): không suy diễn.
+  const old = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, status: "done" }] });
+  t.check("job không có evidenceSha256: không cờ, không chặn", collectRun(old.manifestPath, { workspace: old.ws }).exitCode, 0);
+
+  // Một job vừa lệch runtime vừa đổi evidence: một lần ack ghi cả hai khoá.
+  const both = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, patch: { runtimeVerdict: "agy ERROR" } }] });
+  updateJob(both.manifestPath, 1, { status: "done", evidenceSha256: "0".repeat(64) });
+  t.check("lệch runtime + evidence đổi: chặn", collectRun(both.manifestPath, { workspace: both.ws }).exitCode, 1);
+  const bothSha = evidenceDigest(join(both.ws, RUN_REL, "w1.md")).slice(0, 8);
+  const bothAck = collectRun(both.manifestPath, { workspace: both.ws, ackRuntime: [`1@${bothSha}`], reason: "đọc cả hai" });
+  t.check("...một lần ack mở cả hai", `${bothAck.exitCode}:${readManifest(both.manifestPath).runtimeAcks.length}`, "0:2");
+}
+
+// --- reconcile is the judge when the adapter never was ----------------------
+{
+  // Job app hết giờ (failed, không sha), worker còn sống ghi evidence; reconcile lật
+  // sang done và phải ghim bản nó chấm, không thì lần ghi tiếp theo không ai thấy.
+  const { ws, manifestPath } = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, status: "failed", patch: { failure: "timeout", conversationId: "c" } }] });
+  collectRun(manifestPath, { workspace: ws });
+  t.check("reconcile ghim sha bản nó chấm", readManifest(manifestPath).jobs[0].evidenceSha256, evidenceDigest(join(ws, RUN_REL, "w1.md")));
+  collectRun(manifestPath, { workspace: ws, ackRuntime: [1], reason: "đọc rồi" });
+  writeFile(join(ws, RUN_REL, "w1.md"), "ghi tiếp sau ack\n\nStatus: DONE\nSummary: ok\n");
+  t.check("ghi tiếp sau ack runtime: chặn lại", collectRun(manifestPath, { workspace: ws }).exitCode, 1);
+}
+
+// --- a retry that times out, then gets late evidence -----------------------
+{
+  // Reviewer tái hiện: lượt 1 BLOCKED, claim lại, lượt 2 hết giờ, worker ghi DONE
+  // muộn. Reconcile bỏ qua (reportedStatus của lượt 1 còn đó), nên chỉ sha lượt 1
+  // giữ được cổng. Claim lại không được xoá nó.
+  const { ws, manifestPath } = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: "dừng\n\nStatus: BLOCKED\n", status: "blocked", patch: { reportedStatus: "BLOCKED", conversationId: "c" } }] });
+  updateJob(manifestPath, 1, { evidenceSha256: evidenceDigest(join(ws, RUN_REL, "w1.md")) });
+  claimRunSlot(manifestPath, 1, { startedAt: new Date().toISOString(), timeoutMs: 60_000 });
+  t.check("claim lại giữ sha + reportedStatus lượt trước", ["evidenceSha256", "reportedStatus"].every((k) => k in readManifest(manifestPath).jobs[0]), true);
+  updateJob(manifestPath, 1, { status: "failed", failure: "timeout", endedAt: new Date().toISOString() });
+  writeFile(join(ws, RUN_REL, "w1.md"), DONE);
+  const late = collectRun(manifestPath, { workspace: ws });
+  t.check("lượt retry hết giờ, evidence muộn: không qua cổng khi chưa ai đọc", late.exitCode !== 0 && late.rows[0].flags.includes("EVIDENCE-ĐỔI"), true);
 }
 
 // --- a manifest that recorded failure is the same class ---------------------

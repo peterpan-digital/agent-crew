@@ -8,7 +8,7 @@
  * size was the only thing it measured.
  */
 import { join, sep } from "node:path";
-import { appendWorkerContract, readPrompt, MAX_BRIEF_BYTES, CHAT_LINE, OUTSIDE_BRIEF_LINE, OWNER_CHANGE_LINE, STATUS_LINE } from "../scripts/crew-guards.mjs";
+import { appendWorkerContract, readPrompt, MAX_BRIEF_BYTES, CHAT_LINE, OUTSIDE_BRIEF_LINE, OWNER_CHANGE_LINE, REPORT_LINE, STATUS_LINE } from "../scripts/crew-guards.mjs";
 import { makeChecker } from "./helpers.mjs";
 
 const t = makeChecker("worker-contract");
@@ -96,6 +96,13 @@ const ctx = { evidenceAbs: EV, workspace: WS };
   t.check("chat: 4 mục evidence được nêu tên", ["Tóm tắt trao đổi", "Thay đổi từ owner", "Ghi ngoài brief", "Việc còn mở"].every((s) => CHAT_LINE.includes(`## ${s}`)), true);
   t.check("chat: vẫn có rào ghi + không dispatch", /Chỉ được ghi đúng file/.test(chat) && /Không được dispatch/.test(chat), true);
   t.check("chat: chạy lại không đổi gì", appendWorkerContract(chat, { ...ctx, chat: true }), chat);
+  // Đo 07/10: owner gõ "báo Claude" ở job thường, worker không biết nghĩa là gì và đi đọc code adapter.
+  t.check("job thường: có dòng báo Claude = ghi evidence", out.split("\n").includes(REPORT_LINE), true);
+  t.check("chat: không lặp dòng báo Claude (CHAT_LINE đã nói)", chat.split("\n").includes(REPORT_LINE), false);
+  t.check("dòng báo Claude nói rõ ghi evidence là đủ", /Ghi evidence chính là báo Claude/.test(REPORT_LINE), true);
+  // App mode thoát ngay khi thấy Status: ghi Status giữa chừng rồi làm tiếp là adapter chấm bản dở.
+  t.check("dòng báo Claude bảo dừng, việc dở thì BLOCKED/CONCERNS, ghi Status rồi thì thôi", /dừng việc/.test(REPORT_LINE) && /BLOCKED/.test(REPORT_LINE) && /không làm tiếp/.test(REPORT_LINE), true);
+  t.check("job thường chạy lại không đổi gì", appendWorkerContract(out, ctx), out);
   const pasted = appendWorkerContract(`brief\n${CHAT_LINE}`, ctx);
   t.check("brief thường lỡ chép câu chat: vẫn có dòng Status đứng riêng", pasted.split("\n").includes(STATUS_LINE), true);
 }
