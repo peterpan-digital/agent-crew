@@ -246,7 +246,7 @@ const REAL_DEPS = {
  */
 export async function runApp({
   promptText, workspace, evidenceAbs, model, title, timeout, resumeId,
-  filesMayModify = [], onConversation, onWatch,
+  filesMayModify = [], onConversation, onWatch, chat = false,
   quietWarnMs = DEFAULT_QUIET_WARN_MS, quietAlertMs = DEFAULT_QUIET_ALERT_MS,
 }, deps = {}) {
   const d = { ...REAL_DEPS, ...deps };
@@ -363,7 +363,9 @@ export async function runApp({
 
     // Chỉ báo, không dừng: Claude nhắc worker hoặc tự SIGTERM. Báo một lần mỗi đợt
     // `done`; worker dậy lại (state đổi) thì đợt sau báo lại được.
-    if (last?.state === "done" && !existsSync(evidenceAbs)) {
+    // Phiên chat: worker đứng chờ owner với conversation `done` là đúng thiết kế (đo
+    // 07/10, demo crew-261007-1853 báo idle nhầm sau 2 phút). Ngưỡng im của chat đã lo.
+    if (!chat && last?.state === "done" && !existsSync(evidenceAbs)) {
       idleSince ??= now;
       if (!idleEmitted && now - idleSince >= d.idleNoEvidenceMs) {
         idleEmitted = true;
@@ -480,7 +482,7 @@ export async function antiRun(options, deps = {}) {
     }
     return runApp({
       promptText, workspace, evidenceAbs, model: options.model, title: options.title, timeout,
-      resumeId, quietWarnMs, quietAlertMs,
+      resumeId, quietWarnMs, quietAlertMs, chat,
       filesMayModify: options.filesMayModify, onConversation: options.onConversation, onWatch: options.onWatch,
     }, deps);
   }

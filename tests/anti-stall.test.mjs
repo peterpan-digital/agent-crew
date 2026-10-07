@@ -277,6 +277,14 @@ function claimedRun() {
   t.check("idle không dừng job: vẫn tới timeout", err instanceof AntiRunError && f.clock.now - T0 >= 10 * MIN, true);
 }
 {
+  // Phiên chat: worker chờ owner với state done là bình thường → không idle.
+  const w = appWorkspace();
+  const events = [];
+  const f = fakeDeps({ statuses: () => ({ steps: 4, byStatus: { 3: 4 }, state: "done" }) });
+  try { await runApp(runOpts(w, { timeout: "6m", chat: true, quietWarnMs: 4 * MIN, quietAlertMs: 5 * MIN, onWatch: (e) => events.push(e.level) }), f.deps); } catch { /* timeout */ }
+  t.check("phiên chat done chờ owner: không idle", events.includes("idle"), false);
+}
+{
   // Chờ lệnh nền hợp lệ: done 1 phút rồi app đánh thức lại → không báo.
   const w = appWorkspace();
   const events = [];
