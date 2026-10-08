@@ -680,11 +680,14 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs, resumeId
     // Conversation của lượt trước không thuộc lượt này: để lại thì guard ở trên coi nó
     // là đang bận suốt lượt mới, và `crew-session latest` trả nó như conversation mới
     // nhất. Id cũ vào note để vẫn resume được. Ghi `resumedFrom` trong khoá để adapter
-    // thứ hai thấy ngay conversation đã có chủ; adapter ghi đè cả hai bằng giá trị thật.
-    if (job.conversationId && job.conversationId !== resumeId) {
+    // thứ hai thấy ngay conversation đã có chủ (guard so cả hai trường).
+    // `conversationId` để null tới khi runtime trả lời: collect đọc nó như bằng chứng
+    // runtime đã giao evidence, nên điền sẵn id xin resume thì job chết trước khi
+    // runtime trả lời mà có evidence viết tay sẽ qua cổng không WARN.
+    if (job.conversationId) {
       job.notes = [...(job.notes ?? []), `claim lại: lượt trước dùng conversation ${job.conversationId}`];
     }
-    job.conversationId = resumeId ?? null;
+    job.conversationId = null;
     job.resumedFrom = resumeId ?? null;
     // `evidenceSha256` và `reportedStatus` của lượt trước cố ý GIỮ. Xoá `reportedStatus`
     // thì reconcile chấm job đang chạy lại theo evidence cũ của lượt trước (holds test

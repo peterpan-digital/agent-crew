@@ -90,6 +90,8 @@ const cli = (args) => {
 
   claimRunSlot(mp, 1, { startedAt: now, timeoutMs: 60_000, resumeId: UUID_B });
   t.check("conversation rảnh → claim được, ghi resumedFrom trong khoá", readManifest(mp).jobs[0].resumedFrom, UUID_B);
+  // conversationId là bằng chứng runtime đã trả lời (collect đọc nó); claim không được điền sẵn.
+  t.check("...conversationId để null tới khi runtime trả lời", readManifest(mp).jobs[0].conversationId, null);
   const same = (() => { try { claimRunSlot(mp, 2, { startedAt: now, timeoutMs: 60_000, resumeId: UUID_B }); return null; } catch (e) { return e.message; } })();
   t.check("job thứ hai cùng run resume cùng id → từ chối nhờ resumedFrom", /đang có job 261007-0900#1/.test(same ?? ""), true);
 
