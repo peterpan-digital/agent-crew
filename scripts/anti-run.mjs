@@ -665,6 +665,8 @@ export async function main(argv, { deps = {} } = {}) {
       claimRunSlot(opts.manifest, Number(opts.job), {
         startedAt: dispatchedAt,
         timeoutMs: parseDuration(opts.timeout ?? DEFAULT_TIMEOUT),
+        // Chặn resume vào conversation đang có job sống, trong khoá manifest.
+        resumeId: typeof opts.resume === "string" && opts.resume.trim() ? opts.resume.trim() : null,
       });
       // Only a job this process actually claimed may be written by its failure
       // path. Without this, a refused second dispatch ("already running") fell

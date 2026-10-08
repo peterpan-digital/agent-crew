@@ -9,7 +9,7 @@
  */
 import {
   mkdirSync, readFileSync, writeFileSync, renameSync, rmdirSync, rmSync,
-  existsSync, statSync,
+  existsSync, statSync, readdirSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -598,7 +598,35 @@ export function updateJob(manifestPath, seq, patch) {
  * three adapters start within milliseconds of each other, all read "2 running",
  * and all four proceed.
  */
-export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs }) {
+/**
+ * Job còn sống đang giữ conversation `id`: `pending`/`running` mang `conversationId`
+ * hoặc `resumedFrom` bằng id, trong `m` (đọc trong khoá) và mọi run khác cùng thư mục
+ * `reports/` (đọc không khoá — cửa sổ đua ở đây chỉ còn vài ms, vì claim ghi
+ * `resumedFrom` ngay trong khoá). Job `running` quá timeout + grace là xác, không tính,
+ * cùng luật nhả slot bên dưới.
+ */
+export function conversationHolders(manifestPath, m, id, { exceptSeq = null, now = Date.now() } = {}) {
+  const alive = (j) => {
+    if (j.status === "pending") return true;
+    if (j.status !== "running") return false;
+    if (!j.startedAt) return true;
+    return now - Date.parse(j.startedAt) < (j.timeoutMs ?? SLOT_FALLBACK_SPAN_MS) + SLOT_STALE_GRACE_MS;
+  };
+  const holds = (j) => alive(j) && (j.conversationId === id || j.resumedFrom === id);
+  const out = m.jobs.filter((j) => j.seq !== exceptSeq && holds(j)).map((j) => ({ run: m.runId, seq: j.seq }));
+  const runDir = dirname(manifestPath);
+  const reportsDir = dirname(runDir);
+  let siblings = [];
+  try { siblings = readdirSync(reportsDir).filter((d) => d.startsWith("crew-") && join(reportsDir, d) !== runDir); } catch { /* không có reports/ thì không có run khác */ }
+  for (const d of siblings) {
+    let other;
+    try { other = readManifest(join(reportsDir, d, "manifest.json")); } catch { continue; } // run hỏng không được chặn job lành
+    for (const j of other.jobs ?? []) if (holds(j)) out.push({ run: other.runId, seq: j.seq });
+  }
+  return out;
+}
+
+export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs, resumeId = null }) {
   let claimed;
   updateManifest(manifestPath, (m) => {
     const job = m.jobs.find((j) => j.seq === seq);
@@ -616,6 +644,18 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs }) {
       const span = (j.timeoutMs ?? SLOT_FALLBACK_SPAN_MS) + SLOT_STALE_GRACE_MS;
       return now - Date.parse(j.startedAt) < span;
     });
+    // Resume vào conversation còn job sống: hai lượt chen nhau trong một conversation,
+    // và cả hai chấm chung những gì worker viết ra. Từ chối trước khi gửi gì đi. Adapter
+    // ghi job này `failed` kèm lý do (đường recordUnclaimedFailure), claim lại được ngay.
+    if (resumeId) {
+      const busy = conversationHolders(manifestPath, m, resumeId, { exceptSeq: seq, now });
+      if (busy.length) {
+        throw new ManifestError(
+          `conversation ${resumeId} đang có job ${busy.map((b) => `${b.run}#${b.seq}`).join(", ")} chạy\n` +
+          "  → chưa gửi gì cho worker; đợi job đó xong rồi bắn lại job này",
+        );
+      }
+    }
     if (live.length >= MAX_PARALLEL) {
       throw new ManifestError(
         `${live.length} jobs already running (max ${MAX_PARALLEL}): ${live.map((j) => j.seq).join(", ")}\n` +
@@ -637,6 +677,15 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs }) {
     job.status = "running";
     job.startedAt = startedAt;
     job.timeoutMs = timeoutMs;
+    // Conversation của lượt trước không thuộc lượt này: để lại thì guard ở trên coi nó
+    // là đang bận suốt lượt mới, và `crew-session latest` trả nó như conversation mới
+    // nhất. Id cũ vào note để vẫn resume được. Ghi `resumedFrom` trong khoá để adapter
+    // thứ hai thấy ngay conversation đã có chủ; adapter ghi đè cả hai bằng giá trị thật.
+    if (job.conversationId && job.conversationId !== resumeId) {
+      job.notes = [...(job.notes ?? []), `claim lại: lượt trước dùng conversation ${job.conversationId}`];
+    }
+    job.conversationId = resumeId ?? null;
+    job.resumedFrom = resumeId ?? null;
     // `evidenceSha256` và `reportedStatus` của lượt trước cố ý GIỮ. Xoá `reportedStatus`
     // thì reconcile chấm job đang chạy lại theo evidence cũ của lượt trước (holds test
     // bắt được). Xoá sha thì lượt này hết giờ rồi worker ghi muộn qua cổng exit 0, vì
