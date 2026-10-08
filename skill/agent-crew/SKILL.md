@@ -93,12 +93,13 @@ MAX_JOBS        = 6
 
 ## Bước 0 — Có nên dispatch không?
 
-Đừng dispatch cho có. Kiểm 3 câu:
+Đừng dispatch cho có. Kiểm trước:
 
 | Câu hỏi | Nếu đúng |
 | --- | --- |
+| Owner gõ `@anti`/`@codex`, muốn chat với worker? | Miễn mọi dòng dưới; đọc `references/phoi-hop-owner.md`. |
 | Request chỉ có 1 đầu việc? | Làm trực tiếp. Không tạo run. |
-| Mỗi đầu việc xử lý dưới ~30s? | Gom lại thành 1 job. Khởi động `agy` tốn 5.5s/lần. |
+| Mỗi đầu việc xử lý dưới ~30s? | Gom lại thành 1 job. Mở `agy` tốn 5.5s/lần. |
 | Cần quyết định nghiệp vụ giữa chừng? | Claude tự làm phần đó, không giao đi rồi hỏi lại. |
 
 Chỉ dispatch khi có **≥2 đầu việc khác loại**, mỗi việc viết nổi acceptance riêng.
@@ -353,35 +354,27 @@ done
 
 **Job Anti app treo thì làm gì:** `warn` (im 5 phút) thì liếc qua; `alert` (im 10 phút)
 thì mở conversation trong app Antigravity xem kẹt ở đâu, thường là prompt permission chờ
-người bấm; `recovered` là có bước mới trở lại; `idle` là conversation đã `done` hơn 2 phút
-mà chưa có evidence. Mở conversation xem bước cuối trước: đang chờ một lệnh nền thì **để
-yên** — chen vào đúng lúc đó chính là thứ làm app không đánh thức worker nữa (đo 07/10);
-không chờ gì thì worker đã thôi lượt, nhắn nó ghi evidence hoặc dừng. Adapter **không** tự
-dừng job. Quyết dừng
-thì gửi SIGTERM vào **đúng tiến trình node** (pattern rộng hơn giết luôn shell bọc):
+người bấm; `recovered` là có bước mới trở lại; `idle` (đã `done`, chưa evidence) thì đọc
+dòng "Ngủ quên" ở `references/transport-va-resume.md` **trước** khi nhắn worker. Adapter
+**không** tự dừng job. Quyết dừng thì gửi SIGTERM vào **đúng tiến trình node** (pattern rộng hơn giết luôn shell bọc):
 `pkill -TERM -f '(^|/)node .*anti-run\.mjs.*crew-{run_id}/worker-anti-{seq}\.md'`. Job thành
 `failed`, adapter exit 1, claim lại được ngay; conversation trong app có thể vẫn chạy.
 
-Lệnh terminal dài làm conversation im đúng bằng độ dài lệnh. Job biết trước có lệnh dài
-hơn 5 phút thì truyền **cả** `--quiet-warn` và `--quiet-alert` (warn < alert) lớn hơn lệnh
-đó; hai cờ chỉ có ở `--mode app`.
+Job có lệnh dài hơn 5 phút: truyền cả `--quiet-warn` và `--quiet-alert` lớn hơn lệnh đó.
 
 ## Bước 7 — Nghiệm thu
 
-Worker tự nói xong **không được tính**. Chạy gate (thêm `--dry-run` để xem nhanh mà chưa
-ghi gì; đó là toàn bộ "mode status"):
+Worker tự nói xong **không được tính**. Chạy gate (`--dry-run` để xem mà chưa ghi gì):
 
 ```bash
 node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json"
 ```
 
-Một lệnh làm đủ 4 việc: reconcile manifest theo evidence trên đĩa, phán từng job,
-kiểm `evidence_path` không trùng, và kiểm phạm vi ghi. In ra bảng verdict.
+Gate reconcile manifest theo evidence, phán từng job, kiểm trùng evidence và phạm vi ghi.
 
-Gate ra exit 1 vì **runtime lệch evidence**, hoặc vì **evidence đổi sau khi job xong** (cờ
-`EVIDENCE-ĐỔI`: sha lúc adapter chấm khác file hiện tại; ack phải ghim sha, chép đúng
-dòng `--ack-runtime {seq}@{sha}` gate in ra), thì đọc evidence rồi nhận trách nhiệm
-bằng một câu, không phải bằng cách bỏ qua exit code:
+Gate ra exit 1 vì **runtime lệch evidence** hoặc **`EVIDENCE-ĐỔI`** (evidence bị ghi lại sau
+khi chấm; chép đúng dòng `--ack-runtime {seq}@{sha}` gate in) thì đọc evidence rồi nhận
+trách nhiệm bằng một câu, không phải bằng cách bỏ qua exit code:
 
 ```bash
 node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json" \
@@ -496,5 +489,6 @@ Job fail vẫn tốn token, nên fail loudly ngay lần đầu, không retry mù
 - `references/transport-va-resume.md` — job `app`, resume, giãn dispatch, heartbeat, báo im của Anti app
 - `references/quyen-han-worker.md` — `--workspace-cli`, `--sandbox-mode`, connector, `401`, kho credential
 - `references/nghiem-thu-chi-tiet.md` — verdict đầy đủ, phạm vi ghi, retry, reconcile, hold
+- `references/phoi-hop-owner.md` — `@agent`, resume, phiên chat, review
 - `mwg-agent-crew/CUSTOMIZE.md` — danh sách đầy đủ chỗ phải điền
 - `mwg-agent-crew/routing-table.md` — phân việc, transport, model · `worker-brief.md` · `cost-gate.md`

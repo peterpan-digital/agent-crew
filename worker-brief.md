@@ -100,5 +100,15 @@ Thiếu 3 dòng này thì cổng nghiệm thu đọc job là **chưa xong**, k�
 làm đúng. Đừng kết bằng mục khác.
 ```
 
+Không viết vào brief, adapter tự nối (`appendWorkerContract`): dòng phạm vi, dòng `Status`,
+dòng "báo Claude = ghi evidence", và 2 mục evidence khi có:
+`## Thay đổi từ owner` (owner đổi mục tiêu/phạm vi trong conversation) và `## Ghi ngoài brief`
+(mọi thứ đã ghi mà brief gốc không giao, kể cả Sheet/CMS kèm URL/ID). Job `--chat on` thay
+dòng `Status` bằng biến thể chat: chỉ ghi evidence khi owner bảo, gồm 4 mục `## Tóm tắt trao
+đổi`, `## Thay đổi từ owner`, `## Ghi ngoài brief`, `## Việc còn mở`.
+
+Brief cho `@anti`/`@codex`: dòng 1 `Owner giao trực tiếp — {task}`, sau đó nguyên văn tin owner
+(quá 2 KB thì trỏ tới `owner-msg-{seq}.md`).
+
 Cách viết từng mục, và ví dụ outcome vs kê bước:
 `.claude/skills/seo-crew/references/dispatch-playbook.md`.

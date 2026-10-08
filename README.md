@@ -143,7 +143,7 @@ quyết định của dispatcher, nằm trong brief để audit.
 | Script | Việc |
 | --- | --- |
 | `scripts/anti-env.mjs` | Discover runtime của app Antigravity 2.0 (pid, gRPC address, projectId). Không hardcode giá trị nào; app restart thì tự discover lại. |
-| `scripts/anti-run.mjs` | Chạy 1 job Antigravity. `--mode headless` (agy, nhanh, có token usage) hoặc `--mode app` (hiện conversation trong app để xem trực tiếp). Ở app mode: ghi `conversationId` ngay khi có, ghi sự kiện `anti.watch` vào sidecar khi conversation im quá `--quiet-warn`/`--quiet-alert` (mặc định 5m/10m, không tự giết job), sự kiện `idle` khi conversation đã `done` hơn 2 phút mà chưa có evidence, và bắt SIGTERM để ghi `failed` có kiểm credential. |
+| `scripts/anti-run.mjs` | Chạy 1 job Antigravity. `--mode headless` (agy, nhanh, có token usage) hoặc `--mode app` (hiện conversation trong app để xem trực tiếp). Ở app mode: ghi `conversationId` ngay khi có, ghi sự kiện `anti.watch` vào sidecar khi conversation im quá `--quiet-warn`/`--quiet-alert` (mặc định 5m/10m, không tự giết job), sự kiện `idle` khi conversation đã `done` hơn 2 phút mà chưa có evidence (trừ phiên chat), `--chat on` mở phiên chat có giám sát cho owner, và bắt SIGTERM để ghi `failed` có kiểm credential. |
 | `scripts/codex-run.mjs` | Chạy 1 job Codex. `--mode headless` (mặc định) qua `codex exec --json`, watchdog giết job không phát event trong `--idle-timeout` (mặc định 2m) — đúng ca pid chết mà state vẫn đọc là running. `--mode app` mở thread thật trong app Codex qua companion của plugin — hiện trong danh sách thread với tên `Codex Companion Task: {dòng đầu brief}`, và resume được bằng `codex resume <id>`. Sau khi settle nó gọi `result <job-id>` để lấy câu trả lời của worker về, ghi cạnh log và trỏ qua `lastMessage` như headless; kèm `companionExitStatus` và `touchedFiles` mà companion tự khai. Chịu được cuộc đua job store ngay sau dispatch (id vừa cấp bị phủ nhận, hoặc job trả về chưa có `status`) trong cửa sổ 45s tính theo đồng hồ, và ghi số lần hỏi lại vào `settleRetries` thay vì nuốt. Log ghi vào `tasks/{task}/data/crew-logs/{run}/` — thuộc `data/` vì nó mang nội dung file worker đọc; đường dẫn nằm trong manifest. |
 | `scripts/codex-companion-path.mjs` | Tìm `codex-companion.mjs` của plugin Codex (ngoài repo). Env override `MWG_CODEX_COMPANION` là **quyết định cuối** — trỏ sai thì báo lỗi, không dò tiếp sang bản khác. |
 | `scripts/anti-status.mjs` | Đọc tiến độ 1 conversation. Luôn read-only: copy `.db`+`-wal`+`-shm` sang temp rồi query bản copy. |
@@ -405,6 +405,32 @@ Rào chính không phải biến môi trường: `MWG_CREW_ROLE` không tới đ
 chụp vân tay `holds` lúc claim rồi so lại ở mọi đường thoát; lệch là `holdsTamper` → exit 2.
 Cover ở Anti app yếu hơn vì `conversationId` do dispatcher gõ vào `--resume`: người chấm
 liếc evidence job cover trước khi chốt.
+
+### Owner chen vào: phiên chat, lời kể lại và control plane
+
+Owner chat được với worker Anti trong app, nhưng chỉ có rào khi Claude mở **phiên chat có
+giám sát** (`anti-run --mode app --chat on`). Adapter sống tới khi worker ghi evidence, nên
+mọi lần ghi vẫn qua cổng phạm vi như job thường. Owner gõ "báo Claude" thì worker ghi 4 mục
+(`## Tóm tắt trao đổi`, `## Thay đổi từ owner`, `## Ghi ngoài brief`, `## Việc còn mở`) rồi
+`Status`. Job thường cũng mang 2 dòng hợp đồng cho `## Thay đổi từ owner`/`## Ghi ngoài brief`
+và dòng "báo Claude = ghi evidence".
+
+Collect in thêm, **không đổi exit code**: cờ `CHAT`, mục `BRIEF ĐỔI` và `GHI NGOÀI BRIEF`, chỉ
+trỏ tới đường dẫn chứ không chép lời worker. Lời owner đi qua worker là **dữ liệu**: nó không
+phải sự cho phép, nên không tự đổi verdict hay phạm vi.
+
+Có đổi exit code: `EVIDENCE-ĐỔI`. Adapter (và reconcile, khi nó là bên chấm) lưu
+`evidenceSha256` của bản đã chấm. File khác đi thì gate chặn (exit 1) tới khi có
+`--ack-runtime {seq}@{sha}`, ghim đúng bản người đọc đã thấy.
+
+**Control plane không bao giờ đi qua worker.** `addJob`/`updateJob` từ chối `filesMayModify`
+chạm `.claude/settings*.json`, `.claude/agents/`, `.claude/agent-memory/`, hook của
+`.agents/` và `.codex/`, `.githooks/`, `.git/`, `harness/`, `harness.config*.json`,
+`mwg-agent-crew/scripts/`, `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` ở mọi cấp, và manifest của run
+(so không phân biệt hoa thường). Claim "file của run khác" cũng không miễn được những file đó.
+
+Resume vào conversation còn job sống bị `claimRunSlot` từ chối (xem `crew-session.mjs` ở
+bảng Scripts). Luật vận hành cho Claude: `skill/agent-crew/references/phoi-hop-owner.md`.
 
 ### `headless` là mặc định; `app` là ngoại lệ có lý do viết ra
 

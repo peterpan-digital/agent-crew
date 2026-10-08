@@ -97,6 +97,7 @@ Bảng này chỉ đủ để chọn đường. Luật chi tiết nằm ở `ref
 | Job `app`, resume Anti/Codex, giãn lệnh dispatch, heartbeat, báo im lặng của Anti app | `transport-va-resume.md` |
 | `--workspace-cli on`, `--sandbox-mode`, connector Google, `401`, cổng kho credential | `quyen-han-worker.md` |
 | Bảng verdict, cửa sổ phạm vi, retry, reconcile orphan, hold | `nghiem-thu-chi-tiet.md` |
+| Owner gõ `@anti`/`@codex`, resume theo manifest, phiên chat với worker, review 2 vòng | `phoi-hop-owner.md` |
 
 Nhật ký đo (vì sao các luật đó ra đời, số đo từng ngày) ở
 `docs/transport-measurements.md`. Không cần đọc để vận hành.
