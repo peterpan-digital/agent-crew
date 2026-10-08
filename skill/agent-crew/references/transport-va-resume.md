@@ -264,9 +264,9 @@ vòng poll và báo sớm, nhưng **không** tự giết job.
 | --- | --- |
 | Tín hiệu chính | Vân tay `byStatus` của chính conversation (số bước theo từng trạng thái). Chỉ đổi khi một bước của conversation đó đổi trạng thái |
 | Tín hiệu phụ | mtime mới nhất của file mà **riêng job này** khai ở `filesMayModify` (bỏ symlink, bỏ `reports/crew-*`). Chỉ được **hoãn** báo động, không được tính là có tiến triển |
-| Ngưỡng | `warn` 5 phút, `alert` 10 phút; đổi bằng `--quiet-warn`/`--quiet-alert`. `warn` phải nhỏ hơn `alert`, kể cả khi chỉ truyền một cờ (cờ kia lấy mặc định) |
+| Ngưỡng | `warn` 5 phút, `alert` 10 phút; đổi bằng `--quiet-warn`/`--quiet-alert` (chỉ `--mode app`; lệnh dài làm conversation im đúng bằng độ dài lệnh). `warn` phải nhỏ hơn `alert`, kể cả khi chỉ truyền một cờ (cờ kia lấy mặc định) |
 | Đầu ra | Mỗi lần đổi mức, một dòng JSON `{"type":"anti.watch","level","at","quietSec","conversationId"}` vào sidecar `data/crew-logs/crew-{run}/worker-anti-{seq}.anti-watch.jsonl`. `alert` còn ghi 1 note vào job, đúng một lần |
-| Ngủ quên | Conversation `done` mà chưa có evidence ≥ 2 phút → `{"level":"idle","idleSec",...}`, một lần mỗi đợt `done`, kèm 1 note vào job. Không dừng job. Không áp cho phiên chat (`--chat on`): ở đó worker chờ owner với `done` là đúng thiết kế. Đo 07/10: chen vào lúc worker chờ lệnh nền, app không đánh thức worker nữa Gặp `idle`: mở conversation xem bước cuối. Đang chờ lệnh nền thì **để yên**; không chờ gì thì worker đã thôi lượt, nhắn nó ghi evidence hoặc SIGTERM. |
+| Ngủ quên | Conversation `done` mà chưa có evidence ≥ 2 phút → `{"level":"idle","idleSec",...}`, một lần mỗi đợt `done`, kèm 1 note vào job. Không dừng job. Không áp cho phiên chat (`--chat on`): ở đó worker chờ owner với `done` là đúng thiết kế. Đo 07/10: chen vào lúc worker chờ lệnh nền, app không đánh thức worker nữa. Gặp `idle`: mở conversation xem bước cuối. Đang chờ lệnh nền thì **để yên**; không chờ gì thì worker đã thôi lượt, nhắn nó ghi evidence hoặc SIGTERM. |
 | Ghi vào manifest | `conversationId` ngay sau khi có id, **trước** vòng poll; `quietMaxSec` (khoảng im dài nhất) lúc job kết thúc, kể cả khi fail, **trừ** khi dừng bằng signal |
 | Dừng tay | SIGTERM/SIGINT vào adapter → job `failed` ("dispatcher dừng sau cảnh báo"), kiểm kho credential + vân tay holds, exit 1 |
 

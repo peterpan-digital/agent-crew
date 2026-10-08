@@ -2,7 +2,7 @@
 name: agent-crew
 description: "Điều phối nhiều worker làm việc song song: Claude làm việc cần phán đoán, Codex làm code/pipeline, Antigravity làm việc đã có rule sẵn. Dùng khi 1 request có nhiều đầu việc khác loại."
 user-invocable: true
-when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, nhờ Anti, nhờ Antigravity, crew, dispatch, làm nhiều task cùng lúc."
+when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, nhờ Anti, nhờ Antigravity, @anti, @codex, crew, dispatch, làm nhiều task cùng lúc."
 category: agent-ops
 keywords: [crew, dispatch, multi-agent, song-song, codex, antigravity, worker]
 metadata:
@@ -93,11 +93,11 @@ MAX_JOBS        = 6
 
 ## Bước 0 — Có nên dispatch không?
 
-Đừng dispatch cho có. Kiểm trước:
+Đừng dispatch cho có:
 
 | Câu hỏi | Nếu đúng |
 | --- | --- |
-| Owner gõ `@anti`/`@codex`, muốn chat với worker? | Miễn mọi dòng dưới; đọc `references/phoi-hop-owner.md`. |
+| Owner gõ `@anti`/`@codex`, hay chat với worker? | Miễn luật ≥2 đầu việc; đọc `references/phoi-hop-owner.md`. |
 | Request chỉ có 1 đầu việc? | Làm trực tiếp. Không tạo run. |
 | Mỗi đầu việc xử lý dưới ~30s? | Gom lại thành 1 job. Mở `agy` tốn 5.5s/lần. |
 | Cần quyết định nghiệp vụ giữa chừng? | Claude tự làm phần đó, không giao đi rồi hỏi lại. |
@@ -356,11 +356,11 @@ done
 thì mở conversation trong app Antigravity xem kẹt ở đâu, thường là prompt permission chờ
 người bấm; `recovered` là có bước mới trở lại; `idle` (đã `done`, chưa evidence) thì đọc
 dòng "Ngủ quên" ở `references/transport-va-resume.md` **trước** khi nhắn worker. Adapter
-**không** tự dừng job. Quyết dừng thì gửi SIGTERM vào **đúng tiến trình node** (pattern rộng hơn giết luôn shell bọc):
+**không** tự dừng job. Quyết dừng thì gửi SIGTERM vào **đúng tiến trình node** (pattern rộng giết luôn shell bọc):
 `pkill -TERM -f '(^|/)node .*anti-run\.mjs.*crew-{run_id}/worker-anti-{seq}\.md'`. Job thành
 `failed`, adapter exit 1, claim lại được ngay; conversation trong app có thể vẫn chạy.
 
-Job có lệnh dài hơn 5 phút: truyền cả `--quiet-warn` và `--quiet-alert` lớn hơn lệnh đó.
+Lệnh dài hơn 5 phút: truyền cả `--quiet-warn`, `--quiet-alert` lớn hơn lệnh đó.
 
 ## Bước 7 — Nghiệm thu
 

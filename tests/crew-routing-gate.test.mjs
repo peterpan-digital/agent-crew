@@ -79,6 +79,17 @@ const realBefore = existsSync(REAL_LOG) ? readFileSync(REAL_LOG, "utf8") : null;
   t.check("2 loại đầu việc → nhánh đủ ngưỡng", /2 loại đầu việc/.test(two.stdout), true);
 }
 
+// ------------------------------------------- @anti/@codex: owner chỉ định trực tiếp
+{
+  const anti = fire("@anti sửa bài X giúp tao");
+  t.check("@anti → nhánh mention, trỏ tới phoi-hop-owner", /chỉ định worker trực tiếp/.test(anti.stdout) && /phoi-hop-owner\.md/.test(anti.stdout), true);
+  t.check("@anti thắng câu 'một việc nhỏ thì làm trực tiếp'", /đừng dispatch cho có/.test(anti.stdout), false);
+  t.check("@codex nhận ra, kể cả prompt ngắn", /mention-codex/.test(fire("@codex x").stdout), true);
+  t.check("email có @ không bị nhầm là mention", fire("gửi mail cho a@codex.vn giúp tao nhé").stdout.trim(), "");
+  t.check("mention nhắc đợi owner khi đụng API tốn tiền", /tốn tiền/.test(fire("@anti chạy keyword research trên Ahrefs").stdout), true);
+  t.check("mention không in tên script", /anti-run|codex-run|\.mjs/.test(anti.stdout), false);
+}
+
 // --------------------------- ca quan trọng nhất: việc tốn tiền KHÔNG được gợi ý
 {
   // Mỗi câu dưới đây đều là việc Antigravity làm được, và bản gate đầu tiên đã
