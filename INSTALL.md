@@ -39,7 +39,7 @@ Skill `seo-crew` gọi script bằng đường **tương đối từ gốc works
 
 ```bash
 cd <workspace-cua-ban>
-git clone https://github.com/your-github-account/mwg-agent-crew.git mwg-agent-crew
+git clone <URL repo này> mwg-agent-crew
 mkdir -p tasks
 ```
 

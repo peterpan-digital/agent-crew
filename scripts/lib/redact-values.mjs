@@ -18,6 +18,8 @@
  * surrounding reasoning with it, which is the one thing a handoff exists to
  * carry.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 /**
  * `group: n` redacts only that capture group, so `apiKey: <value>` keeps its
@@ -31,7 +33,7 @@
  * of version strings or a minified bundle is enough to hit it, and a redactor
  * that stalls is a redactor someone disables.
  */
-export const RULES = [
+export const GENERIC_RULES = [
   // --- credentials, by shape ---
   { id: "pem-private-key", re: /-----BEGIN(?: [A-Z]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z]+)* PRIVATE KEY-----/g },
   { id: "anthropic-key", re: /\bsk-ant-[A-Za-z0-9_-]{16,}/g },
@@ -69,30 +71,98 @@ export const RULES = [
     group: 2,
   },
 
-  // --- workspace classes: nothing upstream knows these ---
-  // The public storefront (www.thegioididong.com) is the SUBJECT of this work
-  // and must survive; only the internal surfaces go. The distinction is the
-  // subdomain, never the domain: a front door stays, a back door goes.
-  //
-  // All three MWG chains are covered -- TGDĐ, Điện Máy Xanh, TopZone -- decided
-  // by the owner on 21/09, not inferred. The first pass covered only TGDĐ,
-  // which was an oversight rather than a judgement: company-email already
-  // treated dienmayxanh.com as internal, so the two rules disagreed about the
-  // same company. Over-hiding costs nothing here (the storefronts are matched
-  // by a different, surviving shape); under-hiding ships a back door to a
-  // cloud model.
-  {
-    id: "internal-host",
-    re: /\b(?:[a-z0-9-]{1,32}\.){0,3}(?:cms|staging|admin|intranet|uat|dev|portal|internal)[a-z0-9-]{0,8}\.(?:[a-z0-9-]{1,32}\.){0,2}(?:thegioididong|dienmayxanh|topzone)\.com[^\s"'<>)\]]*/gi,
-  },
-  { id: "n8n-endpoint", re: /\b(?:[a-z0-9-]{1,63}\.){0,8}(?:n8nseotgdd\.online|n8ntgdd1\.cloud)[^\s"'<>)\]]*/gi },
   // RFC1918 / link-local hosts: an internal address is internal wherever it points.
   { id: "private-net-url", re: /\bhttps?:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3})(?::\d{1,5})?[^\s"'<>)\]]*/gi },
   { id: "google-oauth-client-id", re: /\b\d{8,}-[0-9a-z]{16,}\.apps\.googleusercontent\.com\b/gi },
   { id: "google-file-id", re: /\b(docs\.google\.com\/(?:spreadsheets|document|presentation)\/d\/|drive\.google\.com\/(?:file\/d\/|drive\/folders\/))([A-Za-z0-9_-]{25,})/g, group: 2 },
   { id: "assigned-file-id", re: /\b((?:spreadsheet_?id|spreadsheetId|file_?id|fileId|folder_?id|folderId|document_?id|documentId)["']?\s*[:=]\s*["']?)([A-Za-z0-9_-]{25,})/gi, group: 2 },
-  { id: "company-email", re: /\b[A-Za-z0-9._%+-]{1,64}@(?:thegioididong\.com|mwg\.vn|dienmayxanh\.com|tgdd\.vn|topzone\.vn)\b/gi },
 ];
+
+// --- workspace classes: nothing upstream knows these ---
+// Which domains are "ours" is a fact about the workspace, not about the code, so
+// it is read from config instead of being written here: a public module that
+// names one company's back doors both leaks them and protects nobody else's.
+//
+// The public storefront is the SUBJECT of the work and must survive; only the
+// internal surfaces go. The distinction is the subdomain, never the domain: a
+// front door (`www.`) stays, a back door (`cms.`, `staging.`…) goes. Over-hiding
+// costs nothing (storefronts match a different, surviving shape); under-hiding
+// ships a back door to a cloud model.
+const BACK_DOOR_LABELS = "cms|staging|admin|intranet|uat|dev|portal|internal";
+const URL_TAIL = `[^\\s"'<>)\\]]*`;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const domainList = (v) => (Array.isArray(v) ? v : [])
+  .filter((d) => typeof d === "string" && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(d.trim()))
+  .map((d) => escapeRe(d.trim().toLowerCase()));
+
+/**
+ * Rules built from `{ internalDomains, internalHosts, emailDomains }`. Empty
+ * lists give no rule: matching "nothing configured" against every string would
+ * be a rule that can only ever be wrong.
+ *
+ *   internalDomains  storefront domains whose back-door subdomains are hidden
+ *   internalHosts    hosts hidden whole, with any subdomain (self-hosted tools)
+ *   emailDomains     company mail domains; the whole address is hidden
+ */
+export function workspaceRules({ internalDomains, internalHosts, emailDomains } = {}) {
+  const rules = [];
+  const domains = domainList(internalDomains);
+  if (domains.length) {
+    rules.push({
+      id: "internal-host",
+      re: new RegExp(`\\b(?:[a-z0-9-]{1,32}\\.){0,3}(?:${BACK_DOOR_LABELS})[a-z0-9-]{0,8}\\.(?:[a-z0-9-]{1,32}\\.){0,2}(?:${domains.join("|")})${URL_TAIL}`, "gi"),
+    });
+  }
+  const hosts = domainList(internalHosts);
+  if (hosts.length) {
+    rules.push({ id: "internal-endpoint", re: new RegExp(`\\b(?:[a-z0-9-]{1,63}\\.){0,8}(?:${hosts.join("|")})${URL_TAIL}`, "gi") });
+  }
+  const mail = domainList(emailDomains);
+  if (mail.length) {
+    rules.push({ id: "company-email", re: new RegExp(`\\b[A-Za-z0-9._%+-]{1,64}@(?:${mail.join("|")})\\b`, "gi") });
+  }
+  return rules;
+}
+
+/**
+ * Workspace config, read once at load. `CREW_HARNESS_CONFIG` names the file;
+ * otherwise it is `harness.config.json` next to the module folder (the module
+ * lives at `<workspace>/mwg-agent-crew/`). Section `redact` carries the three
+ * lists; every `<section>.origin` (CMS, n8n…) is added to `internalHosts` too,
+ * so a host configured once for the tools that call it is hidden without being
+ * listed twice. Placeholders (`<...>`) are skipped.
+ *
+ * Missing file → `configured: false` and only the generic rules run; callers
+ * that send text off the machine say so. A file that exists but does not parse
+ * throws: the export is fail-closed, and "your config is broken" must not
+ * quietly become "nothing workspace-specific is hidden".
+ */
+export function loadRedactConfig({ env = process.env, path } = {}) {
+  const file = path ?? env.CREW_HARNESS_CONFIG ?? fileURLToPath(new URL("../../../harness.config.json", import.meta.url));
+  if (!existsSync(file)) return { configured: false, path: file, lists: {} };
+  let data;
+  try {
+    data = JSON.parse(readFileSync(file, "utf8"));
+  } catch (err) {
+    throw new Error(`redact: không đọc được ${file}: ${err.message}`);
+  }
+  const r = data?.redact ?? {};
+  const origins = Object.values(data ?? {})
+    .map((section) => section?.origin)
+    .filter((o) => typeof o === "string" && !o.startsWith("<"))
+    .map((o) => { try { return new URL(o).hostname; } catch { return null; } })
+    .filter(Boolean);
+  const lists = {
+    internalDomains: r.internalDomains ?? [],
+    internalHosts: [...(r.internalHosts ?? []), ...origins],
+    emailDomains: r.emailDomains ?? [],
+  };
+  const configured = domainList(lists.internalDomains).length + domainList(lists.emailDomains).length > 0;
+  return { configured, path: file, lists };
+}
+
+export const WORKSPACE_REDACT = loadRedactConfig();
+export const RULES = [...GENERIC_RULES, ...workspaceRules(WORKSPACE_REDACT.lists)];
 
 const MASK = (id) => `[redacted:${id}]`;
 
@@ -100,11 +170,11 @@ const MASK = (id) => `[redacted:${id}]`;
  * @param {string} text
  * @returns {{ text: string, hits: Record<string, number> }}
  */
-export function redactValues(text) {
+export function redactValues(text, rules = RULES) {
   if (typeof text !== "string" || text === "") return { text: text ?? "", hits: {} };
   const hits = {};
   let out = text;
-  for (const rule of RULES) {
+  for (const rule of rules) {
     // Each rule gets a fresh regex: a /g literal carries lastIndex between
     // calls, and a shared one silently skips matches on the second string.
     const re = new RegExp(rule.re.source, rule.re.flags);
@@ -143,7 +213,7 @@ export function neutralizeControlTags(text) {
 }
 
 /** Both passes, in the order the export needs them. */
-export function sanitize(text) {
-  const { text: redacted, hits } = redactValues(text);
+export function sanitize(text, rules = RULES) {
+  const { text: redacted, hits } = redactValues(text, rules);
   return { text: neutralizeControlTags(redacted), hits };
 }

@@ -20,11 +20,25 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, statSync, renameSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { redactValues, neutralizeControlTags } from "../scripts/lib/redact-values.mjs";
+import { redactValues as redactWith, neutralizeControlTags, GENERIC_RULES, workspaceRules, loadRedactConfig } from "../scripts/lib/redact-values.mjs";
 import { MODULE_ROOT, makeChecker } from "./helpers.mjs";
 
 const t = makeChecker("session-export");
 const SCRIPT = join(MODULE_ROOT, "scripts", "claude-session-export.mjs");
+
+// Which domains count as internal comes from the workspace config, so every case
+// here runs against one fixed, fictional config: the suite then means the same
+// thing on this machine, in a public clone with no config, and in CI. Spawned
+// exporters get it through CREW_HARNESS_CONFIG.
+const FX_DIR = mkdtempSync(join(tmpdir(), "redact-cfg-"));
+const FX_CONFIG = join(FX_DIR, "harness.config.json");
+writeFileSync(FX_CONFIG, JSON.stringify({
+  cms: { origin: "https://cms.acme.example" },
+  n8n: { origin: "https://hooks.acme.test" },
+  redact: { internalDomains: ["acme.example", "beta-mart.example", "gamma.example"], internalHosts: ["flows.acme.cloud"], emailDomains: ["acme.example", "acme-corp.test"] },
+}));
+const FX_RULES = [...GENERIC_RULES, ...workspaceRules(loadRedactConfig({ path: FX_CONFIG }).lists)];
+const redactValues = (text) => redactWith(text, FX_RULES);
 
 // ---------------------------------------------------------------- redaction
 
@@ -57,28 +71,30 @@ t.check("bare-credential prose survives", bare.text.includes("nằm ngay dưới
 const PROSE = [
   "Mỗi lần chạy tốn khoảng 15k token, ngưỡng token 200000 là chạm trần.",
   "Cấu hình max_tokens=4096 và token: 15000 đều là số đếm, không phải bí mật.",
-  "Trang công khai https://www.thegioididong.com/laptop-asus phải giữ nguyên.",
+  "Trang công khai https://www.acme.example/laptop-asus phải giữ nguyên.",
   "API key nghĩa là gì thì bài viết có giải thích.",
 ].join("\n");
 const prose = redactValues(PROSE);
 t.check("LLM-token prose untouched", prose.text, PROSE);
-t.check("public storefront URL untouched", prose.text.includes("www.thegioididong.com/laptop-asus"), true);
+t.check("public storefront URL untouched", prose.text.includes("www.acme.example/laptop-asus"), true);
 
 // Workspace classes. Internal surfaces go; the public site stays.
 const WS = [
-  "Ghi vào https://cms.example.com/News/Submit?id=770589 rồi kiểm",
-  "https://staging.thegioididong.com/laptop và webhook https://n8n.example.com/webhook/abc",
+  "Ghi vào https://cms.acme.example/News/Submit?id=770589 rồi kiểm",
+  "https://staging.acme.example/laptop và webhook https://hooks.acme.test/webhook/abc",
   "https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/edit",
-  "gửi cho <extraLiterals>",
-  "nhưng https://www.thegioididong.com/laptop vẫn là trang thật.",
+  "gửi cho nguyen.van.a.123456@acme.example",
+  "và https://flows.acme.cloud/w/1, https://eu.flows.acme.cloud/w/2",
+  "nhưng https://www.acme.example/laptop vẫn là trang thật.",
 ].join("\n");
 const ws = redactValues(WS);
-t.check("internal CMS host redacted", ws.text.includes("cms.example.com"), false);
-t.check("staging host redacted", ws.text.includes("staging.thegioididong.com"), false);
-t.check("n8n endpoint redacted", ws.text.includes("n8n.example.com"), false);
+t.check("internal CMS host redacted", ws.text.includes("cms.acme.example"), false);
+t.check("staging host redacted", ws.text.includes("staging.acme.example"), false);
+t.check("tool origin from config redacted", ws.text.includes("hooks.acme.test"), false);
+t.check("listed internal host redacted, subdomains too", ws.text.includes("flows.acme.cloud"), false);
 t.check("sheet id redacted", ws.text.includes("1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"), false);
-t.check("company email redacted", ws.text.includes("<extraLiterals>"), false);
-t.check("public host kept", ws.text.includes("https://www.thegioididong.com/laptop"), true);
+t.check("company email redacted", ws.text.includes("nguyen.van.a.123456@acme.example"), false);
+t.check("public host kept", ws.text.includes("https://www.acme.example/laptop"), true);
 t.check("sheet URL prefix kept readable", ws.text.includes("docs.google.com/spreadsheets/d/[redacted"), true);
 
 // Control tags: broken, not deleted -- a reader still sees what was there.
@@ -153,7 +169,9 @@ function makeSession(kind) {
 }
 
 function run(args, opts = {}) {
-  return spawnSync("node", [SCRIPT, ...args], { encoding: "utf8", ...opts });
+  return spawnSync("node", [SCRIPT, ...args], {
+    encoding: "utf8", ...opts, env: { ...process.env, CREW_HARNESS_CONFIG: FX_CONFIG, ...(opts.env ?? {}) },
+  });
 }
 
 // --- inline session: the drop-list actually drops
@@ -292,7 +310,7 @@ function run(args, opts = {}) {
   const secrets = [
     "AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q",
     "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-    "https://cms.example.com/News/Submit?id=770589",
+    "https://cms.acme.example/News/Submit?id=770589",
   ];
   writeFileSync(p, readFileSync(p, "utf8") + JSON.stringify({
     type: "assistant", timestamp: "2026-09-21T10:07:00Z",
@@ -348,17 +366,17 @@ function run(args, opts = {}) {
   t.check("...and still writes nothing", existsSync(join(repo, "forced.md")), false);
 }
 
-// --- all three MWG chains are hidden; all three storefronts survive
+// --- every configured storefront domain is covered; every storefront survives
 {
   const backDoors = [
-    "https://cms.example.com/News/Submit",
-    "https://cms.dienmayxanh.com/x",
-    "https://uat.topzone.com/y",
+    "https://cms.acme.example/News/Submit",
+    "https://cms.beta-mart.example/x",
+    "https://uat.gamma.example/y",
   ];
   const frontDoors = [
-    "https://www.thegioididong.com/laptop-asus",
-    "https://www.dienmayxanh.com/may-lanh",
-    "https://www.topzone.vn/iphone",
+    "https://www.acme.example/laptop-asus",
+    "https://www.beta-mart.example/may-lanh",
+    "https://www.gamma.example/iphone",
   ];
   const r = redactValues([...backDoors, ...frontDoors].join("\n"));
   for (const v of backDoors) t.check(`back door hidden: ${v.slice(8, 28)}`, r.text.includes(v), false);
@@ -443,6 +461,49 @@ function run(args, opts = {}) {
   chmodSync(out, 0o644);
   run(["--session", id, "--projects-dir", root, "--out", out]);
   t.check("re-export re-tightens mode to 0600", (statSync(out).mode & 0o777).toString(8), "600");
+}
+
+// --- which domains are internal: read from config, never written in the module
+{
+  const missing = loadRedactConfig({ path: join(FX_DIR, "khong-co.json") });
+  t.check("no config: not configured", missing.configured, false);
+  t.check("no config: no workspace rule", workspaceRules(missing.lists).length, 0);
+
+  const odd = join(FX_DIR, "odd.json");
+  writeFileSync(odd, JSON.stringify({
+    cms: { origin: "<origin CMS>" },
+    n8n: { origin: "https://n8n.acme.test" },
+    redact: { internalDomains: ["", "không phải domain", "a|b.example", 42, "acme.example"], emailDomains: [] },
+  }));
+  const oddCfg = loadRedactConfig({ path: odd });
+  t.check("placeholder origin skipped, real origin added", oddCfg.lists.internalHosts.join(","), "n8n.acme.test");
+  const oddRules = workspaceRules(oddCfg.lists);
+  t.check("junk domain entries dropped, valid one kept", oddRules.find((r) => r.id === "internal-host")?.re.source.includes("(?:acme\\.example)"), true);
+  t.check("no email domains: no email rule", oddRules.some((r) => r.id === "company-email"), false);
+
+  const broken = join(FX_DIR, "broken.json");
+  writeFileSync(broken, "{ không phải json");
+  let threw = "";
+  try { loadRedactConfig({ path: broken }); } catch (err) { threw = err.message; }
+  t.check("unreadable config throws, never degrades silently", threw.includes("không đọc được"), true);
+
+  // The exporter, end to end, without and with a broken config.
+  const { root, id } = makeSession("inline");
+  const p = join(root, `${id}.jsonl`);
+  writeFileSync(p, readFileSync(p, "utf8") + JSON.stringify({
+    type: "assistant", timestamp: "2026-09-21T10:07:00Z",
+    message: { role: "assistant", content: [{ type: "text", text: "AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q ở https://cms.acme.example/x" }] },
+  }) + "\n");
+  const bare = run(["--session", id, "--projects-dir", root, "--out", join(root, "bare.md")], { env: { CREW_HARNESS_CONFIG: join(FX_DIR, "khong-co.json") } });
+  t.check("export without config still runs", bare.status, 0);
+  t.check("...and warns that internal hosts are not hidden", /chưa khai báo domain nội bộ/.test(bare.stderr), true);
+  const bareBody = readFileSync(join(root, "bare.md"), "utf8");
+  t.check("...generic shapes are still hidden", bareBody.includes("AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"), false);
+  const bad = run(["--session", id, "--projects-dir", root, "--out", join(root, "bad.md")], { env: { CREW_HARNESS_CONFIG: broken } });
+  t.check("export with a broken config refuses", bad.status !== 0, true);
+  t.check("...and writes nothing", existsSync(join(root, "bad.md")), false);
+  const ok = run(["--session", id, "--projects-dir", root, "--out", join(root, "ok.md")]);
+  t.check("export with config does not warn", /chưa khai báo/.test(ok.stderr), false);
 }
 
 process.exit(t.finish() ? 0 : 1);

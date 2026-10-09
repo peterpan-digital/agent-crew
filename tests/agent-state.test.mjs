@@ -50,8 +50,14 @@ function codexTranscript(dir, text = "Xong phần pipeline.") {
   return p;
 }
 
+// Internal domains come from the workspace config; the hook gets a fixed fictional
+// one so the suite means the same thing with or without a real config on disk.
+const REDACT_CFG = join(mkdtempSync(join(tmpdir(), "state-cfg-")), "harness.config.json");
+writeFileSync(REDACT_CFG, JSON.stringify({ redact: { internalDomains: ["acme.example"], emailDomains: ["acme.example"] } }));
 const run = (script, args, payload) =>
-  spawnSync("node", [script, ...args], { input: JSON.stringify(payload), encoding: "utf8" });
+  spawnSync("node", [script, ...args], {
+    input: JSON.stringify(payload), encoding: "utf8", env: { ...process.env, CREW_HARNESS_CONFIG: REDACT_CFG },
+  });
 
 // ------------------------------------------------------- đọc được cả hai format
 {
@@ -118,12 +124,12 @@ const run = (script, args, payload) =>
 {
   const w = ws();
   const tp = claudeTranscript(w, {
-    text: "Đã chạy với AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q trên https://cms.example.com/x",
+    text: "Đã chạy với AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q trên https://cms.acme.example/x",
   });
   run(WRITE, ["--agent", "claude", "--workspace", w], { session_id: "sec1", transcript_path: tp, cwd: w });
   const body = readFileSync(join(w, STATE_DIR_REL, readdirSync(join(w, STATE_DIR_REL))[0]), "utf8");
   t.check("key bị che", body.includes("AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"), false);
-  t.check("host nội bộ bị che", body.includes("cms.example.com"), false);
+  t.check("host nội bộ bị che", body.includes("cms.acme.example"), false);
 }
 
 // ----------------------------------------------------------- trần cỡ file

@@ -597,7 +597,15 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) { process.stdout.write(USAGE); return 0; }
 
-  const { sanitize } = await resolveRedactor();
+  const { sanitize, WORKSPACE_REDACT } = await resolveRedactor();
+  // Not a refusal: the generic shapes (keys, tokens, Drive IDs) still run. But the
+  // reader must know that this workspace's own back doors are not on the list.
+  if (WORKSPACE_REDACT && !WORKSPACE_REDACT.configured) {
+    process.stderr.write(
+      `cảnh báo: chưa khai báo domain nội bộ (mục redact trong ${WORKSPACE_REDACT.path}) — ` +
+      "host cms./staging. và email công ty sẽ KHÔNG bị che, chỉ che key/token/ID theo hình dạng\n",
+    );
+  }
   const session = resolveSession(opts, sanitize);
   const sessionDir = join(session.projectsDir, session.id);
   const subagents = loadSubagents(sessionDir);
