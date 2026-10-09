@@ -14,7 +14,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createRun, addJob, updateJob, readManifest, claimRunSlot, holdsTamperPatch, MANIFEST_VERSION } from "../scripts/crew-manifest.mjs";
 import { collectRun } from "../scripts/crew-collect.mjs";
-import { costGateKind, extractCostGateApi, holdsFingerprint, quotaApiName } from "../scripts/lib/holds.mjs";
+import { costGateKind, extractCostGateApi, holdsFingerprint, holdVerdict, quotaApiName } from "../scripts/lib/holds.mjs";
 import { FIXTURE_BIN, MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
 
 const t = makeChecker("holds");
@@ -78,6 +78,12 @@ function realShape() {
 
 // ------------------------------------------------ tên API đọc từ evidence, đã lọc
 t.check("API: lấy tên sau COST_GATE —", extractCostGateApi("COST_GATE — OpenRouter"), "OpenRouter");
+{
+  const m = { jobs: [{ seq: 1, worker: "antigravity" }] };
+  const h = { id: "h1", seq: 1, kind: "cost_gate", status: "answered", answer: { words: "bỏ job thử", outcome: "drop", via: "dispatcher" } };
+  t.check("WAIVED qua --via dispatcher không in là lời owner", holdVerdict(m, h, () => "BLOCKED").detail.includes("owner nói"), false);
+  t.check("...mà ghi rõ nguồn", holdVerdict(m, h, () => "BLOCKED").detail.includes("dispatcher ghi"), true);
+}
 // Đo 09/10: worker chép nguyên văn lý do chặn của hook vào evidence, tên API cắt ở dấu hai chấm.
 t.check("API: cắt ở dấu hai chấm", extractCostGateApi("tool call denied by pre-tool hook: COST_GATE — Ahrefs: lệnh này gọi API tốn tiền"), "Ahrefs");
 {

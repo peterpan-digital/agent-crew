@@ -311,7 +311,9 @@ export function coverHold(m, id, bySeq, now = new Date()) {
 export function holdVerdict(m, hold, verdictOf) {
   if (hold.status === "open") return { verdict: "BLOCKED", detail: `${hold.id} chờ owner: ${hold.question}` };
   if (hold.status === "deferred") return { verdict: "DEFERRED", detail: `${hold.id} hoãn tới ${hold.until}, gate vẫn chặn` };
-  const said = `owner nói: "${hold.answer?.words ?? ""}"`;
+  // `--via` khác chat (dispatcher tự bỏ một job thử chẳng hạn) thì không được in là lời owner.
+  const via = hold.answer?.via ?? "chat";
+  const said = `${via === "chat" ? "owner nói" : `${via} ghi`}: "${hold.answer?.words ?? ""}"`;
   if (hold.answer?.outcome === "drop") return { verdict: "WAIVED", detail: `${hold.id} bỏ việc này — ${said}` };
   if (hold.coveredBy == null) return { verdict: "BLOCKED", detail: `${hold.id} owner cho chạy tiếp (${said}) nhưng chưa có job cover` };
   const problem = coverProblem(m, hold, hold.coveredBy);

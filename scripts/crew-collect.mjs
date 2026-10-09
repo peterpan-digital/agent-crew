@@ -799,7 +799,7 @@ function renderHoldLines(holds) {
   if (!live.length) return "";
   const line = (h) => {
     const state = h.status === "answered"
-      ? `đã trả lời ${h.answer?.outcome}${h.coveredBy != null ? `, job ${h.coveredBy} làm tiếp` : ""}: "${h.answer?.words ?? ""}"`
+      ? `đã trả lời ${h.answer?.outcome} (qua ${h.answer?.via ?? "chat"})${h.coveredBy != null ? `, job ${h.coveredBy} làm tiếp` : ""}: "${h.answer?.words ?? ""}"`
       : h.status === "deferred" ? `hoãn tới ${h.until}` : "đang chờ";
     return `- ${h.id} (job ${h.seq}, ${h.kind}): ${h.question} — ${state}`;
   };
