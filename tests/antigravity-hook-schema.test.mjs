@@ -286,8 +286,21 @@ if (!existsSync(join(WS, ".agents"))) {
   const crewOverride = GATE(`MWG_COST_OK=1 curl https://${H.router}/api/v1/key`, { transcriptPath: crewT });
   t.check("cổng: conversation crew, có MWG_COST_OK=1 vẫn deny", crewOverride.decision, "deny");
   t.check("cổng: lý do bảo worker trả BLOCKED", /Status: BLOCKED/.test(crewOverride.reason ?? ""), true);
-  t.check("cổng: conversation owner có transcript, có override → ask",
-    D(`MWG_COST_OK=1 curl https://${H.router}/api/v1/key`, { transcriptPath: ownT }), "ask");
+  // Ngoài crew, có transcript: cờ chỉ tính khi owner gõ SAU lần bị chặn (đo 09/10 ở app: Anti tự
+  // thêm cờ trong cùng giây bị chặn, không hỏi).
+  const line = (o) => JSON.stringify(o) + "\n";
+  const denied = { step_index: 2, type: "GENERIC", status: "ERROR", error: "tool call denied by pre-tool hook: COST_GATE — OpenRouter. …" };
+  const routerOk = (transcriptPath) => D(`MWG_COST_OK=1 curl https://${H.router}/api/v1/key`, { transcriptPath });
+  t.check("cổng: owner có transcript, chưa từng bị chặn, tự thêm cờ → deny", routerOk(ownT), "deny");
+  const selfOverride = join(tdir, "self.jsonl");
+  writeFileSync(selfOverride, line({ step_index: 0, type: "USER_INPUT", content: "chạy lệnh curl openrouter" }) + line(denied));
+  t.check("cổng: bị chặn rồi tự thêm cờ, owner chưa trả lời → deny", routerOk(selfOverride), "deny");
+  t.check("cổng: lý do bảo hỏi owner, không bảo thêm cờ ngay", /hỏi owner đúng một câu/.test(GATE(`MWG_COST_OK=1 curl https://${H.router}/api/v1/key`, { transcriptPath: selfOverride }).reason ?? ""), true);
+  const answered = join(tdir, "answered.jsonl");
+  writeFileSync(answered, line({ step_index: 0, type: "USER_INPUT", content: "chạy lệnh curl openrouter" }) + line(denied)
+    + line({ step_index: 3, type: "PLANNER_RESPONSE", content: "Lệnh này gọi OpenRouter, tốn tiền. Chạy không?" })
+    + line({ step_index: 4, type: "USER_INPUT", content: "ok chạy đi" }));
+  t.check("cổng: bị chặn, hỏi, owner trả lời, có cờ → ask", routerOk(answered), "ask");
   t.check("cổng: MWG_CREW_ROLE=worker là crew dù không có transcript → deny",
     GATE(`MWG_COST_OK=1 curl https://${H.router}/api/v1/key`, {}, { ...ENV, MWG_CREW_ROLE: "worker" }).decision, "deny");
 
