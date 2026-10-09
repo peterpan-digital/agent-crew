@@ -274,6 +274,8 @@ export function coverProblem(m, hold, bySeq) {
   if (!cover) return `run không có job ${bySeq}`;
   if (cover.worker !== blocked.worker) return `job ${bySeq} là ${cover.worker}, job bị chặn là ${blocked.worker} — chỉ cùng worker mới nối được`;
   if (!(cover.seq > blocked.seq)) return `job cover (${bySeq}) phải có seq lớn hơn job bị chặn (${blocked.seq})`;
+  const replacing = (m.replacedJobs ?? []).find((r) => r.by === bySeq);
+  if (replacing) return `job ${bySeq} đã làm thay job ${replacing.seq} (--replaced) — một job chỉ thay được một việc`;
   if (cover.resumeMismatch) return `job ${bySeq} có resumeMismatch: runtime không resume đúng phiên, không phải lượt tiếp của job ${blocked.seq}`;
   const sameConv = blocked.conversationId != null && cover.conversationId === blocked.conversationId;
   const sameResume = blocked.conversationId != null && cover.resumedFrom === blocked.conversationId;

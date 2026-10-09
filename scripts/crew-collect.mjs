@@ -16,11 +16,12 @@
  */
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { resolve, dirname, relative, join } from "node:path";
-import { readManifest, updateJob, updateManifest, appendNote } from "./crew-manifest.mjs";
+import { readManifest, updateJob, updateManifest, appendNote, taskRel } from "./crew-manifest.mjs";
 import { evidenceDigest, readWorkerStatus, CREDENTIAL_STORE_DIR } from "./crew-guards.mjs";
 import { reconcileRun, resolveEvidence } from "./crew-reconcile.mjs";
 import { collectWriteScope, headMovement } from "./crew-scope.mjs";
 import { costGateKind, ensureCostGateHold, quotaApiName, extractCostGateApi, holdFor, holdVerdict, liveJobs } from "./lib/holds.mjs";
+import { buildReplacements, cleanReason, mergeReplacements, parseReplaceSpec, replacedVerdict } from "./lib/replaced-jobs.mjs";
 
 /** Report language matches the rest of the gate's output, which is Vietnamese. */
 const VI_CHANGE = { modified: "bị sửa", deleted: "bị XOÁ", created: "bị tạo mới", unreadable: "không đọc được nữa" };
@@ -70,6 +71,8 @@ const NEEDS_HUMAN = new Set(["blocked", "needs_context"]);
  * Verdicts that stop the run from being reported. DEFERRED blocks on purpose: a
  * hold put off for later that opened the gate would be a way around COST_GATE.
  * WAIVED and COVERED do not -- each needs an owner's recorded sentence to exist.
+ * REPLACED does not either: it needs a reader's recorded sentence and a later job
+ * of the same worker that passed on its own (lib/replaced-jobs.mjs).
  */
 const BLOCKING = new Set(["FAIL", "STALE", "NO_STATUS", "BLOCKED", "NEEDS_HUMAN", "RUNNING", "DEFERRED"]);
 
@@ -296,11 +299,25 @@ function costGateReason(job, workspace) {
   return { api: extractCostGateApi(text), kind: costGateKind(text) };
 }
 
-export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, now = Date.now(), notOurs = [], ackRuntime = [], reason = null } = {}) {
+export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, now = Date.now(), notOurs = [], ackRuntime = [], replaced = [], reason = null } = {}) {
   const abs = resolve(manifestPath);
   // Reconcile first: evidence on disk outranks the manifest, and a gate that
   // judged a stale manifest would fail jobs that had already finished.
   const reconciled = reconcileRun(abs, { dryRun });
+  // `--replaced` sai thì từ chối TRƯỚC mọi lần ghi khác của lệnh này: không thì một
+  // lệnh bị từ chối vẫn để lại --not-ours/--ack-runtime đã ghi. Hai lần ghi đó không
+  // đổi verdict, nên kiểm trên verdict lúc này cũng là verdict lúc ghi.
+  const digestFor = (m, w) => (seq) => {
+    const job = m.jobs.find((j) => j.seq === seq);
+    const path = job && resolveEvidence(job, w);
+    return path ? evidenceDigest(path) : null;
+  };
+  if (replaced.length) {
+    const pre = readManifest(abs);
+    const w = workspace ?? pre.workspace;
+    const preJudged = new Map(pre.jobs.map((j) => [j.seq, judgeOne(j, w, now, pre.version).verdict]));
+    buildReplacements(pre, replaced, reason, (seq) => preJudged.get(seq), digestFor(pre, w), new Date(now));
+  }
   if (notOurs.length && !dryRun) recordDismissals(abs, notOurs, reason);
   if (ackRuntime.length && !dryRun) recordRuntimeAcks(abs, ackRuntime, reason, workspace);
   let manifest = readManifest(abs);
@@ -347,6 +364,39 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
     row.holdId = hold.id;
   }
 
+  // Job FAIL có job khác làm thay. Khai mới thì kiểm trên verdict gốc rồi mới ghi;
+  // dry-run kiểm và áp trong bộ nhớ, không ghi. Mọi bản ghi được tính lại từ đầu ở
+  // mỗi lần collect, nên job thay hết PASS thì job hỏng đỏ lại.
+  const verdictOf = (seq) => judged.get(seq);
+  let replacements = manifest.replacedJobs ?? [];
+  if (replaced.length) {
+    const fresh = buildReplacements(manifest, replaced, reason, verdictOf, digestFor(manifest, ws), new Date(now));
+    if (!dryRun) {
+      updateManifest(abs, (m) => {
+        // Kiểm lại trong lock: giữa lần đọc và lần ghi có thể có job được claim.
+        buildReplacements(m, replaced, reason, verdictOf, digestFor(m, ws), new Date(now));
+        m.replacedJobs = mergeReplacements(m.replacedJobs, fresh);
+        return m;
+      });
+      manifest = readManifest(abs);
+      replacements = manifest.replacedJobs;
+    } else {
+      replacements = mergeReplacements(replacements, fresh);
+    }
+  }
+  // Bản ghi trùng seq (chỉ có được khi sửa tay manifest): bản sau cùng quyết định,
+  // và nó cũng là bản duy nhất report in ra.
+  const lastBySeq = new Map(replacements.map((e) => [e.seq, e]));
+  for (const entry of lastBySeq.values()) {
+    const v = replacedVerdict(manifest, entry, verdictOf, digestFor(manifest, ws));
+    if (!v) continue;
+    const row = rows.find((r) => r.seq === entry.seq);
+    if (!row) continue;
+    row.verdict = v.verdict;
+    row.detail = v.verdict === "REPLACED" ? v.detail : `${row.detail} — ${v.detail}`;
+    if (v.verdict === "REPLACED") row.replacedBy = { by: entry.by, reason: cleanReason(entry.reason) };
+  }
+
   const blocking = rows.some((r) => BLOCKING.has(r.verdict));
   // A runtime that recorded failure over evidence that passed used to be a WARN
   // on a run the gate still called clean, while the adapter itself had exited 3
@@ -374,7 +424,9 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   // that belongs to the owner. Nothing here can say which worker, so none is named.
   const holdsTamper = manifest.jobs
     .filter((j) => j.holdsTamper)
-    .map((j) => ({ seq: j.seq, worker: j.worker, at: j.holdsTamper.at ?? null }));
+    .map((j) => ({ seq: j.seq, worker: j.worker, at: j.holdsTamper.at ?? null,
+      // Bản ghi cũ chỉ có holds; có cờ replacedJobsChanged thì holds chỉ đổi khi có holdsChanged.
+      what: j.holdsTamper.replacedJobsChanged ? (j.holdsTamper.holdsChanged ? "holds và replacedJobs" : "replacedJobs") : "holds" }));
   const violation = scope.outOfScope.length > 0 || scope.protectedHits.length > 0
     || dupes.length > 0 || credentialTamper.length > 0 || holdsTamper.length > 0;
   // 3 is not "worse than 2" -- it is both. Folding the two into one code let a
@@ -562,8 +614,8 @@ function report(r) {
     console.log("  Worker tự đặt GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND là nguyên nhân đã xảy ra thật — xem worker-brief.md.");
   }
   if (r.holdsTamper?.length) {
-    console.log("\nHOLDS BỊ SỬA — hàng chờ quyết định đổi trong lúc job chạy, mà lúc đó chỉ có worker mới ghi được:");
-    for (const h of r.holdsTamper) console.log(`  job ${h.seq} (${h.worker}) thấy holds khác lúc claim${h.at ? `, lúc ${h.at}` : ""}`);
+    console.log("\nHOLDS BỊ SỬA — hàng chờ quyết định hoặc sổ job làm thay đổi trong lúc job chạy, mà lúc đó chỉ có worker mới ghi được:");
+    for (const h of r.holdsTamper) console.log(`  job ${h.seq} (${h.worker}) thấy ${h.what} khác lúc claim${h.at ? `, lúc ${h.at}` : ""}`);
     console.log("  Không quy được cho một worker cụ thể nếu nhiều job chạy cùng lúc. Câu trả lời trong holds KHÔNG còn đáng tin:");
     console.log("  đọc lại từng hold, và hỏi lại owner những câu đã có `answer` mà owner không nhớ đã gõ.");
   }
@@ -674,13 +726,20 @@ function report(r) {
     console.log(`  Đọc xong mà vẫn tính đạt thì chạy: --ack-runtime ${r.unread.map(spec).join(" --ack-runtime ")} --reason "..."`);
   }
 
+  const failed = r.rows.filter((x) => x.verdict === "FAIL");
+  if (failed.length) {
+    console.log(`\nJob FAIL: ${failed.map((x) => x.seq).join(", ")}. Nếu đã có job sau cùng worker làm đúng việc đó và PASS,`);
+    console.log("  đọc evidence job đó rồi chạy: --replaced <seq hỏng>=<seq làm thay> --reason \"<nó phủ đủ việc vì sao>\"");
+  }
+
   const pass = r.rows.filter((x) => x.verdict === "PASS").length;
   const warn = r.rows.filter((x) => x.flags.includes("WARN")).length;
   const cancelled = r.rows.filter((x) => x.verdict === "CANCELLED").length;
   const waived = r.rows.filter((x) => x.verdict === "WAIVED").length;
   const covered = r.rows.filter((x) => x.verdict === "COVERED").length;
+  const replaced = r.rows.filter((x) => x.verdict === "REPLACED").length;
   const counted = r.rows.length - cancelled;
-  console.log(`\n${pass}/${counted} job đạt${cancelled ? `, ${cancelled} job bỏ có chủ ý` : ""}${waived ? `, ${waived} job owner bỏ (WAIVED)` : ""}${covered ? `, ${covered} job được lượt resume làm tiếp (COVERED)` : ""}${warn ? `, ${warn} job cần đọc mắt (WARN)` : ""} — exit ${r.exitCode}`);
+  console.log(`\n${pass}/${counted} job đạt${cancelled ? `, ${cancelled} job bỏ có chủ ý` : ""}${waived ? `, ${waived} job owner bỏ (WAIVED)` : ""}${covered ? `, ${covered} job được lượt resume làm tiếp (COVERED)` : ""}${replaced ? `, ${replaced} job hỏng có job khác làm thay (REPLACED)` : ""}${warn ? `, ${warn} job cần đọc mắt (WARN)` : ""} — exit ${r.exitCode}`);
   if (r.exitCode === 1) console.log("Chưa được viết report tổng: còn job chưa xong, đang chờ quyết định, runtime lệch evidence, hoặc evidence đổi sau khi xong mà chưa ai đọc.");
   if (r.exitCode === 2) console.log("Chưa được viết report tổng: có vi phạm phạm vi ghi, trùng evidence, kho credential bị đổi hoặc holds bị sửa.");
   if (r.exitCode === 3) {
@@ -744,10 +803,11 @@ export function writeRunReport(r, manifest, { path, workspace, now = new Date() 
     );
   }
   const abs = resolve(workspace, path);
-  const wantDir = resolve(workspace, "tasks", manifest.task, "reports");
+  const task = taskRel(manifest.task);
+  const wantDir = resolve(workspace, "tasks", task, "reports");
   const rel = relative(wantDir, abs);
   if (rel.startsWith("..") || rel.includes("/")) {
-    throw new Error(`report phải nằm trực tiếp trong tasks/${manifest.task}/reports/, nhận: ${path}`);
+    throw new Error(`report phải nằm trực tiếp trong tasks/${task}/reports/, nhận: ${path}`);
   }
   // `relative()` compares strings, so it cannot see a symlink. If the reports
   // directory is a link, a name that looks like a direct child writes wherever
@@ -758,13 +818,13 @@ export function writeRunReport(r, manifest, { path, workspace, now = new Date() 
   // nothing when `wantDir` IS the symlink: both sides follow the same link and
   // agree. Resolving the task directory and then appending `reports` gives a
   // path the link cannot influence.
-  const taskDir = resolve(workspace, "tasks", manifest.task);
+  const taskDir = resolve(workspace, "tasks", task);
   if (existsSync(dirname(abs)) && existsSync(taskDir)) {
     const realDir = realpathSync(dirname(abs));
     const expected = join(realpathSync(taskDir), "reports");
     if (realDir !== expected) {
       throw new Error(
-        `thư mục report không thật nằm ở tasks/${manifest.task}/reports/ (symlink?): ${realDir}`,
+        `thư mục report không thật nằm ở tasks/${task}/reports/ (symlink?): ${realDir}`,
       );
     }
   }
@@ -784,6 +844,8 @@ export function writeRunReport(r, manifest, { path, workspace, now = new Date() 
     : "không đo (không có job Codex app)";
 
   const holdLines = renderHoldLines(manifest.holds);
+  const replacedLines = r.rows.filter((x) => x.replacedBy)
+    .map((x) => `- Job ${x.seq} hỏng, job ${x.replacedBy.by} làm thay: "${x.replacedBy.reason}"`);
   const body = `# Nghiệm thu run ${r.runId} — task ${r.task}
 
 Ngày ${now.toISOString().slice(0, 10)}. Cổng \`crew-collect\` trả exit 0.
@@ -797,7 +859,7 @@ ${jobs.join("\n")}
 - Tổng thời gian job: **${Math.floor(totalSec / 60)} phút ${totalSec % 60} giây** (${manifest.jobs.length} job)
 - Phạm vi ghi: ${r.scope.inScope.length} file trong phạm vi${r.scope.dismissed.length ? `, ${r.scope.dismissed.length} file bác bỏ có lý do` : ""}
 - HEAD trong lúc run: ${r.head.moved ? `dịch ${r.head.commits} commit — file đã commit thì cổng không thấy` : "không dịch"}
-- Runtime Codex: ${runtimeLine}${retried.length ? `\n- Cuộc đua dispatch: job ${retried.map((j) => j.seq).join(", ")} phải hỏi lại runtime (${retried.map((j) => j.settleRetries).join("/")} lần)` : ""}
+- Runtime Codex: ${runtimeLine}${replacedLines.length ? `\n${replacedLines.join("\n")}` : ""}${retried.length ? `\n- Cuộc đua dispatch: job ${retried.map((j) => j.seq).join(", ")} phải hỏi lại runtime (${retried.map((j) => j.settleRetries).join("/")} lần)` : ""}
 
 <!-- Hết khối sinh tự động. -->
 
@@ -855,7 +917,7 @@ function parseArgs(argv) {
   const withValue = new Set(["--abandon", "--grace", "--reason", "--report"]);
   // Repeatable, because dismissing four files from one stray sync should be one
   // command with one reason, not four runs of the gate.
-  const repeatable = new Set(["--not-ours", "--ack-runtime"]);
+  const repeatable = new Set(["--not-ours", "--ack-runtime", "--replaced"]);
   const opts = { flags: new Set(), values: new Map(), lists: new Map(), positional: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -878,13 +940,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (!manifestPath || opts.positional.length > 1) {
       console.error(
         "usage: crew-collect.mjs <manifest.json> [--abandon <seq>] [--grace <ms>] [--dry-run]\n" +
-        "                            [--not-ours <path>]... [--ack-runtime <seq>[@sha]]... --reason \"<vì sao>\"\n" +
+        "                            [--not-ours <path>]... [--ack-runtime <seq>[@sha]]...\n" +
+        "                            [--replaced <seq hỏng>=<seq làm thay>]... --reason \"<vì sao>\"\n" +
         "                            [--report tasks/{task}/reports/{yymmdd-hhmm}-{type}-{slug}.md]\n" +
         "exit: 0 = được report | 1 = còn job chưa xong hoặc runtime lệch evidence | 2 = vi phạm phạm vi ghi | 3 = cả 1 và 2",
       );
       process.exit(2);
     }
     const dryRun = opts.flags.has("--dry-run");
+    if (opts.values.has("--abandon") && opts.lists.has("--replaced")) {
+      // --abandon ghi trước khi gate chạy; đi chung thì một --replaced sai vẫn để lại job đã bỏ.
+      throw new Error("--abandon và --replaced chạy riêng hai lệnh: --abandon trước, rồi collect lại với --replaced");
+    }
     if (opts.values.has("--abandon")) {
       const seq = Number(opts.values.get("--abandon"));
       if (!Number.isInteger(seq)) throw new Error(`--abandon cần số seq, nhận "${opts.values.get("--abandon")}"`);
@@ -898,8 +965,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
     const notOurs = opts.lists.get("--not-ours") ?? [];
     const ackRuntime = (opts.lists.get("--ack-runtime") ?? []).map(parseAckSpec);
+    const replaced = (opts.lists.get("--replaced") ?? []).map(parseReplaceSpec);
     const r = collectRun(manifestPath, {
-      graceMs, dryRun, notOurs, ackRuntime, reason: opts.values.get("--reason") ?? null,
+      graceMs, dryRun, notOurs, ackRuntime, replaced, reason: opts.values.get("--reason") ?? null,
     });
     report(r);
     if (opts.values.has("--report")) {

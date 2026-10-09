@@ -49,6 +49,16 @@ import { isAbsolute, join, posix, relative, sep } from "node:path";
 export const DEFAULT_GRACE_MS = 120_000;
 
 /**
+ * `task` là đường TƯƠNG ĐỐI dưới `tasks/` (`260615-x` hoặc `260615-x/work-items/y`).
+ * Dispatcher hay truyền cả tiền tố `tasks/`: 7 run thật đã ghi như vậy, và gate đọc
+ * thành `tasks/tasks/...` -- mọi file trong chính task bị tính là ghi ngoài phạm vi,
+ * report không ghi được. createRun chuẩn hoá khi ghi; người đọc chuẩn hoá cho run cũ.
+ */
+export function taskRel(task) {
+  return String(task ?? "").replace(/^\.?\/+/, "").replace(/^tasks\/+/, "").replace(/\/+$/, "");
+}
+
+/**
  * The widest interval a job with no recorded end can be given. `updatedAt` is
  * unusable as the bound: the gate reconciles before it checks, which moves
  * `updatedAt` to now, so a killed job would get a window reaching the present
@@ -249,7 +259,7 @@ export function jobIntervals(manifest, graceMs = DEFAULT_GRACE_MS) {
  * which is durable and shared, not task-scoped.
  */
 export function allowedFor(manifest, seqs) {
-  const implicit = [normalizePrefix(`tasks/${manifest.task}`)];
+  const implicit = [normalizePrefix(`tasks/${taskRel(manifest.task)}`)];
   const runLevel = (manifest.filesMayModify ?? []).map(normalizePrefix);
   const perJob = manifest.jobs
     .filter((j) => seqs.includes(j.seq))

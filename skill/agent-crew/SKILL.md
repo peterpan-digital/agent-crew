@@ -394,8 +394,8 @@ node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json" \
 đầy đủ). Hay gặp: `PASS + WARN` đọc evidence bằng mắt; `RUNNING` chờ rồi collect lại;
 `SCOPE_VIOLATION` khai `filesMayModify` hoặc `--not-ours <path> --reason "..."`.
 
-`--abandon` chỉ bỏ được job `STALE`. Job đã ghi `failed` thì gate **từ chối bỏ** —
-phải xử, không được bỏ cho hết đỏ.
+`--abandon` chỉ bỏ job `STALE`. Job `failed` đã có job sau cùng worker làm lại và
+PASS: đọc evidence job đó rồi `--replaced {hỏng}={thay}`.
 
 ### Việc chờ owner quyết: `crew-hold`
 

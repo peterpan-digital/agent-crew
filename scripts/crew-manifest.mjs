@@ -13,9 +13,12 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { dirname, isAbsolute, join, normalize, sep } from "node:path";
+import { dirname, isAbsolute, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { holdsFingerprint, supersedeSeq } from "./lib/holds.mjs";
-import { controlPlaneInside, touchesControlPlane } from "./crew-scope.mjs";
+import { replacedFingerprint } from "./lib/replaced-jobs.mjs";
+import { controlPlaneInside, taskRel, touchesControlPlane } from "./crew-scope.mjs";
+
+export { taskRel };
 
 const LOCK_STALE_MS = 60_000;
 const LOCK_WAIT_MS = 10_000;
@@ -214,6 +217,10 @@ export function createRun({ runDir, runId, task, workspace, depth = 0, dispatche
   if (existsSync(manifestPath)) {
     throw new ManifestError(`run manifest already exists at ${manifestPath}`);
   }
+  const rel = taskRel(task);
+  if (!rel || isAbsolute(rel) || rel.split("/").includes("..")) {
+    throw new ManifestError(`task must be a path under tasks/ like "260615-x" or "260615-x/work-items/y", got "${task}"`);
+  }
   if (!Number.isInteger(depth) || depth < 0) {
     throw new ManifestError(`depth must be a non-negative integer, got ${depth}`);
   }
@@ -240,7 +247,7 @@ export function createRun({ runDir, runId, task, workspace, depth = 0, dispatche
     manifest: writeManifest(manifestPath, {
       version: MANIFEST_VERSION,
       runId,
-      task,
+      task: rel,
       workspace,
       dispatcher,
       depth,
@@ -358,7 +365,7 @@ function resolveRouting(job) {
  */
 const SEALED_JOB_FIELDS = new Set([
   "seq", "worker", "role", "transport", "evidence", "status", "filesMayModify",
-  "holdsFingerprint", "holdsTamper",
+  "holdsFingerprint", "holdsTamper", "replacedFingerprint",
 ]);
 
 /**
@@ -696,6 +703,10 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs, resumeId
     // lượt này xong bình thường thì adapter ghi đè sha.
     // Vân tay `holds` lúc claim. Adapter so lại ở mọi đường thoát (xem holdsTamperPatch).
     job.holdsFingerprint = after;
+    // Cùng lý do cho sổ job làm thay: `--replaced` bị từ chối khi run còn job chạy,
+    // nên mọi thay đổi `replacedJobs` giữa lúc claim và lúc thoát là của worker.
+    job.replacedFingerprint = replacedFingerprint(m.replacedJobs);
+    claimedReplaced.set(claimKey(manifestPath, seq), job.replacedFingerprint);
     claimed = job;
     return m;
   });
@@ -714,13 +725,42 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs, resumeId
  * cùng một thời điểm. Không đọc được manifest thì trả {}: lúc đó updateJob ngay
  * sau cũng sẽ lỗi và adapter báo exit 2.
  */
+/**
+ * Vân tay `replacedJobs` lúc claim, giữ trong bộ nhớ của chính adapter đã claim.
+ *
+ * Vân tay ghi trong manifest thì worker sửa được cùng lúc với danh sách (reviewer tái
+ * hiện 09/10: khai giả đủ ghim + tự tính lại vân tay → exit 0). Bản trong bộ nhớ thì
+ * worker không với tới. Chỉ làm cho `replacedJobs`: `--replaced` bị từ chối khi run còn
+ * job chạy nên giữa claim và thoát không có lần ghi hợp lệ nào. `holds` thì có (claim
+ * của job khác đóng dấu lại vân tay, xem `supersedeSeq`), nên vẫn so theo manifest.
+ * Rủi ro còn lại, chung cho mọi sổ trong manifest: worker app chạy tiếp SAU khi adapter
+ * thoát thì không còn ai so — xem lib/replaced-jobs.mjs.
+ */
+const claimedReplaced = new Map();
+const claimKey = (manifestPath, seq) => `${resolvePath(manifestPath)}#${seq}`;
+
 export function holdsTamperPatch(manifestPath, seq) {
   try {
     const m = readManifest(manifestPath);
     const job = m.jobs.find((j) => j.seq === seq);
-    if (!job?.holdsFingerprint) return {};
-    if (holdsFingerprint(m.holds) === job.holdsFingerprint) return {};
-    return { holdsTamper: { at: new Date().toISOString(), holdIdsAtExit: (m.holds ?? []).map((h) => h.id) } };
+    if (!job) return {};
+    const remembered = claimedReplaced.get(claimKey(manifestPath, seq));
+    if (!job.holdsFingerprint && !remembered) return {};
+    const holdsChanged = Boolean(job.holdsFingerprint) && holdsFingerprint(m.holds) !== job.holdsFingerprint;
+    // Có bản trong bộ nhớ thì vân tay trong manifest phải khớp nó (sửa hay xoá đều là
+    // tamper). Không có (tiến trình khác, job claim trước khi có vân tay này) thì so
+    // với manifest, hoặc không có gì để so.
+    const expected = remembered ?? job.replacedFingerprint;
+    const replacedChanged = Boolean(expected)
+      && (replacedFingerprint(m.replacedJobs) !== expected || (remembered != null && job.replacedFingerprint !== remembered));
+    if (!holdsChanged && !replacedChanged) return {};
+    return {
+      holdsTamper: {
+        at: new Date().toISOString(), holdIdsAtExit: (m.holds ?? []).map((h) => h.id),
+        ...(replacedChanged ? { replacedJobsChanged: true } : {}),
+        ...(replacedChanged && holdsChanged ? { holdsChanged: true } : {}),
+      },
+    };
   } catch {
     return {};
   }

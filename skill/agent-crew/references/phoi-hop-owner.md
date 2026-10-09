@@ -27,7 +27,7 @@ Trước khi giao, Claude **đọc lướt** và tự trả lời 4 câu:
   đủ 6 job, đã viết report tổng, hoặc có lần collect **gần nhất** exit 0. "1 run/ngày" là mặc
   định chứ không phải luật cứng: `run-for` vẫn có thể trả `new` trong ngày.
 - Run chỉ mới chạy collect `--dry-run` vẫn tính là **mở**, nên run thử bỏ dở sẽ hút job mới.
-  Đóng nó bằng collect thật, hoặc `--abandon` job chết.
+  Đóng nó bằng collect thật: `--abandon` job chết, `--replaced` job hỏng đã có job làm lại.
 - **Brief `@agent`:** dòng 1 `Owner giao trực tiếp — {task}`, sau đó là **nguyên văn** tin owner.
   **Cả brief** (kể cả dòng 1) quá 2 KB thì lưu tin vào `{RUN_DIR}/owner-msg-{seq}.md` và brief
   trỏ tới file đó. Không sanitize.

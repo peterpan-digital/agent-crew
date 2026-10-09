@@ -21,7 +21,8 @@ Verdict cần đọc kỹ:
 | `WAIVED` | job `BLOCKED` vì `COST_GATE`, owner chọn bỏ việc (`crew-hold answer --outcome drop`) | tính như đạt; report ghi câu owner nói |
 | `COVERED` | job `BLOCKED` vì `COST_GATE`, owner cho chạy tiếp và job cover đã `PASS` | tính như đạt; liếc evidence job cover nếu là Anti app (xem mục hold) |
 | `DEFERRED` | owner hoãn quyết định tới một ngày | **vẫn chặn**; tới ngày thì hỏi lại |
-| `FAIL` | adapter ghi `failed`, hoặc evidence rỗng/thiếu | đọc `failure`; permission thì sửa brief, lý do khác retry tối đa 1 lần |
+| `REPLACED` | job `FAIL` có job sau cùng worker làm lại và `PASS`, người đọc đã ghi `--replaced {hỏng}={thay} --reason` | không chặn; report ghi câu lý do. Job thay hết `PASS` thì đỏ lại |
+| `FAIL` | adapter ghi `failed`, hoặc evidence rỗng/thiếu | đọc `failure`; permission thì sửa brief, lý do khác retry tối đa 1 lần. Retry `PASS` thì `--replaced` (dưới bảng) |
 | `BLOCKED` | evidence phán `BLOCKED` | có dòng `COST_GATE` thì xử bằng `crew-hold`; không thì đọc evidence, xử nguyên nhân rồi chạy lại |
 | `NEEDS_HUMAN` | evidence phán `NEEDS_CONTEXT` | đọc evidence, bổ sung thứ worker thiếu vào brief rồi chạy lại |
 | `CANCELLED` | job đã bị bỏ (`--abandon`) | không chặn; report đếm riêng |
@@ -37,7 +38,24 @@ Chờ hết ân hạn rồi mới đụng file khác, hoặc dọn xong mọi vi
 dispatch.
 
 `--abandon` chỉ bỏ được job `STALE`. Job đã ghi `failed` thì gate **từ chối bỏ** —
-phải xử, không được bỏ cho hết đỏ.
+phải xử, không được bỏ cho hết đỏ. Đường hợp lệ duy nhất là chứng minh việc đã được làm:
+job sau **cùng worker**, seq lớn hơn, tự `PASS`, làm đúng phạm vi job hỏng (brief gọn lại,
+phiên mới đều được). Đọc evidence job đó rồi:
+
+```bash
+node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json" \
+  --replaced 1=3 --replaced 2=4 --reason "job 3/4 làm lại đủ phạm vi job 1/2, đã đọc evidence"
+```
+
+Một job thay chỉ thay được **một việc** (một job hỏng, hoặc một hold đã cover — không cả hai).
+Bản ghi nằm ở `replacedJobs` trong manifest, ghim lần chạy của hai job và sha evidence job
+thay lúc khai; tính lại mỗi lần collect. Job thay hết `PASS`, chạy lại, hoặc evidence bị ghi
+lại thì job hỏng đỏ lại — đọc bản mới rồi khai lại. Bị từ chối khi run còn job chạy; worker
+tự ghi `replacedJobs` lúc adapter còn sống thì bị bắt như `HOLDS BỊ SỬA` (exit 2), ghi sau khi
+adapter thoát (worker app) thì **không** ai bắt — thấy dòng "làm thay" trong report mà không
+nhớ đã khai thì coi là sự cố. `--abandon` và
+`--replaced` chạy hai lệnh riêng. Job `BLOCKED` không đi đường này (đi qua `crew-hold`), job
+`STALE` cũng không (`--abandon`).
 
 **File của session khác lọt vào `SCOPE_VIOLATION` thì bác có dấu vết, đừng nới ngưỡng:**
 

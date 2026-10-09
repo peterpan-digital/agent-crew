@@ -14,9 +14,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createRun, addJob, claimRunSlot, updateJob, readManifest } from "../scripts/crew-manifest.mjs";
+import { createRun, addJob, claimRunSlot, updateJob, readManifest, holdsTamperPatch } from "../scripts/crew-manifest.mjs";
 import { collectRun, abandonJob, writeRunReport, hasSection } from "../scripts/crew-collect.mjs";
 import { evidenceDigest } from "../scripts/crew-guards.mjs";
+import { replacedFingerprint } from "../scripts/lib/replaced-jobs.mjs";
 import { MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
 
 const CLI = join(MODULE_ROOT, "scripts", "crew-collect.mjs");
@@ -1384,6 +1385,286 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   const after = collectRun(manifestPath, { workspace: ws });
   t.check("a clean retry does not erase it", after.exitCode, 2);
   t.check("...and the finding is still named", after.credentialTamper[0]?.changes[0]?.file, "credentials.enc");
+}
+
+// --- a failed job a later job redid: the reader's sentence closes it, nothing else does ---
+// Four of six runs left open in early October had this shape: job 1 died with no
+// evidence, job N redid the same work and passed, and the gate had no way to say so
+// -- --abandon takes only STALE on purpose, holds only cover BLOCKED.
+{
+  const failedRun = (extra = []) => newRun({
+    jobs: [
+      { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "failed" },
+      { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), body: DONE, status: "done" },
+      ...extra,
+    ],
+  });
+  const refused = (fn) => { try { fn(); return null; } catch (err) { return err.message; } };
+
+  const { ws, manifestPath } = failedRun();
+  t.check("a failed job blocks even when a later one passed", collectRun(manifestPath, { workspace: ws }).exitCode, 1);
+  t.check("...and the table says how to close it",
+    runCli(manifestPath, ["--dry-run"]).out.includes("--replaced <seq hỏng>=<seq làm thay>"), true);
+
+  const bare = refused(() => collectRun(manifestPath, { workspace: ws, replaced: ["1=2"] }));
+  t.check("--replaced without a reason is refused", bare?.includes("--replaced cần --reason"), true);
+
+  const dry = collectRun(manifestPath, { workspace: ws, dryRun: true, replaced: ["1=2"], reason: "job 2 làm lại đủ" });
+  t.check("dry-run previews the replacement", dry.rows[0].verdict, "REPLACED");
+  t.check("...without writing it", readManifest(manifestPath).replacedJobs, undefined);
+
+  const done = collectRun(manifestPath, { workspace: ws, replaced: ["1=2"], reason: "job 2 làm lại đủ" });
+  t.check("a replaced job no longer blocks", done.exitCode, 0);
+  t.check("...and stays in the ledger as REPLACED, not gone", done.rows[0].verdict, "REPLACED");
+  t.check("...with the reason on the manifest", JSON.stringify(readManifest(manifestPath).replacedJobs.map(({ seq, by, reason }) => ({ seq, by, reason }))),
+    JSON.stringify([{ seq: 1, by: 2, reason: "job 2 làm lại đủ" }]));
+  t.check("...and on the next collect without the flag", collectRun(manifestPath, { workspace: ws }).exitCode, 0);
+
+  const rep = writeRunReport(done, readManifest(manifestPath), { path: join("tasks", TASK, "reports", "261009-0000-crew-test.md"), workspace: ws });
+  const body = readFileSync(join(ws, rep.path), "utf8");
+  t.check("the report names the replacement and the reason", body.includes('- Job 1 hỏng, job 2 làm thay: "job 2 làm lại đủ"'), true);
+
+  // Re-judged every time: the substitute losing its pass puts the failure back.
+  rmSync(join(ws, RUN_REL, "w2.md"));
+  const lost = collectRun(manifestPath, { workspace: ws });
+  t.check("the substitute losing its evidence reopens the failure", lost.rows[0].verdict, "FAIL");
+  t.check("...saying why", lost.rows[0].detail.includes("khác bản đã đọc"), true);
+  t.check("...and the run is red again", lost.exitCode, 1);
+}
+{
+  const refused = (fn) => { try { fn(); return null; } catch (err) { return err.message; } };
+  // Each refusal is a way one passing job could clear failures it never redid.
+  const { ws, manifestPath } = newRun({
+    jobs: [
+      { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "failed" },
+      { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), status: "failed" },
+      { worker: "antigravity", evidence: join(RUN_REL, "w3.md"), body: DONE, status: "done" },
+      { worker: "codex", evidence: join(RUN_REL, "w4.md"), body: DONE, status: "done" },
+      { worker: "antigravity", evidence: join(RUN_REL, "w5.md"), status: "failed" },
+    ],
+  });
+  const why = "đọc rồi";
+  t.check("a substitute that also failed is refused",
+    refused(() => collectRun(manifestPath, { workspace: ws, replaced: ["1=2"], reason: why }))?.includes("job làm thay phải PASS"), true);
+  t.check("a substitute of another worker is refused",
+    refused(() => collectRun(manifestPath, { workspace: ws, replaced: ["1=4"], reason: why }))?.includes("chỉ cùng worker"), true);
+  t.check("a substitute that ran earlier is refused",
+    refused(() => collectRun(manifestPath, { workspace: ws, replaced: ["5=3"], reason: why }))?.includes("seq lớn hơn"), true);
+  t.check("a passing job cannot be marked replaced",
+    refused(() => collectRun(manifestPath, { workspace: ws, replaced: ["3=4"], reason: why }))?.includes("chỉ job FAIL"), true);
+  t.check("one substitute for two failures in one command is refused",
+    refused(() => collectRun(manifestPath, { workspace: ws, replaced: ["1=3", "2=3"], reason: why }))?.includes("trong cùng lệnh"), true);
+  t.check("...nothing was written by the refused command", readManifest(manifestPath).replacedJobs, undefined);
+  collectRun(manifestPath, { workspace: ws, replaced: ["1=3"], reason: why });
+  t.check("...nor across two commands",
+    refused(() => collectRun(manifestPath, { workspace: ws, replaced: ["2=3"], reason: why }))?.includes("đã làm thay job 1"), true);
+  t.check("...so the run stays red on job 2", collectRun(manifestPath, { workspace: ws }).exitCode, 1);
+}
+{
+  const refused = (fn) => { try { fn(); return null; } catch (err) { return err.message; } };
+  // A dead job without evidence has its own exit (--abandon); routing it here would
+  // turn "nobody knows what happened" into "someone redid it".
+  const old = new Date(Date.now() - 3 * 3_600_000).toISOString();
+  const stale = newRun({
+    jobs: [
+      { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "running", startedAt: old, endedAt: null },
+      { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), body: DONE, status: "done" },
+    ],
+  });
+  t.check("a STALE job is pointed at --abandon instead",
+    refused(() => collectRun(stale.manifestPath, { workspace: stale.ws, replaced: ["1=2"], reason: "x" }))?.includes("--abandon"), true);
+
+  const live = newRun({
+    jobs: [
+      { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "failed" },
+      { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), body: DONE, status: "done" },
+      { worker: "antigravity", evidence: join(RUN_REL, "w3.md"), status: "running", endedAt: null },
+    ],
+  });
+  t.check("nothing is recorded while a job is still running",
+    refused(() => collectRun(live.manifestPath, { workspace: live.ws, replaced: ["1=2"], reason: "x" }))?.includes("còn job đang chạy"), true);
+
+  const cli = failedCliRun();
+  function failedCliRun() {
+    return newRun({
+      jobs: [
+        { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "failed" },
+        { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), body: DONE, status: "done" },
+      ],
+    });
+  }
+  t.check("CLI: a malformed spec exits 2", runCli(cli.manifestPath, ["--replaced", "1-2", "--reason", "x"]).exit, 2);
+  t.check("CLI: --replaced with a reason closes the run", runCli(cli.manifestPath, ["--replaced", "1=2", "--reason", "job 2 làm lại đủ"]).exit, 0);
+}
+
+// --- what the reader's sentence is pinned to, and who else can write it ---
+{
+  const refused = (fn) => { try { fn(); return null; } catch (err) { return err.message; } };
+  const pair = () => newRun({
+    jobs: [
+      { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "failed" },
+      { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), body: DONE, status: "done" },
+    ],
+  });
+
+  // A worker can write the manifest. Claim takes a fingerprint of replacedJobs and
+  // the adapter compares on exit, so an entry written mid-job is tamper (exit 2).
+  {
+    const { ws, manifestPath } = newRun({
+      jobs: [
+        { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "failed" },
+        { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), status: "pending", startedAt: null, endedAt: null },
+      ],
+    });
+    claimRunSlot(manifestPath, 2, { startedAt: new Date().toISOString(), timeoutMs: 600_000 });
+    t.check("claim fingerprints replacedJobs", typeof readManifest(manifestPath).jobs[1].replacedFingerprint, "string");
+    const m = JSON.parse(readFileSync(manifestPath, "utf8"));
+    m.replacedJobs = [{ seq: 1, by: 2, reason: "worker tự khai", at: "x" }];
+    writeFileSync(manifestPath, JSON.stringify(m));
+    writeFile(join(ws, RUN_REL, "w2.md"), DONE);
+    const patch = holdsTamperPatch(manifestPath, 2);
+    t.check("an entry forged mid-job is caught on exit", patch.holdsTamper?.replacedJobsChanged, true);
+    updateJob(manifestPath, 2, { status: "done", endedAt: new Date().toISOString(), ...patch });
+    const r = collectRun(manifestPath, { workspace: ws });
+    t.check("...the forged entry has no pinned evidence, so job 1 stays FAIL", r.rows[0].verdict, "FAIL");
+    t.check("...and the run is a violation", r.exitCode, 3);
+    t.check("...named as such", runCli(manifestPath, ["--dry-run"]).out.includes("thấy replacedJobs khác lúc claim"), true);
+  }
+  // The fingerprint in the manifest is as writable as the list. The adapter that
+  // claimed keeps its own copy, so a worker rewriting both is still caught.
+  {
+    const { ws, manifestPath } = newRun({
+      jobs: [
+        { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "failed" },
+        { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), status: "pending", startedAt: null, endedAt: null },
+      ],
+    });
+    claimRunSlot(manifestPath, 2, { startedAt: new Date().toISOString(), timeoutMs: 600_000 });
+    writeFile(join(ws, RUN_REL, "w2.md"), DONE);
+    const m = JSON.parse(readFileSync(manifestPath, "utf8"));
+    m.replacedJobs = [{ seq: 1, by: 2, reason: "worker tự khai", at: "x",
+      seqAttempt: m.jobs[0].startedAt, byAttempt: m.jobs[1].startedAt, bySha: evidenceDigest(join(ws, RUN_REL, "w2.md")) }];
+    m.jobs[1].replacedFingerprint = replacedFingerprint(m.replacedJobs);
+    writeFileSync(manifestPath, JSON.stringify(m));
+    const patch = holdsTamperPatch(manifestPath, 2);
+    t.check("a fully pinned forgery with its fingerprint rewritten is still caught", patch.holdsTamper?.replacedJobsChanged, true);
+    updateJob(manifestPath, 2, { status: "done", endedAt: new Date().toISOString(), ...patch });
+    t.check("...and the run cannot pass", collectRun(manifestPath, { workspace: ws }).exitCode, 2);
+
+    const gone = JSON.parse(readFileSync(manifestPath, "utf8"));
+    delete gone.jobs[1].replacedFingerprint;
+    delete gone.jobs[1].holdsFingerprint;
+    writeFileSync(manifestPath, JSON.stringify(gone));
+    t.check("deleting the stored fingerprints does not hide it", Boolean(holdsTamperPatch(manifestPath, 2).holdsTamper), true);
+  }
+
+  // The sentence vouches for one attempt and one evidence file, not for the seq.
+  {
+    const { ws, manifestPath } = pair();
+    collectRun(manifestPath, { workspace: ws, replaced: ["1=2"], reason: "đọc bản A" });
+    updateJob(manifestPath, 2, { startedAt: new Date(Date.now() + 5_000).toISOString() });
+    const r = collectRun(manifestPath, { workspace: ws });
+    t.check("the substitute re-run after the statement reopens the failure", r.rows[0].verdict, "FAIL");
+    t.check("...saying it ran again", r.rows[0].detail.includes("chạy lại sau lần khai"), true);
+  }
+  {
+    const { ws, manifestPath } = pair();
+    collectRun(manifestPath, { workspace: ws, replaced: ["1=2"], reason: "đọc bản A" });
+    writeFile(join(ws, RUN_REL, "w2.md"), "bản B\n\nStatus: DONE\nSummary: khác\n");
+    t.check("substitute evidence rewritten after the statement reopens the failure",
+      collectRun(manifestPath, { workspace: ws }).rows[0].verdict, "FAIL");
+  }
+
+  // One passing job, one piece of work -- across holds too.
+  {
+    const gated = "dừng\n\nStatus: BLOCKED\nConcerns/Blockers: COST_GATE — Ahrefs\n";
+    const { ws, manifestPath } = newRun({
+      jobs: [
+        { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), body: gated, status: "blocked", patch: { conversationId: "c1" } },
+        { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), status: "failed" },
+        { worker: "antigravity", evidence: join(RUN_REL, "w3.md"), body: DONE, status: "done", patch: { conversationId: "c1" } },
+      ],
+    });
+    collectRun(manifestPath, { workspace: ws });
+    const m = readManifest(manifestPath);
+    m.holds[0].status = "answered";
+    m.holds[0].answer = { words: "ok chạy tiếp", outcome: "resume", via: "chat", at: "x" };
+    m.holds[0].coveredBy = 3;
+    writeFileSync(manifestPath, JSON.stringify(m));
+    t.check("the hold cover passes on its own", collectRun(manifestPath, { workspace: ws }).rows[0].verdict, "COVERED");
+    t.check("a job that covered a hold cannot also replace a failure",
+      refused(() => collectRun(manifestPath, { workspace: ws, replaced: ["2=3"], reason: "x" }))?.includes("đã cover hold"), true);
+  }
+
+  // Refusals by verdict, each with its own way out.
+  {
+    const gated = "dừng\n\nStatus: BLOCKED\nConcerns/Blockers: COST_GATE — Ahrefs\n";
+    const { ws, manifestPath } = newRun({
+      jobs: [
+        { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), body: gated, status: "blocked" },
+        { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), body: "chưa có dòng trạng thái\n", status: "done" },
+        { worker: "antigravity", evidence: join(RUN_REL, "w3.md"), body: DONE, status: "done" },
+      ],
+    });
+    t.check("a BLOCKED job is pointed at crew-hold",
+      refused(() => collectRun(manifestPath, { workspace: ws, replaced: ["1=3"], reason: "x" }))?.includes("crew-hold"), true);
+    t.check("a NO_STATUS job is refused",
+      refused(() => collectRun(manifestPath, { workspace: ws, replaced: ["2=3"], reason: "x" }))?.includes("chỉ job FAIL"), true);
+  }
+
+  // A refused --replaced writes nothing else either.
+  {
+    const { ws, manifestPath } = newRun({
+      jobs: [
+        { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "failed" },
+        { worker: "codex", evidence: join(RUN_REL, "w2.md"), body: DONE, status: "done" },
+      ],
+    });
+    refused(() => collectRun(manifestPath, { workspace: ws, notOurs: ["x.txt"], replaced: ["1=2"], reason: "x" }));
+    t.check("a refused --replaced leaves --not-ours unwritten", readManifest(manifestPath).dismissedPaths, undefined);
+    t.check("CLI: --abandon with --replaced is refused",
+      runCli(manifestPath, ["--abandon", "1", "--replaced", "1=2", "--reason", "x"]).exit, 2);
+  }
+
+  // Hand-edited duplicates: the last entry decides, and only it reaches the report.
+  {
+    const { ws, manifestPath } = newRun({
+      jobs: [
+        { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "failed" },
+        { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), body: DONE, status: "done" },
+        { worker: "antigravity", evidence: join(RUN_REL, "w3.md"), body: DONE, status: "done" },
+      ],
+    });
+    collectRun(manifestPath, { workspace: ws, replaced: ["1=3"], reason: "job 3 làm lại" });
+    const m = readManifest(manifestPath);
+    m.replacedJobs = [{ ...m.replacedJobs[0], by: 2, reason: "bản cũ\ndòng chèn" }, m.replacedJobs[0]];
+    writeFileSync(manifestPath, JSON.stringify(m));
+    const r = collectRun(manifestPath, { workspace: ws });
+    t.check("duplicate entries: the last one decides", r.rows[0].detail.includes("job 3 làm thay"), true);
+    const rep = writeRunReport(r, readManifest(manifestPath), { path: join("tasks", TASK, "reports", "261009-0001-crew-test.md"), workspace: ws });
+    const body = readFileSync(join(ws, rep.path), "utf8");
+    t.check("...and only it is in the report", body.includes("job 2 làm thay"), false);
+  }
+}
+
+// --- `task` given with its `tasks/` prefix: seven real runs were written that way ---
+{
+  const ws = tmpWorkspace("collect-");
+  execFileSync("git", ["init", "-q"], { cwd: ws });
+  const { manifestPath } = createRun({ runDir: join(ws, RUN_REL), runId: "p", task: `tasks/${TASK}/`, workspace: ws, depth: 0 });
+  t.check("createRun stores task without the tasks/ prefix", readManifest(manifestPath).task, TASK);
+
+  // A run written before that, prefix and all: the gate must read it as the same task.
+  const legacy = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, status: "done" }] });
+  const m = readManifest(legacy.manifestPath);
+  m.task = `tasks/${TASK}`;
+  writeFileSync(legacy.manifestPath, JSON.stringify(m));
+  writeFile(join(legacy.ws, "tasks", TASK, "reports", "note.md"), "ghi trong task\n");
+  const r = collectRun(legacy.manifestPath, { workspace: legacy.ws });
+  t.check("legacy prefixed task: a write inside the task is in scope", r.scope.outOfScope.length, 0);
+  t.check("...and the run can be reported", r.exitCode, 0);
+  const rep = writeRunReport(r, readManifest(legacy.manifestPath), { path: join("tasks", TASK, "reports", "261009-0002-crew-test.md"), workspace: legacy.ws });
+  t.check("...into the task's own reports folder", rep.path, join("tasks", TASK, "reports", "261009-0002-crew-test.md"));
 }
 
 process.exit(t.finish() ? 0 : 1);

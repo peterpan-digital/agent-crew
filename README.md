@@ -196,7 +196,8 @@ node mwg-agent-crew/scripts/crew-reconcile.mjs <run>/manifest.json [--dry-run] [
 
 ```bash
 node mwg-agent-crew/scripts/crew-collect.mjs <run>/manifest.json \
-  [--abandon <seq>] [--grace <ms>] [--dry-run]
+  [--abandon <seq>] [--grace <ms>] [--dry-run] \
+  [--not-ours <path>]... [--ack-runtime <seq>[@sha]]... [--replaced <hỏng>=<thay>]... --reason "..."
 ```
 
 ```bash
@@ -512,6 +513,14 @@ thành không đọc được.
 evidence). Job mà adapter đã ghi `failed` + `failure` thì **từ chối** — nếu không,
 một cờ duy nhất biến exit 1 thành exit 0 và job chết biến khỏi mẫu số. `--dry-run`
 phủ luôn `--abandon`, vì cờ an toàn mà không phủ cờ ghi thì vô nghĩa.
+
+Job `failed` đã được làm lại thì có đường riêng, và nó không xoá gì: `--replaced 1=3
+--reason "..."` ghi vào `replacedJobs` rằng job 3 (cùng worker, seq lớn hơn, tự `PASS`)
+làm thay job 1. Job 1 thành `REPLACED`, vẫn nằm trong bảng và report. Một job thay chỉ
+thay được một việc (một job hỏng hoặc một hold cover); không cần cùng conversation vì lần
+thử lại thường là phiên mới. Bản ghi ghim `startedAt` của hai job và sha evidence job thay,
+tính lại mỗi lần collect; claim chụp vân tay `replacedJobs` để adapter bắt worker tự ghi. Trước cờ này 4/6 run để dở đầu tháng 10 không
+đóng được dù việc đã xong, chỉ vì job đầu chết rồi được bắn lại.
 
 Mọi tham số có thể tắt một phép kiểm đều bị validate, không coerce: `--grace abc`
 từng cho `to = NaN`, mọi so sánh false, toàn bộ file rơi vào "ngoài cửa sổ", và run
