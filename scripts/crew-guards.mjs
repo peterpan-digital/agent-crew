@@ -397,6 +397,22 @@ export const OWNER_CHANGE_LINE = "Owner đổi mục tiêu hoặc phạm vi gi�
 export const OUTSIDE_BRIEF_LINE = "Đã ghi hoặc cần ghi thứ brief không giao → liệt kê ở mục `## Ghi ngoài brief`:"
   + " đường dẫn ngoài task folder, hoặc Sheet/CMS kèm URL/ID. Việc brief đã giao thì không liệt kê.";
 /**
+ * Đo 09/10 trên 6 run để dở: worker ghi mục trống bằng đủ kiểu câu phủ định ("Không có.
+ * Chỉ ghi file evidence này.", "Không ghi ngoài task folder…"), và collect không phân biệt
+ * được với nội dung thật nên gắn BRIEF ĐỔI / GHI NGOÀI BRIEF ở 5/6 run. Một cờ luôn bật là
+ * cờ người ta học cách bỏ qua. Cách ghi trống phải là một chuỗi cố định.
+ */
+export const EMPTY_SECTION_LINE = "Hai mục trên mà không có gì thì ghi đúng một dòng \"Không có\" ngay dưới tiêu đề, không giải thích thêm.";
+/**
+ * Đo 05-07/10: worker Anti (chạy ở root repo, không sandbox) để nháp ra root ở 3 run — 22
+ * file script/HTML/JSON tạm. Gate bắt được nhưng chỉ SAU khi ghi, và mỗi lần phải đi dò
+ * xem là của ai. Nói chỗ để nháp trước thì worker không cần đoán.
+ */
+export function scratchLine(evidenceRel) {
+  const runDir = evidenceRel.split("/").slice(0, -1).join("/");
+  return `File nháp (script, HTML/JSON tải về, file tạm) để trong ${runDir}/data/ — không để ở root repo hay thư mục hiện tại.`;
+}
+/**
  * Đo 07/10: owner bảo "báo Claude" trong một job thường thì worker không biết làm
  * gì, và đi đọc code adapter để tự tìm cách. Ghi evidence chính là cách báo.
  */
@@ -451,9 +467,12 @@ export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed
       ? `Bạn là worker trong crew run ${runId}. Không được dispatch worker khác.`
       : "Bạn là worker trong một crew run. Không được dispatch worker khác.",
     `Chỉ được ghi đúng file: ${evidenceRel} (và data bạn tự sinh trong task folder).`,
+    ...(evidenceRel.includes("/") ? [scratchLine(evidenceRel)] : []),
     ...(chat ? [CHAT_LINE] : [STATUS_LINE, REPORT_LINE]),
     OWNER_CHANGE_LINE,
     OUTSIDE_BRIEF_LINE,
+    // CHAT_LINE đã tự dặn "không có gì thì ghi Không có" cho cả 4 mục.
+    ...(chat ? [] : [EMPTY_SECTION_LINE]),
   ];
   // Owner chốt 22/09: gộp --workspace-cli on với --sandbox-mode danger-full-access
   // KHÔNG bị cấm, vì một job cần cả trình duyệt lẫn Sheet mà phải tách đôi là trả

@@ -100,10 +100,11 @@ Thiếu 3 dòng này thì cổng nghiệm thu đọc job là **chưa xong**, k�
 làm đúng. Đừng kết bằng mục khác.
 ```
 
-Không viết vào brief, adapter tự nối (`appendWorkerContract`): dòng phạm vi, dòng cấm dispatch, dòng `Status`,
+Không viết vào brief, adapter tự nối (`appendWorkerContract`): dòng phạm vi, dòng chỗ để nháp
+(`{RUN_DIR}/data/`, không để ở root repo), dòng cấm dispatch, dòng `Status`,
 dòng "báo Claude = ghi evidence", và 2 mục evidence khi có:
 `## Thay đổi từ owner` (owner đổi mục tiêu/phạm vi trong conversation) và `## Ghi ngoài brief`
-(mọi thứ đã ghi mà brief gốc không giao, kể cả Sheet/CMS kèm URL/ID). Job `--chat on` thay
+(mọi thứ đã ghi mà brief gốc không giao, kể cả Sheet/CMS kèm URL/ID); mục trống ghi đúng "Không có". Job `--chat on` thay
 dòng `Status` và dòng "báo Claude" bằng biến thể chat: chỉ ghi evidence khi owner bảo, gồm 4 mục `## Tóm tắt trao
 đổi`, `## Thay đổi từ owner`, `## Ghi ngoài brief`, `## Việc còn mở`.
 

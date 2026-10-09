@@ -8,7 +8,7 @@
  * size was the only thing it measured.
  */
 import { join, sep } from "node:path";
-import { appendWorkerContract, readPrompt, MAX_BRIEF_BYTES, CHAT_LINE, OUTSIDE_BRIEF_LINE, OWNER_CHANGE_LINE, REPORT_LINE, STATUS_LINE } from "../scripts/crew-guards.mjs";
+import { appendWorkerContract, readPrompt, MAX_BRIEF_BYTES, CHAT_LINE, EMPTY_SECTION_LINE, OUTSIDE_BRIEF_LINE, OWNER_CHANGE_LINE, REPORT_LINE, STATUS_LINE } from "../scripts/crew-guards.mjs";
 import { makeChecker } from "./helpers.mjs";
 
 const t = makeChecker("worker-contract");
@@ -98,6 +98,13 @@ const ctx = { evidenceAbs: EV, workspace: WS };
   t.check("chat: chạy lại không đổi gì", appendWorkerContract(chat, { ...ctx, chat: true }), chat);
   // Đo 07/10: owner gõ "báo Claude" ở job thường, worker không biết nghĩa là gì và đi đọc code adapter.
   t.check("job thường: có dòng báo Claude = ghi evidence", out.split("\n").includes(REPORT_LINE), true);
+  // Đo 09/10: mục trống ghi bằng câu phủ định tự do làm collect gắn cờ nhầm ở 5/6 run.
+  t.check("job thường: dặn ghi trống bằng đúng \"Không có\"", out.split("\n").includes(EMPTY_SECTION_LINE), true);
+  t.check("chat: không lặp lời dặn đó (CHAT_LINE đã có)", `${chat.includes(EMPTY_SECTION_LINE)}:${CHAT_LINE.includes('"Không có"')}`, "false:true");
+  // Đo 05-07/10: 22 file nháp của worker Anti nằm ở root repo qua 3 run.
+  const runDir = REL.split("/").slice(0, -1).join("/");
+  t.check("có chỗ để nháp, nằm trong run dir", out.includes(`File nháp (script, HTML/JSON tải về, file tạm) để trong ${runDir}/data/`), true);
+  t.check("...và chạy lại không nhân đôi", appendWorkerContract(out, ctx), out);
   t.check("chat: không lặp dòng báo Claude (CHAT_LINE đã nói)", chat.split("\n").includes(REPORT_LINE), false);
   t.check("dòng báo Claude nói rõ ghi evidence là đủ", /Ghi evidence chính là báo Claude/.test(REPORT_LINE), true);
   // App mode thoát ngay khi thấy Status: ghi Status giữa chừng rồi làm tiếp là adapter chấm bản dở.
