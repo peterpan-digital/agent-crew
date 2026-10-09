@@ -134,7 +134,7 @@ export function hasSection(text, title) {
   // Level of the matched heading, or 0 outside it. A deeper heading ("### 10:12")
   // is a sub-part of the section; only one at the same level or higher ends it.
   let level = 0;
-  for (const line of lines) {
+  for (const [i, line] of lines.entries()) {
     const head = /^(#{1,6})\s*(.*)$/.exec(line.trim());
     if (head) {
       const depth = head[1].length;
@@ -146,7 +146,12 @@ export function hasSection(text, title) {
     }
     // Khối trạng thái cuối evidence (Status Protocol) không thuộc mục nào: "Không có" rồi ngay
     // dưới là `Concerns/Blockers: COST_GATE — …` từng bị đọc thành mục có nội dung (đo 09/10).
-    if (STATUS_VERDICT.test(line.trim()) || STATUS_BLOCK.test(line.trim())) { level = 0; continue; }
+    // Chỉ khi nó thật sự là khối CUỐI: `Summary: owner bảo bỏ tab Z` giữa mục là nội dung,
+    // và bỏ qua nó là giấu đúng thứ BRIEF ĐỔI sinh ra để báo.
+    if (STATUS_VERDICT.test(line.trim()) || (STATUS_BLOCK.test(line.trim()) && trailingStatus(lines, i))) {
+      level = 0;
+      continue;
+    }
     if (!level) continue;
     // Đường kẻ ngang `---` giữa các mục không phải nội dung.
     if (/^[-*_=]{3,}$/.test(line.trim())) continue;
@@ -174,6 +179,11 @@ function fold(s) {
   return String(s).normalize("NFC").replace(/[*_`—–]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 const STATUS_BLOCK = /^(Concerns\/Blockers|Summary):/i;
+const STATUS_LINE = /^(Status|Summary|Concerns\/Blockers):/i;
+/** Từ dòng `i` tới hết file chỉ còn dòng Status Protocol (hoặc dòng trống). */
+function trailingStatus(lines, i) {
+  return lines.slice(i).every((l) => !l.trim() || STATUS_LINE.test(l.trim()));
+}
 /** Only a real verdict line ends a section; "Status: owner đổi cột X" is content. */
 const STATUS_VERDICT = /^Status:\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)\b/;
 const EMPTY_SECTION = /^\(?((owner )?không( có)?( thay đổi| đổi)?( gì| nào)?|không có việc gì|none|n\/a|chưa có|-)\)?$/i;

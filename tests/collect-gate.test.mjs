@@ -954,6 +954,9 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
     ["## Thay đổi từ owner\n(owner bảo bỏ mục 3)", true],
     ["## Thay đổi từ owner\nKhông có\n\nConcerns/Blockers: COST_GATE — Ahrefs\nStatus: BLOCKED", false],
     ["## Thay đổi từ owner\nKhông có\nSummary: xong\nStatus: DONE", false],
+    // `Summary:`/`Concerns/Blockers:` giữa mục là nội dung, không phải khối trạng thái cuối.
+    ["## Thay đổi từ owner\nSummary: owner bảo bỏ tab Z\n\n## Việc còn mở\nKhông có\n\nStatus: DONE", true],
+    ["## Thay đổi từ owner\nConcerns/Blockers: owner đổi phạm vi\n- 10:12 owner bảo chỉ làm 20 URL đầu\n\nStatus: DONE", true],
   ];
   const wrong = cases.filter(([text, want]) => hasSection(text, T) !== want).map(([text]) => JSON.stringify(text));
   t.check(`hasSection: ${cases.length} biến thể đọc đúng`, wrong.join(" | "), "");

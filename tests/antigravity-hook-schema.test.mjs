@@ -200,54 +200,131 @@ if (!existsSync(join(WS, ".agents"))) {
   t.check("Claude: stdout vẫn rỗng", claude.stdout, "");
 
   // ------------------------------------------- cổng API tốn tiền (qua đúng lệnh trong hooks.json)
-  const GATE = (command, extra = {}) => {
+  // Host, tên key và tên script ghép lúc chạy: file này mà chứa nguyên chuỗi thì chính cổng
+  // chặn worker Anti chạy test của repo (review 09/10).
+  const H = {
+    ahrefs: ["api", "ahrefs", "com"].join("."),
+    gemini: ["generativelanguage", "googleapis", "com"].join("."),
+    openai: ["api", "openai", "com"].join("."),
+    dfs: ["api", "dataforseo", "com"].join("."),
+    router: ["openrouter", "ai"].join("."),
+  };
+  const KEY = ["OPENAI", "API", "KEY"].join("_");
+  const AF = ["ahrefs", "fetch"].join("_");
+  const GI = ["generate", "image"].join("_");
+  const BL = ["batch-llm-skill", "skill.py"].join("/");
+  const AF_PATH = `.claude/skills/seo-keyword-research/scripts/${AF}.py`;
+  const ENV = { ...process.env };
+  delete ENV.MWG_CREW_ROLE;
+  const GATE = (command, extra = {}, env = ENV) => {
     const input = JSON.stringify({ conversationId: "c1", workspacePaths: [WS], toolCall: { name: "run_command", args: { CommandLine: command, Cwd: WS } }, ...extra });
-    const r = shRun(gwsCmd.command, { ...process.env }, input);
+    const r = shRun(gwsCmd.command, env, input);
     try { return JSON.parse(r.stdout); } catch { return { decision: `stdout hỏng: ${r.stdout}` }; }
   };
-  t.check("cổng: rào GWS vẫn chạy qua hook gộp", GATE(["gws", "drive files list"].join(" ")).decision, "deny");
-  t.check("cổng: curl thẳng host Ahrefs → deny", GATE("curl -s https://api.ahrefs.com/v3/site-explorer/x").decision, "deny");
-  t.check("cổng: lý do mang đúng tên API trong bảng Cost gate", /COST_GATE — Ahrefs/.test(GATE("curl https://api.ahrefs.com/x").reason ?? ""), true);
-  t.check("cổng: chạy script skill Ahrefs → deny",
-    GATE("python3 .claude/skills/seo-keyword-research/scripts/ahrefs_fetch.py --keywords x").decision, "deny");
-  t.check("cổng: chỉ đọc script đó → ask", GATE("cat .claude/skills/seo-keyword-research/scripts/ahrefs_fetch.py").decision, "ask");
-  t.check("cổng: đọc SKILL.md skill ảnh → ask", GATE("cat .claude/skills/image-seo-pipeline/SKILL.md").decision, "ask");
-  t.check("cổng: đọc key từ .env → deny", GATE("grep OPENAI_API_KEY .env").decision, "deny");
-  t.check("cổng: python -c gọi Gemini → deny",
-    GATE(`python3 -c "import requests; requests.post('https://generativelanguage.googleapis.com/v1beta/x')"`).decision, "deny");
-  t.check("cổng: crawl web thường → ask", GATE("curl -sI https://www.thegioididong.com/laptop").decision, "ask");
-  t.check("cổng: lệnh thường → ask", GATE("ls -la").decision, "ask");
+  const D = (command, extra) => GATE(command, extra).decision;
+  t.check("cổng: rào GWS vẫn chạy qua hook gộp", D(["gws", "drive files list"].join(" ")), "deny");
+  t.check("cổng: curl thẳng host Ahrefs → deny", D(`curl -s https://${H.ahrefs}/v3/site-explorer/x`), "deny");
+  t.check("cổng: lý do mang đúng tên API trong bảng Cost gate", /COST_GATE — Ahrefs/.test(GATE(`curl https://${H.ahrefs}/x`).reason ?? ""), true);
+  t.check("cổng: chạy script skill Ahrefs → deny", D(`python3 ${AF_PATH} matching --seeds x`), "deny");
+  t.check("cổng: chỉ đọc script đó → ask", D(`cat ${AF_PATH}`), "ask");
+  t.check("cổng: đọc SKILL.md skill ảnh → ask", D("cat .claude/skills/image-seo-pipeline/SKILL.md"), "ask");
+  t.check("cổng: python -c gọi Gemini → deny", D(`python3 -c "import requests; requests.post('https://${H.gemini}/v1beta/x')"`), "deny");
+  t.check("cổng: crawl web thường → ask", D("curl -sI https://www.thegioididong.com/laptop"), "ask");
+  t.check("cổng: lệnh thường → ask", D("ls -la"), "ask");
   t.check("cổng: KHÔNG BAO GIỜ allow",
-    ["ls", "curl https://api.openai.com/v1/x", "MWG_COST_OK=1 curl https://openrouter.ai/api/v1/x"].some((c) => GATE(c).decision === "allow"), false);
+    ["ls", `curl https://${H.openai}/v1/x`, `MWG_COST_OK=1 curl https://${H.router}/api/v1/x`].some((c) => D(c) === "allow"), false);
 
-  // Worker ghi script rồi chạy: lệnh không có host, nội dung script thì có.
+  // Cách gọi thật thà mà regex cũ để lọt.
+  t.check("cổng: đường script trong ngoặc kép → deny", D(`python3 "${AF_PATH}" matching --seeds x`), "deny");
+  t.check("cổng: cd vào skill rồi đường tương đối → deny",
+    D(`cd .claude/skills/seo-keyword-research/scripts && python3 ${AF}.py matching --seeds x`), "deny");
+  t.check("cổng: cd vào batch-llm-skill rồi python3 skill.py → deny",
+    D("cd .claude/skills/batch-llm-skill && python3 skill.py --file a.csv --goal x"), "deny");
+  t.check("cổng: cờ có giá trị trước script (-X utf8) → deny", D(`python3 -X utf8 ${AF_PATH} matching --seeds x`), "deny");
+  t.check("cổng: uv run --with … script → deny", D(`uv run --with requests ${AF_PATH} matching --seeds x`), "deny");
+  t.check("cổng: python -m module skill → deny", D(`cd .claude/skills/seo-keyword-research && python3 -m scripts.${AF} matching`), "deny");
+  t.check("cổng: python -c import module skill → deny", D(`python3 -c "import ${AF}; ${AF}.main()"`), "deny");
+  t.check("cổng: heredoc import module ảnh → deny", D(`python3 - <<'PY'\nfrom ${GI} import run\nrun()\nPY`), "deny");
+  t.check("cổng: curl … | jq vẫn thấy host → deny", D(`curl -s https://${H.dfs}/v3/x | jq .`), "deny");
+
+  // Việc miễn phí trước đây bị chặn nhầm.
+  t.check("cổng: grep tên key trong repo → ask", D(`grep -rn ${KEY} .claude/skills`), "ask");
+  t.check("cổng: grep host trong repo → ask", D(`grep -rn "${H.ahrefs}" .`), "ask");
+  t.check("cổng: git commit nhắc tên key → ask", D(`git commit -m "doc: ${KEY} đọc từ .env"`), "ask");
+  t.check("cổng: ước tính units Ahrefs (offline) → ask", D(`python3 ${AF_PATH} estimate --limit 50`), "ask");
+  t.check("cổng: batch LLM --dry-run → ask", D(`python3 .claude/skills/${BL} --file a.csv --dry-run`), "ask");
+  t.check("cổng: bước miễn phí skill ảnh (fetch_prompt_config) → ask",
+    D("python3 .claude/skills/image-ai-generate/scripts/fetch_prompt_config.py --row 2"), "ask");
+  t.check("cổng: đọc docs openrouter → ask", D(`curl -sI https://${H.router}/docs`), "ask");
+  t.check("cổng: chạy chính test này → ask", D("node mwg-agent-crew/tests/antigravity-hook-schema.test.mjs"), "ask");
+
+  // Worker ghi script rồi chạy: lệnh không có host, nội dung script thì có — trong hay ngoài workspace.
   const scratch = mkdtempSync(join(WS, "tasks", ".cost-gate-test-"));
+  const outside = mkdtempSync(join(tmpdir(), "cost-gate-script-"));
   try {
-    writeFileSync(join(scratch, "goi.py"), "import requests\nrequests.post('https://api.dataforseo.com/v3/serp')\n");
+    writeFileSync(join(scratch, "goi.py"), `import requests\nrequests.post('https://${H.dfs}/v3/serp')\n`);
     writeFileSync(join(scratch, "sach.py"), "print('crawl tgdd')\n");
+    writeFileSync(join(outside, "ngoai.py"), `from ${GI} import run\nrun()\n`);
     const rel = scratch.slice(WS.length + 1);
-    t.check("cổng: chạy script tự viết có host DataForSEO → deny", GATE(`python3 ${rel}/goi.py`).decision, "deny");
-    t.check("cổng: chạy script tự viết không gọi API → ask", GATE(`python3 ${rel}/sach.py`).decision, "ask");
+    t.check("cổng: chạy script tự viết có host DataForSEO → deny", D(`python3 ${rel}/goi.py`), "deny");
+    t.check("cổng: chạy script tự viết không gọi API → ask", D(`python3 ${rel}/sach.py`), "ask");
+    t.check("cổng: script ngoài workspace import module skill → deny", D(`python3 ${join(outside, "ngoai.py")}`), "deny");
   } finally {
     rmSync(scratch, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 
-  // Ngoài crew: owner đồng ý trong conversation thì Anti thêm MWG_COST_OK=1.
-  t.check("cổng: ngoài crew, có MWG_COST_OK=1 → ask", GATE("MWG_COST_OK=1 curl https://openrouter.ai/api/v1/key").decision, "ask");
-  // Trong crew: prompt đầu có dòng hợp đồng → không có đường vượt.
+  // Ngoài crew: owner đồng ý trong conversation thì Anti MỞ ĐẦU lệnh bằng MWG_COST_OK=1.
+  t.check("cổng: ngoài crew, mở đầu MWG_COST_OK=1 → ask", D(`MWG_COST_OK=1 curl https://${H.router}/api/v1/key`), "ask");
+  t.check("cổng: MWG_COST_OK=1 nằm giữa lệnh không tính → deny", D(`echo MWG_COST_OK=1; curl https://${H.router}/api/v1/key`), "deny");
+  // Trong crew: prompt đầu có dòng hợp đồng → chỉ qua khi owner đã trả lời hold.
   const tdir = mkdtempSync(join(tmpdir(), "cost-gate-"));
   const crewT = join(tdir, "t.jsonl");
   writeFileSync(crewT, JSON.stringify({ step_index: 0, type: "USER_INPUT", content: "brief\n\nBạn là worker trong crew run 261009-1400. Không được dispatch worker khác." }) + "\n");
   const ownT = join(tdir, "o.jsonl");
   writeFileSync(ownT, JSON.stringify({ step_index: 0, type: "USER_INPUT", content: "chạy ahrefs cho tao" }) + "\n");
-  const crewOverride = GATE("MWG_COST_OK=1 curl https://openrouter.ai/api/v1/key", { transcriptPath: crewT });
+  const crewOverride = GATE(`MWG_COST_OK=1 curl https://${H.router}/api/v1/key`, { transcriptPath: crewT });
   t.check("cổng: conversation crew, có MWG_COST_OK=1 vẫn deny", crewOverride.decision, "deny");
   t.check("cổng: lý do bảo worker trả BLOCKED", /Status: BLOCKED/.test(crewOverride.reason ?? ""), true);
   t.check("cổng: conversation owner có transcript, có override → ask",
-    GATE("MWG_COST_OK=1 curl https://openrouter.ai/api/v1/key", { transcriptPath: ownT }).decision, "ask");
-  t.check("cổng: workspace khác → ask", GATE("curl https://api.ahrefs.com/x", { workspacePaths: [tmpdir()] }).decision, "ask");
+    D(`MWG_COST_OK=1 curl https://${H.router}/api/v1/key`, { transcriptPath: ownT }), "ask");
+  t.check("cổng: MWG_CREW_ROLE=worker là crew dù không có transcript → deny",
+    GATE(`MWG_COST_OK=1 curl https://${H.router}/api/v1/key`, {}, { ...ENV, MWG_CREW_ROLE: "worker" }).decision, "deny");
+
+  // Owner cho chạy tiếp qua hold: đúng conversation, đúng API, lời owner (via chat), chưa cover.
+  const conv = "conv-cost-gate-test-0001";
+  const taskDir = mkdtempSync(join(WS, "tasks", ".cost-gate-hold-"));
+  const runDir = join(taskDir, "reports", "crew-261009-0000");
+  mkdirSync(runDir, { recursive: true });
+  const hold = (over = {}) => ({
+    id: "h1", seq: 1, kind: "cost_gate", api: "Ahrefs", status: "answered",
+    answer: { words: "ok chạy đi", outcome: "resume", via: "chat", at: new Date().toISOString() }, ...over,
+  });
+  const writeRun = (h) => writeFileSync(join(runDir, "manifest.json"), JSON.stringify({
+    jobs: [{ seq: 1, worker: "antigravity", conversationId: conv }], holds: [h],
+  }));
+  const ahrefs = (extra = {}) => D(`curl https://${H.ahrefs}/x`, { conversationId: conv, transcriptPath: crewT, ...extra });
+  try {
+    writeRun(hold());
+    t.check("cổng: crew + owner đã cho resume đúng API → ask", ahrefs(), "ask");
+    t.check("cổng: crew + hold của API khác → deny", D(`curl https://${H.openai}/x`, { conversationId: conv, transcriptPath: crewT }), "deny");
+    t.check("cổng: crew + hold của conversation khác → deny", ahrefs({ conversationId: "conv-khac-000001" }), "deny");
+    writeRun(hold({ answer: { ...hold().answer, via: "dispatcher" } }));
+    t.check("cổng: hold do dispatcher trả lời (không phải owner) → deny", ahrefs(), "deny");
+    writeRun(hold({ answer: { ...hold().answer, outcome: "drop" } }));
+    t.check("cổng: owner chọn bỏ việc → deny", ahrefs(), "deny");
+    writeRun(hold({ coveredBy: 2 }));
+    t.check("cổng: hold đã cover xong → deny", ahrefs(), "deny");
+    writeRun(hold({ answer: { ...hold().answer, at: new Date(Date.now() - 25 * 3600e3).toISOString() } }));
+    t.check("cổng: lời owner quá 24 giờ → deny", ahrefs(), "deny");
+  } finally {
+    rmSync(taskDir, { recursive: true, force: true });
+  }
+
+  t.check("cổng: workspace khác → ask", D(`curl https://${H.ahrefs}/x`, { workspacePaths: [tmpdir()] }), "ask");
+  t.check("cổng: workspacePaths là chuỗi vẫn được xét → deny", D(`curl https://${H.ahrefs}/x`, { workspacePaths: WS }), "deny");
   for (const [label, input] of [["rác", "không phải json"], ["null", "null"], ["rỗng", ""]]) {
-    const r = shRun(gwsCmd.command, { ...process.env }, input);
+    const r = shRun(gwsCmd.command, ENV, input);
     t.check(`cổng: stdin ${label} → vẫn có decision`, ["ask", "deny"].includes(JSON.parse(r.stdout || "{}").decision), true);
   }
 }
