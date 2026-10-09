@@ -76,7 +76,9 @@ file nó ghi ngoài phạm vi, `--ack-runtime` cho lần runtime của chính n�
 chụp vân tay ba sổ lúc claim, giữ một bản trong bộ nhớ (worker không với tới) và so lại ở mọi
 đường thoát. Lệch thì gate in `HOLDS BỊ SỬA … thấy dismissedPaths khác lúc claim` (hoặc
 `runtimeAcks`, `replacedJobs`) và ra exit 2: đối chiếu từng dòng của sổ đó với lệnh mình đã
-gõ, dòng lạ là của worker và run đó xử như sự cố. Ghi **sau** khi adapter thoát (worker app
+gõ, dòng lạ là của worker và run đó xử như sự cố. **Không có lệnh gỡ cờ này, và đừng sửa tay
+manifest cho hết đỏ**: làm lại việc của các job dính cờ ở một run mới, run cũ để đỏ làm dấu sự
+cố (chốt 09/10; tới lúc đó 0/139 run từng dính — có ca thật rồi mới thiết kế lối ra). Ghi **sau** khi adapter thoát (worker app
 chạy tiếp) thì không ai bắt: thấy trong report một dòng bác path, ack, hay "làm thay" mà
 không nhớ đã gõ thì coi là sự cố.
 
