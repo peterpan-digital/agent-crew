@@ -18,6 +18,7 @@ import { createRun, addJob, claimRunSlot, updateJob, readManifest, holdsTamperPa
 import { collectRun, abandonJob, writeRunReport, hasSection } from "../scripts/crew-collect.mjs";
 import { evidenceDigest } from "../scripts/crew-guards.mjs";
 import { replacedFingerprint } from "../scripts/lib/replaced-jobs.mjs";
+import { ledgerFingerprint } from "../scripts/lib/reader-ledgers.mjs";
 import { MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
 
 const CLI = join(MODULE_ROOT, "scripts", "crew-collect.mjs");
@@ -1651,6 +1652,97 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
     const rep = writeRunReport(r, readManifest(manifestPath), { path: join("tasks", TASK, "reports", "261009-0001-crew-test.md"), workspace: ws });
     const body = readFileSync(join(ws, rep.path), "utf8");
     t.check("...and only it is in the report", body.includes("job 2 làm thay"), false);
+  }
+}
+
+// --- --not-ours / --ack-runtime: the reader's other two ledgers, same rule as --replaced ---
+{
+  const refused = (fn) => { try { fn(); return null; } catch (err) { return err.message; } };
+  const live = () => newRun({
+    jobs: [
+      { worker: "codex", evidence: join(RUN_REL, "w1.md"), body: DONE, status: "done", patch: { runtimeVerdict: "codex exited 3" } },
+      { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), status: "pending", startedAt: null, endedAt: null },
+    ],
+  });
+
+  // Recording while a worker is alive is refused: a legitimate write mid-job is the
+  // one thing that would make the adapter's in-memory fingerprint unusable.
+  {
+    const { ws, manifestPath } = live();
+    claimRunSlot(manifestPath, 2, { startedAt: new Date().toISOString(), timeoutMs: 600_000 });
+    t.check("--not-ours is refused while a job is running",
+      refused(() => collectRun(manifestPath, { workspace: ws, notOurs: ["x.txt"], reason: "x" }))?.includes("--not-ours: run còn job"), true);
+    t.check("--ack-runtime is refused while a job is running",
+      refused(() => collectRun(manifestPath, { workspace: ws, ackRuntime: [1], reason: "x" }))?.includes("--ack-runtime: run còn job"), true);
+    refused(() => collectRun(manifestPath, { workspace: ws, notOurs: ["x.txt"], ackRuntime: [1], reason: "x" }));
+    const m = readManifest(manifestPath);
+    t.check("...and neither ledger is written", `${m.dismissedPaths}:${m.runtimeAcks}`, "undefined:undefined");
+    t.check("CLI: refused flag exits 2", runCli(manifestPath, ["--not-ours", "x.txt", "--reason", "x"]).exit, 2);
+    t.check("CLI: --dry-run still shows the waiver while jobs run",
+      runCli(manifestPath, ["--dry-run", "--not-ours", "x.txt", "--reason", "x"]).exit, 1);
+
+    // Once the job is done the same command goes through, and a later claim takes its
+    // fingerprint after the write -- no false tamper for the next job.
+    writeFile(join(ws, RUN_REL, "w2.md"), DONE);
+    updateJob(manifestPath, 2, { status: "done", endedAt: new Date().toISOString(), ...holdsTamperPatch(manifestPath, 2) });
+    const ok = collectRun(manifestPath, { workspace: ws, ackRuntime: [1], notOurs: ["x.txt"], reason: "đọc rồi" });
+    t.check("after the job is done both ledgers are written",
+      `${ok.exitCode}:${readManifest(manifestPath).runtimeAcks.length}:${readManifest(manifestPath).dismissedPaths.length}`, "0:1:1");
+    t.check("...and the job that was running saw no tamper", ok.holdsTamper.length, 0);
+    updateJob(manifestPath, 2, { status: "pending" });
+    claimRunSlot(manifestPath, 2, { startedAt: new Date(Date.now() + 1000).toISOString(), timeoutMs: 600_000 });
+    t.check("a claim after a legitimate write sees no tamper", Object.keys(holdsTamperPatch(manifestPath, 2)).length, 0);
+  }
+
+  // The attack: a worker writes outside its scope, then waives the write itself.
+  {
+    const { ws, manifestPath } = newRun({
+      jobs: [{ worker: "antigravity", evidence: join(RUN_REL, "w1.md"), status: "pending", startedAt: null, endedAt: null }],
+    });
+    claimRunSlot(manifestPath, 1, { startedAt: new Date().toISOString(), timeoutMs: 600_000 });
+    t.check("claim fingerprints dismissedPaths and runtimeAcks",
+      `${typeof readManifest(manifestPath).jobs[0].dismissedFingerprint}:${typeof readManifest(manifestPath).jobs[0].acksFingerprint}`, "string:string");
+    writeFile(join(ws, "somewhere-else.md"), "worker ghi ngoài phạm vi\n");
+    writeFile(join(ws, RUN_REL, "w1.md"), DONE);
+    const m = JSON.parse(readFileSync(manifestPath, "utf8"));
+    m.dismissedPaths = [{ path: "somewhere-else.md", reason: "của session khác", at: "x" }];
+    m.jobs[0].dismissedFingerprint = ledgerFingerprint(m.dismissedPaths);
+    writeFileSync(manifestPath, JSON.stringify(m));
+    const patch = holdsTamperPatch(manifestPath, 1);
+    t.check("a self-dismissal with its fingerprint rewritten is caught on exit", patch.holdsTamper?.changed?.join(","), "dismissedPaths");
+    updateJob(manifestPath, 1, { status: "done", endedAt: new Date(Date.now() + 1000).toISOString(), ...patch });
+    const r = collectRun(manifestPath, { workspace: ws });
+    t.check("...the forged waiver does hide the write", r.scope.outOfScope.length, 0);
+    t.check("...but the run is still a violation", r.exitCode, 2);
+    t.check("...named as such", runCli(manifestPath, ["--dry-run"]).out.includes("thấy dismissedPaths khác lúc claim"), true);
+  }
+
+  // Same for an ack forged over the job's own runtime failure.
+  {
+    const { ws, manifestPath } = newRun({
+      jobs: [{ worker: "codex", evidence: join(RUN_REL, "w1.md"), status: "pending", startedAt: null, endedAt: null }],
+    });
+    claimRunSlot(manifestPath, 1, { startedAt: new Date().toISOString(), timeoutMs: 600_000 });
+    writeFile(join(ws, RUN_REL, "w1.md"), DONE);
+    const m = JSON.parse(readFileSync(manifestPath, "utf8"));
+    m.jobs[0].runtimeVerdict = "codex exited 3";
+    m.runtimeAcks = [{ seq: 1, why: "codex exited 3", reason: "worker tự ack", at: "x" }];
+    m.jobs[0].acksFingerprint = ledgerFingerprint(m.runtimeAcks);
+    writeFileSync(manifestPath, JSON.stringify(m));
+    const patch = holdsTamperPatch(manifestPath, 1);
+    t.check("a self-ack with its fingerprint rewritten is caught on exit", patch.holdsTamper?.changed?.join(","), "runtimeAcks");
+    updateJob(manifestPath, 1, { status: "done", endedAt: new Date().toISOString(), ...patch });
+    t.check("...and the run cannot pass", collectRun(manifestPath, { workspace: ws }).exitCode >= 2, true);
+
+    const gone = JSON.parse(readFileSync(manifestPath, "utf8"));
+    delete gone.jobs[0].acksFingerprint;
+    delete gone.jobs[0].dismissedFingerprint;
+    delete gone.jobs[0].replacedFingerprint;
+    delete gone.jobs[0].holdsFingerprint;
+    writeFileSync(manifestPath, JSON.stringify(gone));
+    // Deleting a stored fingerprint is itself a change against the adapter's own copy.
+    t.check("deleting every stored fingerprint does not hide it",
+      holdsTamperPatch(manifestPath, 1).holdsTamper?.changed?.join(","), "replacedJobs,runtimeAcks,dismissedPaths");
   }
 }
 

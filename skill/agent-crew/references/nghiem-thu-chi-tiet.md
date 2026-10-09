@@ -50,11 +50,9 @@ node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json" \
 Một job thay chỉ thay được **một việc** (một job hỏng, hoặc một hold đã cover — không cả hai).
 Bản ghi nằm ở `replacedJobs` trong manifest, ghim lần chạy của hai job và sha evidence job
 thay lúc khai; tính lại mỗi lần collect. Job thay hết `PASS`, chạy lại, hoặc evidence bị ghi
-lại thì job hỏng đỏ lại — đọc bản mới rồi khai lại. Bị từ chối khi run còn job chạy; worker
-tự ghi `replacedJobs` lúc adapter còn sống thì bị bắt như `HOLDS BỊ SỬA` (exit 2), ghi sau khi
-adapter thoát (worker app) thì **không** ai bắt — thấy dòng "làm thay" trong report mà không
-nhớ đã khai thì coi là sự cố. `--abandon` và
-`--replaced` chạy hai lệnh riêng. Job `BLOCKED` không đi đường này (đi qua `crew-hold`), job
+lại thì job hỏng đỏ lại — đọc bản mới rồi khai lại. Luật ghi chung với `--ack-runtime` và
+`--not-ours`, xem "Ba sổ của người đọc" bên dưới. `--abandon` và `--replaced` chạy hai lệnh
+riêng. Job `BLOCKED` không đi đường này (đi qua `crew-hold`), job
 `STALE` cũng không (`--abandon`).
 
 **File của session khác lọt vào `SCOPE_VIOLATION` thì bác có dấu vết, đừng nới ngưỡng:**
@@ -66,6 +64,21 @@ node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json" \
 
 Lý do được ghi vào manifest, nên lần sau đọc lại biết ai bác và vì sao. Nới ngưỡng thì
 làm câm mọi run về sau và không ghi lại gì.
+
+**Ba sổ của người đọc (`--replaced`, `--ack-runtime`, `--not-ours`) chỉ ghi được khi run
+không còn job `pending`/`running`** (thêm 2026-10-09). Còn job sống thì collect từ chối,
+exit 2, không ghi dòng nào. Không mất gì: lúc đó gate cũng không ra exit 0 được (`RUNNING`
+chặn), nên đợi job xong rồi gõ lại đúng lệnh; `--dry-run` vẫn chạy để xem trước. Job treo
+không evidence thì `--abandon <seq>` trước.
+
+Lý do: worker ghi được manifest, nên một dòng tự khai là đường mở cổng — `--not-ours` cho
+file nó ghi ngoài phạm vi, `--ack-runtime` cho lần runtime của chính nó báo fail. Mỗi adapter
+chụp vân tay ba sổ lúc claim, giữ một bản trong bộ nhớ (worker không với tới) và so lại ở mọi
+đường thoát. Lệch thì gate in `HOLDS BỊ SỬA … thấy dismissedPaths khác lúc claim` (hoặc
+`runtimeAcks`, `replacedJobs`) và ra exit 2: đối chiếu từng dòng của sổ đó với lệnh mình đã
+gõ, dòng lạ là của worker và run đó xử như sự cố. Ghi **sau** khi adapter thoát (worker app
+chạy tiếp) thì không ai bắt: thấy trong report một dòng bác path, ack, hay "làm thay" mà
+không nhớ đã gõ thì coi là sự cố.
 
 **Job Codex `app` không có evidence: reconcile phân loại được rồi, đừng đoán.**
 

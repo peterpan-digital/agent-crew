@@ -22,6 +22,7 @@ import { reconcileRun, resolveEvidence } from "./crew-reconcile.mjs";
 import { collectWriteScope, headMovement } from "./crew-scope.mjs";
 import { costGateKind, ensureCostGateHold, quotaApiName, extractCostGateApi, holdFor, holdVerdict, liveJobs } from "./lib/holds.mjs";
 import { buildReplacements, cleanReason, mergeReplacements, parseReplaceSpec, replacedVerdict } from "./lib/replaced-jobs.mjs";
+import { assertReaderLedgersWritable } from "./lib/reader-ledgers.mjs";
 
 /** Report language matches the rest of the gate's output, which is Vietnamese. */
 const VI_CHANGE = { modified: "bị sửa", deleted: "bị XOÁ", created: "bị tạo mới", unreadable: "không đọc được nữa" };
@@ -333,6 +334,13 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
     const preJudged = new Map(pre.jobs.map((j) => [j.seq, judgeOne(j, w, now, pre.version).verdict]));
     buildReplacements(pre, replaced, reason, (seq) => preJudged.get(seq), digestFor(pre, w), new Date(now));
   }
+  // Cùng luật với --replaced: sổ của người đọc không ghi khi run còn job sống, vì worker
+  // ghi được manifest và adapter chỉ bắt được dòng giả nếu giữa claim và thoát không có
+  // lần ghi hợp lệ nào (lib/reader-ledgers.mjs). Kiểm cả hai cờ trước lần ghi đầu tiên,
+  // để lệnh bị từ chối không để lại nửa phần đã ghi. Dry-run không ghi nên không chặn.
+  if (!dryRun && (notOurs.length || ackRuntime.length)) {
+    assertReaderLedgersWritable(readManifest(abs), notOurs.length ? "--not-ours" : "--ack-runtime");
+  }
   if (notOurs.length && !dryRun) recordDismissals(abs, notOurs, reason);
   if (ackRuntime.length && !dryRun) recordRuntimeAcks(abs, ackRuntime, reason, workspace);
   let manifest = readManifest(abs);
@@ -439,9 +447,7 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   // that belongs to the owner. Nothing here can say which worker, so none is named.
   const holdsTamper = manifest.jobs
     .filter((j) => j.holdsTamper)
-    .map((j) => ({ seq: j.seq, worker: j.worker, at: j.holdsTamper.at ?? null,
-      // Bản ghi cũ chỉ có holds; có cờ replacedJobsChanged thì holds chỉ đổi khi có holdsChanged.
-      what: j.holdsTamper.replacedJobsChanged ? (j.holdsTamper.holdsChanged ? "holds và replacedJobs" : "replacedJobs") : "holds" }));
+    .map((j) => ({ seq: j.seq, worker: j.worker, at: j.holdsTamper.at ?? null, what: tamperedLedgers(j.holdsTamper) }));
   const violation = scope.outOfScope.length > 0 || scope.protectedHits.length > 0
     || dupes.length > 0 || credentialTamper.length > 0 || holdsTamper.length > 0;
   // 3 is not "worse than 2" -- it is both. Folding the two into one code let a
@@ -455,6 +461,16 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
     runId: manifest.runId, task: manifest.task, dryRun, reconciled, rows, dupes, scope, costGates, unchecked, head, unread,
     credentialTamper, holdsTamper, holdsDeferred, holds: manifest.holds ?? [], exitCode,
   };
+}
+
+/**
+ * Sổ nào khác lúc claim, để in. `changed` có từ khi mọi sổ của người đọc được so; bản
+ * ghi cũ hơn chỉ có holds, hoặc cờ replacedJobsChanged (holds chỉ đổi khi có holdsChanged).
+ */
+function tamperedLedgers(h) {
+  const list = Array.isArray(h.changed) && h.changed.length ? h.changed
+    : h.replacedJobsChanged ? (h.holdsChanged ? ["holds", "replacedJobs"] : ["replacedJobs"]) : ["holds"];
+  return list.join(" và ");
 }
 
 /**
@@ -488,6 +504,8 @@ function recordRuntimeAcks(abs, seqs, reason, workspace) {
   }
   const at = new Date().toISOString();
   updateManifest(abs, (m) => {
+    // Kiểm lại trong lock: giữa lần kiểm đầu và lần ghi có thể có job được claim.
+    assertReaderLedgersWritable(m, "--ack-runtime");
     const bySeq = new Map(m.jobs.map((j) => [j.seq, j]));
     const acks = [];
     for (const spec of seqs) {
@@ -542,6 +560,7 @@ function recordDismissals(abs, paths, reason) {
   }
   const at = new Date().toISOString();
   updateManifest(abs, (m) => {
+    assertReaderLedgersWritable(m, "--not-ours");
     const existing = m.dismissedPaths ?? [];
     const fresh = paths
       .filter((p) => !existing.some((d) => d.path === p))
@@ -629,10 +648,11 @@ function report(r) {
     console.log("  Worker tự đặt GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND là nguyên nhân đã xảy ra thật — xem worker-brief.md.");
   }
   if (r.holdsTamper?.length) {
-    console.log("\nHOLDS BỊ SỬA — hàng chờ quyết định hoặc sổ job làm thay đổi trong lúc job chạy, mà lúc đó chỉ có worker mới ghi được:");
+    console.log("\nHOLDS BỊ SỬA — hàng chờ quyết định hoặc sổ của người đọc đổi trong lúc job chạy, mà lúc đó chỉ có worker mới ghi được:");
     for (const h of r.holdsTamper) console.log(`  job ${h.seq} (${h.worker}) thấy ${h.what} khác lúc claim${h.at ? `, lúc ${h.at}` : ""}`);
-    console.log("  Không quy được cho một worker cụ thể nếu nhiều job chạy cùng lúc. Câu trả lời trong holds KHÔNG còn đáng tin:");
-    console.log("  đọc lại từng hold, và hỏi lại owner những câu đã có `answer` mà owner không nhớ đã gõ.");
+    console.log("  Không quy được cho một worker cụ thể nếu nhiều job chạy cùng lúc. Sổ bị sửa KHÔNG còn đáng tin:");
+    console.log("  holds: đọc lại từng hold, hỏi lại owner những câu đã có `answer` mà owner không nhớ đã gõ;");
+    console.log("  replacedJobs / runtimeAcks / dismissedPaths: đối chiếu từng dòng với lệnh mình đã gõ, dòng lạ là của worker.");
   }
   if (r.scope.protectedHits.length) {
     console.log("\nGHI VÀO FILE ĐƯỢC BẢO VỆ — không worker nào được phép:");

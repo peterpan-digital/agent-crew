@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { holdsFingerprint, supersedeSeq } from "./lib/holds.mjs";
-import { replacedFingerprint } from "./lib/replaced-jobs.mjs";
+import { READER_LEDGERS, ledgerFingerprint, ledgerFingerprints } from "./lib/reader-ledgers.mjs";
 import { controlPlaneInside, taskRel, touchesControlPlane } from "./crew-scope.mjs";
 
 export { taskRel };
@@ -365,7 +365,7 @@ function resolveRouting(job) {
  */
 const SEALED_JOB_FIELDS = new Set([
   "seq", "worker", "role", "transport", "evidence", "status", "filesMayModify",
-  "holdsFingerprint", "holdsTamper", "replacedFingerprint",
+  "holdsFingerprint", "holdsTamper", ...Object.values(READER_LEDGERS),
 ]);
 
 /**
@@ -703,10 +703,11 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs, resumeId
     // lượt này xong bình thường thì adapter ghi đè sha.
     // Vân tay `holds` lúc claim. Adapter so lại ở mọi đường thoát (xem holdsTamperPatch).
     job.holdsFingerprint = after;
-    // Cùng lý do cho sổ job làm thay: `--replaced` bị từ chối khi run còn job chạy,
-    // nên mọi thay đổi `replacedJobs` giữa lúc claim và lúc thoát là của worker.
-    job.replacedFingerprint = replacedFingerprint(m.replacedJobs);
-    claimedReplaced.set(claimKey(manifestPath, seq), job.replacedFingerprint);
+    // Cùng lý do cho các sổ của người đọc (--replaced, --ack-runtime, --not-ours): cả ba
+    // bị từ chối khi run còn job sống, nên mọi thay đổi giữa claim và thoát là của worker.
+    const prints = ledgerFingerprints(m);
+    Object.assign(job, prints);
+    claimedLedgers.set(claimKey(manifestPath, seq), prints);
     claimed = job;
     return m;
   });
@@ -726,17 +727,17 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs, resumeId
  * sau cũng sẽ lỗi và adapter báo exit 2.
  */
 /**
- * Vân tay `replacedJobs` lúc claim, giữ trong bộ nhớ của chính adapter đã claim.
+ * Vân tay các sổ của người đọc lúc claim, giữ trong bộ nhớ của chính adapter đã claim.
  *
  * Vân tay ghi trong manifest thì worker sửa được cùng lúc với danh sách (reviewer tái
  * hiện 09/10: khai giả đủ ghim + tự tính lại vân tay → exit 0). Bản trong bộ nhớ thì
- * worker không với tới. Chỉ làm cho `replacedJobs`: `--replaced` bị từ chối khi run còn
- * job chạy nên giữa claim và thoát không có lần ghi hợp lệ nào. `holds` thì có (claim
- * của job khác đóng dấu lại vân tay, xem `supersedeSeq`), nên vẫn so theo manifest.
- * Rủi ro còn lại, chung cho mọi sổ trong manifest: worker app chạy tiếp SAU khi adapter
- * thoát thì không còn ai so — xem lib/replaced-jobs.mjs.
+ * worker không với tới. Làm được cho các sổ này vì cả ba bị từ chối khi run còn job
+ * sống, nên giữa claim và thoát không có lần ghi hợp lệ nào (lib/reader-ledgers.mjs).
+ * `holds` thì có (claim của job khác đóng dấu lại vân tay, xem `supersedeSeq`), nên
+ * vẫn so theo manifest. Rủi ro còn lại, chung cho mọi sổ trong manifest: worker app chạy
+ * tiếp SAU khi adapter thoát thì không còn ai so — xem lib/replaced-jobs.mjs.
  */
-const claimedReplaced = new Map();
+const claimedLedgers = new Map();
 const claimKey = (manifestPath, seq) => `${resolvePath(manifestPath)}#${seq}`;
 
 export function holdsTamperPatch(manifestPath, seq) {
@@ -744,19 +745,25 @@ export function holdsTamperPatch(manifestPath, seq) {
     const m = readManifest(manifestPath);
     const job = m.jobs.find((j) => j.seq === seq);
     if (!job) return {};
-    const remembered = claimedReplaced.get(claimKey(manifestPath, seq));
-    if (!job.holdsFingerprint && !remembered) return {};
+    const remembered = claimedLedgers.get(claimKey(manifestPath, seq));
     const holdsChanged = Boolean(job.holdsFingerprint) && holdsFingerprint(m.holds) !== job.holdsFingerprint;
     // Có bản trong bộ nhớ thì vân tay trong manifest phải khớp nó (sửa hay xoá đều là
     // tamper). Không có (tiến trình khác, job claim trước khi có vân tay này) thì so
     // với manifest, hoặc không có gì để so.
-    const expected = remembered ?? job.replacedFingerprint;
-    const replacedChanged = Boolean(expected)
-      && (replacedFingerprint(m.replacedJobs) !== expected || (remembered != null && job.replacedFingerprint !== remembered));
-    if (!holdsChanged && !replacedChanged) return {};
+    const changed = holdsChanged ? ["holds"] : [];
+    for (const [ledger, field] of Object.entries(READER_LEDGERS)) {
+      const mine = remembered?.[field];
+      const expected = mine ?? job[field];
+      if (!expected) continue;
+      if (ledgerFingerprint(m[ledger]) !== expected || (mine != null && job[field] !== mine)) changed.push(ledger);
+    }
+    if (!changed.length) return {};
+    const replacedChanged = changed.includes("replacedJobs");
     return {
       holdsTamper: {
         at: new Date().toISOString(), holdIdsAtExit: (m.holds ?? []).map((h) => h.id),
+        // `changed` là danh sách đầy đủ; hai cờ cũ giữ cho bản ghi và người đọc cũ.
+        changed,
         ...(replacedChanged ? { replacedJobsChanged: true } : {}),
         ...(replacedChanged && holdsChanged ? { holdsChanged: true } : {}),
       },
