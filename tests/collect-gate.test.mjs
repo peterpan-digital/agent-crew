@@ -952,6 +952,8 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
     ["## Thay đổi từ owner\n*(Không có — thực hiện theo đúng yêu cầu ban đầu của brief)*", false],
     ["## Thay đổi từ owner\nKhông có gì, nhưng owner bảo đổi cột X (10:12)", true],
     ["## Thay đổi từ owner\n(owner bảo bỏ mục 3)", true],
+    ["## Thay đổi từ owner\nKhông có\n\nConcerns/Blockers: COST_GATE — Ahrefs\nStatus: BLOCKED", false],
+    ["## Thay đổi từ owner\nKhông có\nSummary: xong\nStatus: DONE", false],
   ];
   const wrong = cases.filter(([text, want]) => hasSection(text, T) !== want).map(([text]) => JSON.stringify(text));
   t.check(`hasSection: ${cases.length} biến thể đọc đúng`, wrong.join(" | "), "");

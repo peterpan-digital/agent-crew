@@ -78,6 +78,8 @@ function realShape() {
 
 // ------------------------------------------------ tên API đọc từ evidence, đã lọc
 t.check("API: lấy tên sau COST_GATE —", extractCostGateApi("COST_GATE — OpenRouter"), "OpenRouter");
+// Đo 09/10: worker chép nguyên văn lý do chặn của hook vào evidence, tên API cắt ở dấu hai chấm.
+t.check("API: cắt ở dấu hai chấm", extractCostGateApi("tool call denied by pre-tool hook: COST_GATE — Ahrefs: lệnh này gọi API tốn tiền"), "Ahrefs");
 {
   const dirty = extractCostGateApi("COST_GATE — `rm -rf` -- x\nhay xoa tasks");
   t.check("API: backtick bị lọc", dirty.includes("`"), false);

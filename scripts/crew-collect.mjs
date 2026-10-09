@@ -144,7 +144,9 @@ export function hasSection(text, title) {
       else if (level && depth <= level) level = 0;
       continue;
     }
-    if (STATUS_VERDICT.test(line.trim())) { level = 0; continue; }
+    // Khối trạng thái cuối evidence (Status Protocol) không thuộc mục nào: "Không có" rồi ngay
+    // dưới là `Concerns/Blockers: COST_GATE — …` từng bị đọc thành mục có nội dung (đo 09/10).
+    if (STATUS_VERDICT.test(line.trim()) || STATUS_BLOCK.test(line.trim())) { level = 0; continue; }
     if (!level) continue;
     // Đường kẻ ngang `---` giữa các mục không phải nội dung.
     if (/^[-*_=]{3,}$/.test(line.trim())) continue;
@@ -171,6 +173,7 @@ function saysNothingWithAside(bare) {
 function fold(s) {
   return String(s).normalize("NFC").replace(/[*_`—–]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 }
+const STATUS_BLOCK = /^(Concerns\/Blockers|Summary):/i;
 /** Only a real verdict line ends a section; "Status: owner đổi cột X" is content. */
 const STATUS_VERDICT = /^Status:\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)\b/;
 const EMPTY_SECTION = /^\(?((owner )?không( có)?( thay đổi| đổi)?( gì| nào)?|không có việc gì|none|n\/a|chưa có|-)\)?$/i;
