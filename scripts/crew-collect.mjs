@@ -145,10 +145,25 @@ export function hasSection(text, title) {
     }
     if (STATUS_VERDICT.test(line.trim())) { level = 0; continue; }
     if (!level) continue;
+    // Đường kẻ ngang `---` giữa các mục không phải nội dung.
+    if (/^[-*_=]{3,}$/.test(line.trim())) continue;
     const bare = fold(line).replace(/^(>|[-•])\s*/, "").replace(/[.:;!]+$/, "").trim();
-    if (bare && !EMPTY_SECTION.test(bare)) found = true;
+    if (bare && !EMPTY_SECTION.test(bare) && !saysNothingWithAside(bare)) found = true;
   }
   return found;
+}
+
+/**
+ * "không có" kèm lời giải thích trong ngoặc: `(Không có — làm đúng brief)`, `Không có (chỉ
+ * ghi 2 file đúng brief)`. Đo 09/10: 4/6 run để dở bị gắn BRIEF ĐỔI / GHI NGOÀI BRIEF chỉ vì
+ * cách ghi này. Chỉ nhận khi cả dòng nằm trong ngoặc, hoặc phần sau "không có" chỉ là một
+ * cặp ngoặc — "Không có gì, nhưng owner bảo đổi cột X" vẫn là nội dung.
+ */
+function saysNothingWithAside(bare) {
+  const whole = /^\((.*)\)$/.exec(bare);
+  // `\b` của JS chỉ hiểu chữ ASCII, "ó" không phải biên chữ với nó -- phải dùng \p{L}.
+  if (whole) return /^không có(?!\p{L})/u.test(whole[1].trim());
+  return /^không có(?!\p{L})[^(),]*\([^()]*\)$/u.test(bare) && EMPTY_SECTION.test(bare.replace(/\s*\([^()]*\)$/, ""));
 }
 
 /** Lower-cased, markdown emphasis and dashes stripped, so wording variants compare equal. */

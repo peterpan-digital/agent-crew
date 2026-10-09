@@ -944,6 +944,13 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
     ["## Thay đổi từ owner\nKhông có thay đổi gì.", false], ["## Thay đổi từ owner\nOwner không đổi gì.", false],
     ["## Thay đổi từ owner\n> Không có", false], ["## Thay đổi từ owner\n- Không có\n## Việc còn mở\nlàm tiếp", false],
     ["## Thay đổi từ owner\nKhông có.\n\nStatus: DONE\nbỏ", false], ["## Tóm tắt\nThay đổi từ owner: x", false],
+    // Cách ghi thật ở các run 05-07/10, từng bị đọc thành có nội dung.
+    ["## 6. Thay đổi từ owner\n- Không có.\n\n---\n\n## 7. Ghi ngoài brief", false],
+    ["## Thay đổi từ owner\n- Không có (chỉ ghi 2 file đúng theo brief).", false],
+    ["## Thay đổi từ owner\n*(Không có thay đổi mục tiêu hay phạm vi từ owner trong quá trình chạy)*", false],
+    ["## Thay đổi từ owner\n*(Không có — thực hiện theo đúng yêu cầu ban đầu của brief)*", false],
+    ["## Thay đổi từ owner\nKhông có gì, nhưng owner bảo đổi cột X (10:12)", true],
+    ["## Thay đổi từ owner\n(owner bảo bỏ mục 3)", true],
   ];
   const wrong = cases.filter(([text, want]) => hasSection(text, T) !== want).map(([text]) => JSON.stringify(text));
   t.check(`hasSection: ${cases.length} biến thể đọc đúng`, wrong.join(" | "), "");
