@@ -16,7 +16,7 @@
  * Run: node mwg-agent-crew/tests/antigravity-hook-schema.test.mjs
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { STATE_DIR_REL } from "../scripts/lib/state-file.mjs";
@@ -140,7 +140,10 @@ if (!existsSync(join(WS, ".agents"))) {
   const raw = JSON.stringify(doc);
   t.check("hooks.json không còn sự kiện chỉ của Claude", /UserPromptSubmit|SessionStart|SubagentStart/.test(raw), false);
   t.check("hooks.json không nhúng đường dẫn tuyệt đối của máy", /\/Users\//.test(raw), false);
-  t.check("rào GWS có mặt ở PreToolUse", JSON.stringify(Object.values(doc).map((s) => s.PreToolUse)).includes("gws-ntcong-routing"), true);
+  // Một hook PreToolUse duy nhất gọi cả rào GWS lẫn cổng chi phí: tài liệu app không nói quyết định
+  // nào thắng khi hai hook cùng sự kiện trả khác nhau.
+  const preCmds = Object.values(doc).flatMap((s) => (s.PreToolUse ?? []).flatMap((x) => x.hooks ?? []));
+  t.check("đúng một hook PreToolUse, là anti-pretool-gate", preCmds.length === 1 && preCmds[0].command.includes("anti-pretool-gate"), true);
   t.check("ghi trạng thái có mặt ở PreInvocation", JSON.stringify(Object.values(doc).map((s) => s.PreInvocation)).includes("agent-state-write"), true);
   // PreInvocation chạy TRƯỚC lần gọi model cuối nên không bao giờ thấy lời kết; chỉ Stop thấy.
   t.check("ghi trạng thái có mặt ở Stop (bắt lời model cuối)", JSON.stringify(Object.values(doc).map((s) => s.Stop)).includes("agent-state-write"), true);
@@ -195,6 +198,58 @@ if (!existsSync(join(WS, ".agents"))) {
   });
   t.check("Claude: gws trần vẫn exit 2", claude.status, 2);
   t.check("Claude: stdout vẫn rỗng", claude.stdout, "");
+
+  // ------------------------------------------- cổng API tốn tiền (qua đúng lệnh trong hooks.json)
+  const GATE = (command, extra = {}) => {
+    const input = JSON.stringify({ conversationId: "c1", workspacePaths: [WS], toolCall: { name: "run_command", args: { CommandLine: command, Cwd: WS } }, ...extra });
+    const r = shRun(gwsCmd.command, { ...process.env }, input);
+    try { return JSON.parse(r.stdout); } catch { return { decision: `stdout hỏng: ${r.stdout}` }; }
+  };
+  t.check("cổng: rào GWS vẫn chạy qua hook gộp", GATE(["gws", "drive files list"].join(" ")).decision, "deny");
+  t.check("cổng: curl thẳng host Ahrefs → deny", GATE("curl -s https://api.ahrefs.com/v3/site-explorer/x").decision, "deny");
+  t.check("cổng: lý do mang đúng tên API trong bảng Cost gate", /COST_GATE — Ahrefs/.test(GATE("curl https://api.ahrefs.com/x").reason ?? ""), true);
+  t.check("cổng: chạy script skill Ahrefs → deny",
+    GATE("python3 .claude/skills/seo-keyword-research/scripts/ahrefs_fetch.py --keywords x").decision, "deny");
+  t.check("cổng: chỉ đọc script đó → ask", GATE("cat .claude/skills/seo-keyword-research/scripts/ahrefs_fetch.py").decision, "ask");
+  t.check("cổng: đọc SKILL.md skill ảnh → ask", GATE("cat .claude/skills/image-seo-pipeline/SKILL.md").decision, "ask");
+  t.check("cổng: đọc key từ .env → deny", GATE("grep OPENAI_API_KEY .env").decision, "deny");
+  t.check("cổng: python -c gọi Gemini → deny",
+    GATE(`python3 -c "import requests; requests.post('https://generativelanguage.googleapis.com/v1beta/x')"`).decision, "deny");
+  t.check("cổng: crawl web thường → ask", GATE("curl -sI https://www.thegioididong.com/laptop").decision, "ask");
+  t.check("cổng: lệnh thường → ask", GATE("ls -la").decision, "ask");
+  t.check("cổng: KHÔNG BAO GIỜ allow",
+    ["ls", "curl https://api.openai.com/v1/x", "MWG_COST_OK=1 curl https://openrouter.ai/api/v1/x"].some((c) => GATE(c).decision === "allow"), false);
+
+  // Worker ghi script rồi chạy: lệnh không có host, nội dung script thì có.
+  const scratch = mkdtempSync(join(WS, "tasks", ".cost-gate-test-"));
+  try {
+    writeFileSync(join(scratch, "goi.py"), "import requests\nrequests.post('https://api.dataforseo.com/v3/serp')\n");
+    writeFileSync(join(scratch, "sach.py"), "print('crawl tgdd')\n");
+    const rel = scratch.slice(WS.length + 1);
+    t.check("cổng: chạy script tự viết có host DataForSEO → deny", GATE(`python3 ${rel}/goi.py`).decision, "deny");
+    t.check("cổng: chạy script tự viết không gọi API → ask", GATE(`python3 ${rel}/sach.py`).decision, "ask");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+
+  // Ngoài crew: owner đồng ý trong conversation thì Anti thêm MWG_COST_OK=1.
+  t.check("cổng: ngoài crew, có MWG_COST_OK=1 → ask", GATE("MWG_COST_OK=1 curl https://openrouter.ai/api/v1/key").decision, "ask");
+  // Trong crew: prompt đầu có dòng hợp đồng → không có đường vượt.
+  const tdir = mkdtempSync(join(tmpdir(), "cost-gate-"));
+  const crewT = join(tdir, "t.jsonl");
+  writeFileSync(crewT, JSON.stringify({ step_index: 0, type: "USER_INPUT", content: "brief\n\nBạn là worker trong crew run 261009-1400. Không được dispatch worker khác." }) + "\n");
+  const ownT = join(tdir, "o.jsonl");
+  writeFileSync(ownT, JSON.stringify({ step_index: 0, type: "USER_INPUT", content: "chạy ahrefs cho tao" }) + "\n");
+  const crewOverride = GATE("MWG_COST_OK=1 curl https://openrouter.ai/api/v1/key", { transcriptPath: crewT });
+  t.check("cổng: conversation crew, có MWG_COST_OK=1 vẫn deny", crewOverride.decision, "deny");
+  t.check("cổng: lý do bảo worker trả BLOCKED", /Status: BLOCKED/.test(crewOverride.reason ?? ""), true);
+  t.check("cổng: conversation owner có transcript, có override → ask",
+    GATE("MWG_COST_OK=1 curl https://openrouter.ai/api/v1/key", { transcriptPath: ownT }).decision, "ask");
+  t.check("cổng: workspace khác → ask", GATE("curl https://api.ahrefs.com/x", { workspacePaths: [tmpdir()] }).decision, "ask");
+  for (const [label, input] of [["rác", "không phải json"], ["null", "null"], ["rỗng", ""]]) {
+    const r = shRun(gwsCmd.command, { ...process.env }, input);
+    t.check(`cổng: stdin ${label} → vẫn có decision`, ["ask", "deny"].includes(JSON.parse(r.stdout || "{}").decision), true);
+  }
 }
 
 process.exit(t.finish() ? 0 : 1);
