@@ -334,6 +334,27 @@ if (!existsSync(join(WS, ".agents"))) {
     rmSync(taskDir, { recursive: true, force: true });
   }
 
+  // Cờ đổi tài khoản Google ở Anti: cùng lỗ với MWG_COST_OK=1 — Anti tự thêm cờ từ lý do chặn.
+  {
+    const G = ["g", "ws"].join("");
+    const personal = `${G}-personal drive files list`;
+    const override = `ALLOW_GWS_PROFILE_OVERRIDE=1 ${personal}`;
+    const ok = `GOOGLE_WORKSPACE_CLI_CONFIG_DIR="$HOME/.config/${G}" command ${G} drive files list`;
+    const gwsDenied = { step_index: 2, type: "GENERIC", status: "ERROR", error: "tool call denied by pre-tool hook: MWG AI Worker GWS routing blocked this command: personal …" };
+    const tr = (name, rows) => { const f = join(tdir, name); writeFileSync(f, rows.map(line).join("")); return f; };
+    const asked = tr("gws-asked.jsonl", [{ step_index: 0, type: "USER_INPUT", content: "liệt kê drive" }, gwsDenied,
+      { step_index: 3, type: "PLANNER_RESPONSE", content: "Dùng tài khoản khác không?" }, { step_index: 4, type: "USER_INPUT", content: "ừ dùng" }]);
+    const self = tr("gws-self.jsonl", [{ step_index: 0, type: "USER_INPUT", content: "liệt kê drive cá nhân" }, gwsDenied]);
+    t.check("gws Anti: profile cá nhân không cờ → deny", D(personal), "deny");
+    t.check("gws Anti: lý do bảo hỏi owner", /hỏi owner đúng một câu/.test(GATE(personal).reason ?? ""), true);
+    t.check("gws Anti: đúng profile công ty → ask", D(ok), "ask");
+    t.check("gws Anti: cờ thừa trên lệnh đúng profile → ask", D(`ALLOW_GWS_PROFILE_OVERRIDE=1 ${ok}`), "ask");
+    t.check("gws Anti: tự thêm cờ, owner chưa trả lời → deny", D(override, { transcriptPath: self }), "deny");
+    t.check("gws Anti: owner trả lời sau lần chặn, có cờ → ask", D(override, { transcriptPath: asked }), "ask");
+    t.check("gws Anti: chưa từng bị chặn mà tự thêm cờ → deny", D(override, { transcriptPath: ownT }), "deny");
+    t.check("gws Anti: crew dùng cờ dù owner đã trả lời → deny", D(override, { transcriptPath: crewT }), "deny");
+    t.check("gws Anti: không đọc được transcript → giữ hành vi cũ (ask)", D(override), "ask");
+  }
   t.check("cổng: workspace khác → ask", D(`curl https://${H.ahrefs}/x`, { workspacePaths: [tmpdir()] }), "ask");
   t.check("cổng: workspacePaths là chuỗi vẫn được xét → deny", D(`curl https://${H.ahrefs}/x`, { workspacePaths: WS }), "deny");
   for (const [label, input] of [["rác", "không phải json"], ["null", "null"], ["rỗng", ""]]) {
