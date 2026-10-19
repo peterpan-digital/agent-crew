@@ -6,6 +6,30 @@ việc cho Codex và Antigravity, gom kết quả về một task folder.
 Đây **không** chứa evidence của run cụ thể. Evidence của mỗi lần chạy nằm trong
 workspace đang dùng crew, ở chỗ layout của workspace đó quy định (mục *Bố cục thư mục*).
 
+## Lệnh `crew`
+
+Một cửa vào cho mọi script. Cài shim một lần (ghi `~/.local/bin/crew`, gọi node bằng
+đường ổn định nên chạy được cả khi app GUI gọi với PATH tối thiểu):
+
+```bash
+node plugins/agent-crew/bin/crew.mjs install
+crew doctor          # node, git, layout, agy/codex, tên model còn sống, transport app
+crew init            # .crew/ + .gitignore cho log thô; --state on để bật file trạng thái phiên
+```
+
+Một run, từ đầu tới cuối:
+
+```bash
+MP=$(crew new-run)                                   # layout có task: --task <task>
+IFS=$'\t' read -r SEQ EV < <(crew add-job "$MP" --worker codex --role owner \
+  --title "sửa test" --effort medium --allow src/)
+crew run codex --manifest "$MP" --job "$SEQ" --evidence "$EV" --effort medium --prompt-file brief.md
+crew collect "$MP"
+```
+
+`crew --help` liệt kê mọi lệnh. Lệnh nào đã có script thì chạy đúng script đó ở tiến
+trình con, giữ nguyên tham số và exit code; cờ lạ vẫn bị script từ chối.
+
 ## Bố cục thư mục: `crew.config.json`
 
 Không có file này thì mọi run nằm ở `.crew/`:

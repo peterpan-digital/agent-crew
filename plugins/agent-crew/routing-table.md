@@ -129,10 +129,15 @@ giác việc nặng hay nhẹ.
 
 | Loại việc | Anti headless (`agy`) | Anti app (`agentapi`) | Codex (cả 2 transport) |
 | --- | --- | --- | --- |
-| Điền theo mẫu, chuẩn hoá bảng, readback/export Sheet | `gemini-3.7-flash-low` | `flash_lite` | — |
-| Thi hành skill nhiều case, crawl + phân loại theo whitelist | `gemini-3.7-flash-medium` | `flash` | `--effort low` |
-| Suy luận từ dữ liệu sang output chưa có mẫu sẵn | `gemini-3.1-pro-high` | `pro` | `--effort medium` |
+| Điền theo mẫu, chuẩn hoá bảng, readback/export | bậc flash, mức `low` | `flash_lite` | — |
+| Thi hành skill nhiều case, crawl + phân loại theo whitelist | bậc flash, mức `medium` | `flash` | `--effort low` |
+| Suy luận từ dữ liệu sang output chưa có mẫu sẵn | bậc cao nhất `agy models` liệt kê | `pro` | `--effort medium` |
 | Code/pipeline nhiều bước, refactor tool | — | — | `--effort high` |
+
+Bảng này **cố ý không ghi tên model**. Tên đổi theo đợt phát hành của nhà cung cấp, và
+một tên cũ nằm trong tài liệu là job chết ngay lượt đầu (đo 16/10: `gemini-3.7-flash-medium`
+và `gpt-5.5` cùng hỏng ở hai job đầu của một run). Trước khi dispatch, chạy `crew doctor`:
+nó in tên `agy models` còn liệt kê và model trong `~/.codex/config.toml`.
 
 Bậc chỉ là điểm khởi đầu. Job fail vì model yếu thì **nâng đúng 1 bậc và ghi note**,
 không nhảy thẳng lên `pro-high` cho mọi thứ — làm vậy thì lần sau không ai biết việc
@@ -144,7 +149,7 @@ Ràng buộc từng runtime:
 | --- | --- |
 | `agy` | nhận tên model đầy đủ; `agy models` liệt kê bản còn sống |
 | `agentapi` | **chỉ** nhận `flash_lite\|flash\|pro\|inherit`, không nhận tên đầy đủ |
-| Codex | Bậc đặt bằng `--effort`; vẫn truyền `-m` (mặc định config hiện tại `gpt-5.5`) — để trống thì manifest không ghi được model nào đã chạy, đúng cái field này sinh ra để đo. Đo 2026-08-24: codex **im lặng bỏ qua** `model_reasoning_effort` sai chính tả, nên adapter tự whitelist để bắt typo |
+| Codex | Bậc đặt bằng `--effort`; vẫn truyền `-m` (lấy tên từ `crew doctor`) — để trống thì manifest không ghi được model nào đã chạy, đúng cái field này sinh ra để đo. Cache model của Codex liệt kê cả model tài khoản không được dùng, nên tin model trong config máy hơn cache. Đo 2026-08-24: codex **im lặng bỏ qua** `model_reasoning_effort` sai chính tả, nên adapter tự whitelist để bắt typo |
 
 **Không truyền `--model` thì không dispatch.** Trước phase 03, mọi job trong mọi
 manifest đều `"model": null` — knob có mà chưa ai bật, nên không có cách nào đo model
