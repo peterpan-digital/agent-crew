@@ -18,8 +18,10 @@
  * surrounding reasoning with it, which is the one thing a handoff exists to
  * carry.
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
+import { loadCrewConfig } from "./crew-config.mjs";
 
 /**
  * `group: n` redacts only that capture group, so `apiKey: <value>` keeps its
@@ -124,10 +126,33 @@ export function workspaceRules({ internalDomains, internalHosts, emailDomains } 
   return rules;
 }
 
+/** Gốc git của `start`, không phải git thì chính nó. */
+function gitRoot(start) {
+  try {
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: start, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return resolve(start);
+  }
+}
+
+/** File redact mà `crew.config.json` của workspace trỏ tới; không khai thì null. */
+function configuredRedactPath(start) {
+  const root = gitRoot(start);
+  let rel;
+  try {
+    ({ redactConfig: rel } = loadCrewConfig(root));
+  } catch (err) {
+    throw new Error(`redact: ${err.message}`);
+  }
+  return rel ? join(root, rel) : null;
+}
+
 /**
  * Workspace config, read once at load. `CREW_HARNESS_CONFIG` names the file;
- * otherwise it is `harness.config.json` next to the module folder (the module
- * lives at `<workspace>/mwg-agent-crew/`). Section `redact` carries the three
+ * otherwise it is the file `redactConfig` of `crew.config.json` points at, from
+ * the workspace root (`CLAUDE_PROJECT_DIR`, else cwd, walked up to its git
+ * root). It is a separate file because the values are the private part: the
+ * crew config is committed, the redact file usually is not. Section `redact` carries the three
  * lists; every `<section>.origin` (CMS, n8n…) is added to `internalHosts` too,
  * so a host configured once for the tools that call it is hidden without being
  * listed twice. Placeholders (`<...>`) are skipped.
@@ -135,10 +160,12 @@ export function workspaceRules({ internalDomains, internalHosts, emailDomains } 
  * Missing file → `configured: false` and only the generic rules run; callers
  * that send text off the machine say so. A file that exists but does not parse
  * throws: the export is fail-closed, and "your config is broken" must not
- * quietly become "nothing workspace-specific is hidden".
+ * quietly become "nothing workspace-specific is hidden". A broken
+ * `crew.config.json` throws for the same reason.
  */
-export function loadRedactConfig({ env = process.env, path } = {}) {
-  const file = path ?? env.CREW_HARNESS_CONFIG ?? fileURLToPath(new URL("../../../harness.config.json", import.meta.url));
+export function loadRedactConfig({ env = process.env, path, cwd = process.cwd() } = {}) {
+  const file = path ?? env.CREW_HARNESS_CONFIG ?? configuredRedactPath(env.CLAUDE_PROJECT_DIR || cwd);
+  if (!file) return { configured: false, path: "redactConfig của crew.config.json", lists: {} };
   if (!existsSync(file)) return { configured: false, path: file, lists: {} };
   let data;
   try {

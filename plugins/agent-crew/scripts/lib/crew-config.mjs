@@ -4,6 +4,8 @@
  *   routingTriggers  việc nào hook gợi ý chia cho worker (regex trên prompt)
  *   routingLog       nơi hook ghi lượt bắn để chấm gate (không có = không ghi)
  *   costGate         API tính tiền theo lượt: worker gặp thì dừng, trả COST_GATE
+ *   redactConfig     file JSON (thường gitignored) chứa mục `redact` cho bộ che
+ *                    dữ liệu của state phiên và export transcript
  *
  * Luật viết bằng lời (task tạo ở đâu, đóng task thế nào, connector nào cấm) nằm
  * ở CLAUDE.md/AGENTS.md của dự án — agent đọc được văn xuôi, hook thì không.
@@ -87,7 +89,17 @@ export function loadCrewConfig(workspace) {
     if (/[{}]/.test(raw.routingLog)) fail(`routingLog không nhận {task}/{run}: "${raw.routingLog}"`);
     routingLog = raw.routingLog;
   }
-  return Object.freeze({ layout, routingTriggers: Object.freeze(routingTriggers), routingLog, costGate: Object.freeze(costGate) });
+  let redactConfig = null;
+  if (raw.redactConfig !== undefined && raw.redactConfig !== null) {
+    try {
+      assertRelPath("redactConfig", raw.redactConfig);
+    } catch (err) {
+      fail(err.message);
+    }
+    if (!raw.redactConfig.endsWith(".json")) fail(`redactConfig phải là file .json: "${raw.redactConfig}"`);
+    redactConfig = raw.redactConfig;
+  }
+  return Object.freeze({ layout, routingTriggers: Object.freeze(routingTriggers), routingLog, costGate: Object.freeze(costGate), redactConfig });
 }
 
 /** Prompt có nhắc API tốn tiền nào không (so tên, không phân biệt hoa thường). */

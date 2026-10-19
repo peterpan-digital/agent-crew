@@ -90,7 +90,8 @@ thư mục không phải git trước khi bắn job nào.
     { "id": "internal-link", "kind": "content", "pattern": "chèn link nội bộ|interlink" },
     { "id": "competitor-research", "kind": "research", "pattern": "phân tích đối thủ" }
   ],
-  "routingLog": ".crew/logs/routing-gate.jsonl"
+  "routingLog": ".crew/logs/routing-gate.jsonl",
+  "redactConfig": "redact.local.json"
 }
 ```
 
@@ -99,6 +100,7 @@ thư mục không phải git trước khi bắn job nào.
 | `costGate` | API tính tiền theo lượt gọi. Adapter chèn danh sách vào brief; worker gặp thì dừng, trả `COST_GATE — {api}`; collect tạo hold chờ owner |
 | `routingTriggers` | Regex (không phân biệt hoa thường) trên prompt. Khớp ≥2 `kind` khác nhau → hook gợi ý chia việc; 1 `kind` → gợi ý một job. Trigger khớp tên trong `costGate` bị từ chối lúc nạp |
 | `routingLog` | Nơi hook ghi lượt bắn (`ts, branch, decision, triggers` — không bao giờ ghi prompt). Không khai = không ghi |
+| `redactConfig` | File `.json` (nên gitignore) có mục `redact` — `internalDomains`, `internalHosts`, `emailDomains` — cho bộ che của state phiên và export transcript; mọi `<mục>.origin` trong file cũng bị che. Tách file vì đây là phần riêng tư, còn `crew.config.json` thì commit. Không khai = chỉ che theo hình dạng chung |
 
 Luật viết bằng lời — mục tiêu, cách tạo/đóng task, công cụ không được tự gọi — nằm ở
 `CLAUDE.md`/`AGENTS.md` của repo. Skill đọc nó; hook thì không.
@@ -245,7 +247,7 @@ quyết định của dispatcher, nằm trong brief để audit.
 | `scripts/lib/progress-watch.mjs` | Hai hàm thuần đo độ im của job Anti app: vân tay `byStatus` của conversation là tín hiệu chính, mtime file riêng của job chỉ được hoãn báo động. |
 | `scripts/crew-scope.mjs` | Quy file thay đổi trong working tree về từng job: ưu tiên `touchedFiles` runtime tự khai, còn lại theo mtime nằm trong khoảng job đó chạy. Tách khỏi collect vì đây là logic quy trách nhiệm, không phải logic phán quyết. |
 | `scripts/claude-session-export.mjs` | Xuất transcript của 1 session Claude thành markdown gầy để bàn giao sang agent khác. Gộp 3 nguồn (dòng chính, `subagents/`, `tool-results/`), bỏ `attachment`/`thinking`/`image`/tool output replay được, redact theo hình dạng giá trị, trần tuyệt đối 200 KB có assert. Rào chống injection mang nonce mỗi lần chạy. Thiếu module redact thì **abort**, không xuất file; `--out` trỏ vào path git đang theo dõi thì **từ chối**, không có cờ bỏ qua. |
-| `scripts/lib/redact-values.mjs` | Bộ dò bí mật **theo hình dạng giá trị**, vendored trong repo. Không phải bộ dò từ khoá — `secret-keywords.cjs` của hooks là bộ dò chủ đề prompt, nó vừa để lọt key đứng một mình vừa phá 5,9% text block nói về LLM token. Domain nội bộ (host `cms.`/`staging.`… của website, host công cụ tự host, domain email công ty) **không viết trong code**: đọc mục `redact` của `harness.config.json` cạnh thư mục module (hoặc file `CREW_HARNESS_CONFIG` trỏ tới), mọi `<mục>.origin` trong đó tự được che. Thiếu config thì chỉ che theo hình dạng chung và lệnh export in cảnh báo; config hỏng thì export dừng. |
+| `scripts/lib/redact-values.mjs` | Bộ dò bí mật **theo hình dạng giá trị**, vendored trong repo. Không phải bộ dò từ khoá — `secret-keywords.cjs` của hooks là bộ dò chủ đề prompt, nó vừa để lọt key đứng một mình vừa phá 5,9% text block nói về LLM token. Domain nội bộ (host `cms.`/`staging.`… của website, host công cụ tự host, domain email công ty) **không viết trong code**: đọc mục `redact` của file mà `redactConfig` trong `crew.config.json` trỏ tới (hoặc file `CREW_HARNESS_CONFIG` trỏ tới), mọi `<mục>.origin` trong đó tự được che. Thiếu config thì chỉ che theo hình dạng chung và lệnh export in cảnh báo; config hỏng thì export dừng. |
 | `scripts/agent-state-write.mjs` | Ghi trạng thái phiên hiện tại vào `{stateDir}/{agent}-{phiên}.md` (mặc định `.crew/state`). Chạy trong hook, **không phải model gọi** — suy từ transcript nên tốn 0 token. Mỗi phiên một đường dẫn riêng nên không cần khoá file. Thiếu module redact thì **không ghi gì**, nhưng vẫn exit 0 để không chặn phiên. |
 | `scripts/agent-state-read.mjs` | In trạng thái các phiên khác cho hook `SessionStart` nạp vào đầu phiên. Bỏ qua file của chính mình, in tuổi từng file, đánh dấu file quá 12 giờ. Luôn exit 0. |
 | `scripts/lib/state-file.mjs` · `scripts/lib/derive-state.mjs` | Định dạng + I/O atomic + dọn file cũ; và bộ suy trạng thái đọc được **cả hai** định dạng transcript (Claude và Codex `rollout-*.jsonl`). |
@@ -604,6 +606,7 @@ nội dung manifest — nên một runner spawn được process và so được
 | `tests/collect-gate.test.mjs` | Cổng nghiệm thu trên các run dựng sẵn để sai đúng 1 kiểu: trùng evidence sau khi resolve, ghi ngoài phạm vi, ghi vào file được bảo vệ, ghi vào prefix bị gitignore đã khai, biên prefix, khoảng suy đoán, xoá file, `--abandon` job đã fail, `--dry-run` phủ `--abandon`, `--grace` không phải số, chạy từ cwd khác, echo template brief, provenance evidence, WARN bền qua 2 lần collect, cost gate chỉ nằm trong evidence. |
 | `tests/codex-lifecycle.test.mjs` | Vòng đời `codex-run.mjs` qua `codex` giả: grandchild giữ stdout, brief 200KB vào child không đọc stdin, watchdog trước stderr rác, retry đè sidecar cũ, log dir sai quyền, `BLOCKED` phải exit 3, và manifest phải ghi được ca bị giết. |
 | `tests/agent-state.test.mjs` | Hai luật ngược chiều và cả hai phải giữ: hook **không được chặn phiên** (mọi ca hỏng đều exit 0) nhưng cũng **không được ghi khi chưa che được**. Thêm: ba phiên ghi cùng lúc ra ba file không mất cái nào, trần 4 KB, file cũ bị đánh dấu, và đoạn text cuối là câu dẫn cụt thì không được chọn làm tóm tắt. |
+| `tests/redact-config.test.mjs` | Bộ che tìm file domain nội bộ qua `redactConfig` từ gốc repo (cả từ thư mục con, `CLAUDE_PROJECT_DIR`), khai sai thì ném, và `state-write` đầu-cuối che thật domain back-door + email công ty. |
 | `tests/session-export.test.mjs` | Redactor trước, exporter sau. Hai ca ngược nhau: credential **không kèm từ tiếng Anh nào** phải chết sạch, và văn xuôi nói về LLM token phải còn nguyên. Rồi: gộp subagent/sidecar, từ chối path dưới `subagents/`, gỡ module redact → exit ≠ 0 và **không** sinh file, trần byte tính trên cả file chứ không riêng phần thân. |
 | `tests/holds.test.mjs` | Hold từ đầu tới cuối: tạo hold cổng chi phí khi run hết job chạy, đọc tên API (kể cả dòng luật brief đứng trước dòng `Concerns`), `answer`/`defer`/`cover`, supersede khi claim lại, từ chối dưới vai worker và khi còn job chạy, và vân tay `holds` lệch qua `codex-run.mjs` thật phải ra exit 2. |
 | `tests/crew-digest.test.mjs` | Bảng đầu phiên: thứ tự hold → job kẹt → run chưa nghiệm thu, trần 15 dòng, run trước mốc không hiện vì "chưa nghiệm thu", câu hỏi bị lọc trước khi vào ngữ cảnh, manifest hỏng không làm chết hook. |
