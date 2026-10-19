@@ -24,6 +24,7 @@ import { readManifest, updateJob, appendNote } from "./crew-manifest.mjs";
 import { evidenceDigest, readWorkerStatus } from "./crew-guards.mjs";
 import { probeCompanionJob, COMPANION_ACTIVE, COMPANION_TERMINAL } from "./crew-runtime-probe.mjs";
 import { resolveCompanion } from "./codex-companion-path.mjs";
+import { WORKER_ROLE_ENV } from "./lib/crew-role.mjs";
 
 /**
  * The rule, learned from a real run: evidence with a valid Status line outranks
@@ -130,7 +131,7 @@ function cancelCompanionJob(jobId, workspace) {
     const companion = resolveCompanion();
     const proc = spawnSync(process.execPath, [companion, "cancel", jobId, "--json", "--cwd", workspace], {
       cwd: workspace, encoding: "utf8", timeout: 60_000,
-      env: { ...process.env, MWG_CREW_ROLE: "worker" },
+      env: { ...process.env, ...WORKER_ROLE_ENV },
     });
     if (proc.error) return `cancel thất bại: ${proc.error.message}`;
     if (proc.status !== 0) return `cancel exit ${proc.status}`;

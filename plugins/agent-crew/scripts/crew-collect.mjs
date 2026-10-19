@@ -15,8 +15,9 @@
  * clears a recorded failure.
  */
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { resolve, dirname, relative, join } from "node:path";
+import { basename, resolve, dirname, relative, join } from "node:path";
 import { readManifest, updateJob, updateManifest, appendNote, taskRel } from "./crew-manifest.mjs";
+import { layoutOf, reportDirRel, usesTask } from "./lib/crew-layout.mjs";
 import { evidenceDigest, readWorkerStatus, CREDENTIAL_STORE_DIR } from "./crew-guards.mjs";
 import { reconcileRun, resolveEvidence } from "./crew-reconcile.mjs";
 import { collectWriteScope, headMovement } from "./crew-scope.mjs";
@@ -851,28 +852,32 @@ export function writeRunReport(r, manifest, { path, workspace, now = new Date() 
     );
   }
   const abs = resolve(workspace, path);
-  const task = taskRel(manifest.task);
-  const wantDir = resolve(workspace, "tasks", task, "reports");
+  const layout = layoutOf(manifest);
+  const task = taskRel(manifest.task, layout);
+  const reportRel = !usesTask(layout) && typeof manifest.runDir === "string"
+    ? manifest.runDir
+    : reportDirRel(layout, { task, run: manifest.runId });
+  const wantDir = resolve(workspace, reportRel);
   const rel = relative(wantDir, abs);
-  if (rel.startsWith("..") || rel.includes("/")) {
-    throw new Error(`report phải nằm trực tiếp trong tasks/${task}/reports/, nhận: ${path}`);
+  if (rel.startsWith("..") || rel.includes("/") || rel === "") {
+    throw new Error(`report phải nằm trực tiếp trong ${reportRel}/, nhận: ${path}`);
   }
   // `relative()` compares strings, so it cannot see a symlink. If the reports
   // directory is a link, a name that looks like a direct child writes wherever
   // the link points -- outside the task, outside the repo.
   //
-  // The comparison has to be anchored one level up, at the task directory.
-  // Resolving `wantDir` itself and comparing it to the write target proves
-  // nothing when `wantDir` IS the symlink: both sides follow the same link and
-  // agree. Resolving the task directory and then appending `reports` gives a
-  // path the link cannot influence.
-  const taskDir = resolve(workspace, "tasks", task);
-  if (existsSync(dirname(abs)) && existsSync(taskDir)) {
+  // The comparison has to be anchored one level up, at the report dir's parent
+  // (the task directory in the original layout). Resolving `wantDir` itself and
+  // comparing it to the write target proves nothing when `wantDir` IS the
+  // symlink: both sides follow the same link and agree. Resolving the parent and
+  // then appending the last segment gives a path the link cannot influence.
+  const anchor = dirname(wantDir);
+  if (existsSync(dirname(abs)) && existsSync(anchor)) {
     const realDir = realpathSync(dirname(abs));
-    const expected = join(realpathSync(taskDir), "reports");
+    const expected = join(realpathSync(anchor), basename(wantDir));
     if (realDir !== expected) {
       throw new Error(
-        `thư mục report không thật nằm ở tasks/${task}/reports/ (symlink?): ${realDir}`,
+        `thư mục report không thật nằm ở ${reportRel}/ (symlink?): ${realDir}`,
       );
     }
   }
@@ -990,7 +995,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         "usage: crew-collect.mjs <manifest.json> [--abandon <seq>] [--grace <ms>] [--dry-run]\n" +
         "                            [--not-ours <path>]... [--ack-runtime <seq>[@sha]]...\n" +
         "                            [--replaced <seq hỏng>=<seq làm thay>]... --reason \"<vì sao>\"\n" +
-        "                            [--report tasks/{task}/reports/{yymmdd-hhmm}-{type}-{slug}.md]\n" +
+        "                            [--report <reportDir của layout>/{yymmdd-hhmm}-{type}-{slug}.md]\n" +
         "exit: 0 = được report | 1 = còn job chưa xong hoặc runtime lệch evidence | 2 = vi phạm phạm vi ghi | 3 = cả 1 và 2",
       );
       process.exit(2);

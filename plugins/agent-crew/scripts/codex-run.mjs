@@ -29,6 +29,7 @@ import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { join, relative, resolve, sep } from "node:path";
 import { resolveCompanion } from "./codex-companion-path.mjs";
+import { isWorkerRole } from "./lib/crew-role.mjs";
 // Static, unlike the `await import` calls further down: a signal handler runs
 // with no chance to await, so the one write it needs has to be resolved before
 // the signal ever arrives.
@@ -51,6 +52,7 @@ import {
   validateEvidencePath,
   workerEnv,
   resolveLogDir,
+  jobLayout,
 } from "./crew-guards.mjs";
 // Dời sang crew-guards để anti-run dùng chung; giữ export ở đây cho test và nơi gọi cũ.
 export { resolveLogDir };
@@ -426,7 +428,8 @@ function buildArgs({ workspace, model, effort, lastMessagePath, sandboxMode = "w
  */
 function prepareRun(options) {
   const workspace = resolve(options.workspace ?? process.cwd());
-  const evidenceAbs = validateEvidencePath(options.evidence, workspace);
+  const layout = jobLayout({ manifest: options.manifest, workspace });
+  const evidenceAbs = validateEvidencePath(options.evidence, workspace, layout);
   const briefText = readPrompt(options);
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
   const timeoutMs = parseDuration(timeout); // validates against the 30m ceiling
@@ -447,7 +450,7 @@ function prepareRun(options) {
   // handing itself full machine access is the same escalation by a shorter
   // route. Cheap to close, and it does not depend on Seatbelt inheritance
   // holding -- which nobody here has verified.
-  if (sandboxMode !== "workspace-write" && process.env.MWG_CREW_ROLE === "worker") {
+  if (sandboxMode !== "workspace-write" && isWorkerRole()) {
     throw new CodexRunError(
       `--sandbox-mode ${sandboxMode} is not available to a worker`,
       "only the dispatcher grants this level; a worker raising its own ceiling is an escalation",
@@ -467,8 +470,8 @@ function prepareRun(options) {
 
   assertEvidenceAbsent(evidenceAbs);
 
-  // The log lives under the task's data/ folder (see resolveLogDir).
-  const logDir = resolveLogDir(evidenceAbs, workspace);
+  // The log lives in the layout's logDir (see resolveLogDir).
+  const logDir = resolveLogDir(evidenceAbs, workspace, layout);
   mkdirSync(logDir, { recursive: true });
   const base = evidenceAbs.split(sep).pop().replace(/\.md$/, "");
   // Composed here rather than above because the extra boundary line depends on

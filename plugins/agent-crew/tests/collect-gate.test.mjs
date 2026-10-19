@@ -904,9 +904,9 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
 
 // --- a manifest-shaped file cannot excuse a control-plane write ---------------
 {
-  // Any file named manifest.json under */reports/crew-* counts as another run.
-  // A worker can write one inside its own task folder, so its claim must not be
-  // able to clear a write that no run is allowed to make.
+  // A manifest.json where the layout puts runs counts as another run. A worker
+  // can write one inside its own task folder, so its claim must not be able to
+  // clear a write that no run is allowed to make.
   const ws = tmpWorkspace("fake-foreign-");
   execFileSync("git", ["init", "-q"], { cwd: ws });
   const mine = join("tasks", TASK, "reports", "crew-mine");
@@ -915,10 +915,16 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   writeFile(join(ws, mine, "w1.md"), DONE);
   writeFile(join(ws, "harness", "gate.mjs"), "// sửa cổng\n");
   writeFile(join(ws, "their-file.md"), "x\n");
-  writeFile(join(ws, "tasks", TASK, "data", "reports", "crew-zz", "manifest.json"), JSON.stringify({
+  writeFile(join(ws, "tasks", TASK, "reports", "crew-zz", "manifest.json"), JSON.stringify({
     runId: "zz", createdAt: new Date().toISOString(),
     jobs: [{ seq: 1, touchedFiles: ["harness/gate.mjs", "their-file.md"] }],
   }));
+  // Nằm ngoài chỗ layout đặt run (trong data/): không phải run, claim của nó không tính.
+  writeFile(join(ws, "tasks", TASK, "data", "reports", "crew-yy", "manifest.json"), JSON.stringify({
+    runId: "yy", createdAt: new Date().toISOString(),
+    jobs: [{ seq: 1, touchedFiles: ["planted.md"] }],
+  }));
+  writeFile(join(ws, "planted.md"), "x\n");
   updateJob(manifestPath, j.seq, {
     status: "done", startedAt: new Date(Date.now() - 60_000).toISOString(), endedAt: new Date().toISOString(), exitCode: 0,
   });
@@ -926,6 +932,7 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   t.check("claim giả không miễn được file control plane", r.scope.outOfScope.some((e) => e.path === "harness/gate.mjs"), true);
   t.check("...nên gate đỏ", r.exitCode, 2);
   t.check("...file thường vẫn được claim như trước", r.scope.ownedElsewhere.map((e) => e.path).join(","), "their-file.md");
+  t.check("manifest nằm ngoài layout (data/) không được tính là run khác", r.scope.ownedElsewhere.some((e) => e.path === "planted.md"), false);
 }
 
 // --- hasSection: biến thể tiêu đề và cách ghi "không có" ----------------------

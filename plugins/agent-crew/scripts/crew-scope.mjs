@@ -44,18 +44,20 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join, posix, relative, sep } from "node:path";
+import { DEFAULT_LAYOUT, LEGACY_LAYOUT, homeRel, layoutOf, listRuns, loadLayout, normalizeTask, reachesRunManifest, usesTask } from "./lib/crew-layout.mjs";
 
 /** How long after a job ends a write can still plausibly be that job's. */
 export const DEFAULT_GRACE_MS = 120_000;
 
 /**
- * `task` là đường TƯƠNG ĐỐI dưới `tasks/` (`260615-x` hoặc `260615-x/work-items/y`).
- * Dispatcher hay truyền cả tiền tố `tasks/`: 7 run thật đã ghi như vậy, và gate đọc
- * thành `tasks/tasks/...` -- mọi file trong chính task bị tính là ghi ngoài phạm vi,
- * report không ghi được. createRun chuẩn hoá khi ghi; người đọc chuẩn hoá cho run cũ.
+ * `task` tương đối với thư mục task của layout (`260615-x` hoặc
+ * `260615-x/work-items/y` ở layout gốc). Dispatcher hay truyền cả tiền tố
+ * `tasks/`: 7 run thật đã ghi như vậy, và gate đọc thành `tasks/tasks/...` --
+ * mọi file trong chính task bị tính là ghi ngoài phạm vi, report không ghi được.
+ * createRun chuẩn hoá khi ghi; người đọc chuẩn hoá cho run cũ.
  */
-export function taskRel(task) {
-  return String(task ?? "").replace(/^\.?\/+/, "").replace(/^tasks\/+/, "").replace(/\/+$/, "");
+export function taskRel(task, layout = LEGACY_LAYOUT) {
+  return normalizeTask(layout, task);
 }
 
 /**
@@ -147,33 +149,6 @@ function canonical(path) {
 }
 
 /**
- * True when `dir` is a run manifest or a folder that can hold one:
- * `tasks/{task}/reports/crew-{run}/manifest.json`, with any number of
- * `work-items/{item}` levels before `reports`, and every ancestor of it. A worker that may write there can rewrite another run's
- * status, holds and scope; its own task folder is already implicit, so a
- * declaration here is only ever useful for reaching someone else's run.
- */
-function reachesRunManifest(dir) {
-  const seg = dir.split("/");
-  if (seg[0] !== "tasks") return false;
-  let i = 2; // tasks/{task}
-  if (seg.length <= i) return true;
-  for (;;) {
-    if (seg[i] === "work-items") {
-      if (seg.length <= i + 2) return true;
-      i += 2;
-      continue;
-    }
-    if (seg[i] !== "reports") return false;
-    if (seg.length === i + 1) return true;
-    if (!seg[i + 1].startsWith("crew-")) return false;
-    if (seg.length === i + 2) return true;
-    // `manifest.json.lock/` is the mkdir lock: holding it stalls every adapter.
-    return seg.length >= i + 3 && seg[i + 2].startsWith("manifest.json");
-  }
-}
-
-/**
  * True when a declared prefix reaches the control plane or a protected path, in
  * either direction: the prefix sits under one (`harness/x`), or one sits under
  * the prefix (`.claude/`, `.`). The second direction is the one an exact or
@@ -196,11 +171,17 @@ export function isControlPlanePath(path) {
   });
 }
 
-export function touchesControlPlane(prefix) {
+/**
+ * `layout` là layout của run đang khai: prefix với tới sổ của một run khác cùng
+ * layout là bị chặn. Không truyền thì chặn theo CẢ layout mặc định lẫn layout
+ * gốc -- ở chiều chặn, khớp rộng hơn là an toàn hơn.
+ */
+export function touchesControlPlane(prefix, layout = null) {
   const dir = canonical(prefix);
   if (dir === "" || dir === "." || dir === ".." || dir.startsWith("../") || isAbsolute(dir)) return true;
   if (dir.split("/").some((s) => INSTRUCTION_FILES.has(s))) return true;
-  if (reachesRunManifest(dir)) return true;
+  const layouts = layout ? [layout] : [DEFAULT_LAYOUT, LEGACY_LAYOUT];
+  if (layouts.some((l) => reachesRunManifest(l, dir))) return true;
   const under = `${dir}/`;
   return [...CONTROL_PLANE_PATHS, ...PROTECTED_PATHS, ...PROTECTED_DIRS].some((entry) => {
     const bare = canonical(entry);
@@ -214,7 +195,7 @@ export function touchesControlPlane(prefix) {
  * Tracked files only -- the instruction files are all tracked -- and a workspace
  * git cannot read answers null, leaving the static check as the only one.
  */
-export function controlPlaneInside(workspace, prefix) {
+export function controlPlaneInside(workspace, prefix, layout = null) {
   const dir = canonical(prefix);
   let out;
   try {
@@ -226,7 +207,7 @@ export function controlPlaneInside(workspace, prefix) {
   } catch {
     return null;
   }
-  return out.split("\0").filter(Boolean).find((f) => touchesControlPlane(f)) ?? null;
+  return out.split("\0").filter(Boolean).find((f) => touchesControlPlane(f, layout)) ?? null;
 }
 
 /** A prefix only means "this directory" if it ends in a separator. */
@@ -253,13 +234,24 @@ export function jobIntervals(manifest, graceMs = DEFAULT_GRACE_MS) {
 }
 
 /**
- * Where each job may write. `tasks/{task}/` is implicit for every job; anything
+ * Chỗ mọi job của run được ghi mà không cần khai: thư mục task, hoặc chính thư
+ * mục run khi layout không có task. Thư mục run lấy từ `runDir` mà createRun
+ * ghi vào manifest, không dựng lại từ runId -- caller đặt tên thư mục run.
+ */
+export function runHome(manifest) {
+  const layout = layoutOf(manifest);
+  if (!usesTask(layout) && typeof manifest.runDir === "string") return manifest.runDir;
+  return homeRel(layout, { task: taskRel(manifest.task, layout), run: manifest.runId });
+}
+
+/**
+ * Where each job may write. The run home (`runHome`) is implicit for every job; anything
  * else has to be declared per job, because some legitimate work lands outside
  * it -- an article edit belongs in `mwg-content-editor/content-workspaces/`,
  * which is durable and shared, not task-scoped.
  */
 export function allowedFor(manifest, seqs) {
-  const implicit = [normalizePrefix(`tasks/${taskRel(manifest.task)}`)];
+  const implicit = [normalizePrefix(runHome(manifest))];
   const runLevel = (manifest.filesMayModify ?? []).map(normalizePrefix);
   const perJob = manifest.jobs
     .filter((j) => seqs.includes(j.seq))
@@ -276,17 +268,17 @@ function declaredPrefixes(manifest) {
 }
 
 /**
- * Nested repos the outer repo ignores but a worker still writes into. `tasks/`
- * became its own local-only repo so task content never reaches the public
- * harness; without reading its status too, every write under `tasks/` -- where
- * all evidence lives -- would be invisible to this gate.
+ * Nested repos the outer repo ignores but a worker still writes into
+ * (`nestedRepos` of the layout). In the original workspace `tasks/` became its
+ * own local-only repo so task content never reaches the public harness; without
+ * reading its status too, every write under `tasks/` -- where all evidence
+ * lives -- would be invisible to this gate.
+ *
+ * `git status` of the workspace plus every nested repo present, paths relative to the workspace.
  */
-export const NESTED_REPOS = ["tasks"];
-
-/** `git status` of the workspace plus every nested repo present, paths relative to the workspace. */
-export function changedPaths(workspace) {
+export function changedPaths(workspace, nestedRepos = loadLayout(workspace).nestedRepos) {
   const paths = statusPaths(workspace, "");
-  for (const sub of NESTED_REPOS) {
+  for (const sub of nestedRepos) {
     try {
       statSync(join(workspace, sub, ".git"));
     } catch { continue; }
@@ -400,20 +392,10 @@ export function authoredIndex(manifest, workspace) {
  */
 export function foreignAuthors(manifest, workspace, { now = Date.now() } = {}) {
   const owners = new Map();
-  const here = join(workspace, "tasks");
-  let entries;
-  try {
-    entries = readdirSync(here, { recursive: true, withFileTypes: true });
-  } catch {
-    return owners;
-  }
   let read = 0;
-  for (const e of entries) {
+  for (const run of listRuns(workspace, layoutOf(manifest))) {
     if (read >= CROSS_RUN_LIMIT) break;
-    if (!e.isFile() || e.name !== "manifest.json") continue;
-    const dir = e.parentPath ?? "";
-    if (!dir.includes(`${sep}reports${sep}crew-`) && !dir.includes("/reports/crew-")) continue;
-    const full = join(dir, e.name);
+    const full = join(run.dir, "manifest.json");
     let other;
     try {
       other = JSON.parse(readFileSync(full, "utf8"));
@@ -447,7 +429,7 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
   const authored = authoredIndex(manifest, workspace);
   const foreign = foreignAuthors(manifest, workspace);
   const waived = new Set(notOurs.map((p) => toRel(workspace, p)).filter(Boolean));
-  const paths = new Set([...changedPaths(workspace), ...watchedPaths(workspace, manifest)]);
+  const paths = new Set([...changedPaths(workspace, layoutOf(manifest).nestedRepos), ...watchedPaths(workspace, manifest)]);
 
   for (const path of paths) {
     let mtime;

@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { crewDigest } from "./lib/crew-digest.mjs";
 import { AGENTS, formatAge, readStates, stateDir, statePath, STALE_HOURS } from "./lib/state-file.mjs";
+import { hasNoRole } from "./lib/crew-role.mjs";
 
 function readPayload() {
   try {
@@ -60,7 +61,7 @@ try {
   // họ không điều phối. Dưới vai worker thì không in: worker không quyết hold, và
   // một worker thấy câu hỏi của owner là thêm một đường cho text chảy qua nó.
   // try riêng: lỗi ở đây không được làm mất khối trạng thái đã in ở trên.
-  if (agent === "claude" && !process.env.MWG_CREW_ROLE) {
+  if (agent === "claude" && hasNoRole()) {
     try {
       const lines = crewDigest(workspace);
       if (lines.length) process.stdout.write(`${states.length ? "\n\n" : ""}${lines.join("\n")}\n`);

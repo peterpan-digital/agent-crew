@@ -31,7 +31,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { AGENTS, STATE_DIR_REL, pruneOld, renderState, stateDir, statePath, writeStateAtomic } from "./lib/state-file.mjs";
+import { AGENTS, stateDirRel, pruneOld, renderState, stateDir, statePath, writeStateAtomic } from "./lib/state-file.mjs";
 import { deriveFromTranscript } from "./lib/derive-state.mjs";
 
 const quiet = (msg) => { if (process.env.MWG_STATE_DEBUG) process.stderr.write(`agent-state-write: ${msg}\n`); };
@@ -61,13 +61,14 @@ async function main() {
   // bắn khớp y hệt file global và chỉ file global), nên chỗ đăng ký duy nhất có
   // tác dụng là `~/.codex/hooks.json` — dùng chung cho mọi repo trên máy.
   //
-  // `stateDir` là `<cwd>/tasks/_state`, nên nếu không rào thì một phiên Codex mở
-  // ở repo bất kỳ sẽ đẻ ra thư mục `tasks/_state/` trong repo đó. Rào bằng "thư
+  // `stateDir` là `stateDir` trong layout của `<cwd>` (mặc định `.crew/state`),
+  // nên nếu không rào thì một phiên Codex mở ở repo bất kỳ sẽ đẻ ra thư mục đó
+  // trong repo đó. Rào bằng "thư
   // mục đã tồn tại" thay vì bằng danh sách đường dẫn cứng: workspace nào muốn
   // thu trạng thái thì tự tạo thư mục, và không có đường dẫn máy nào bị nhúng
   // vào code.
   if (!existsSync(stateDir(workspace))) {
-    return quiet(`${workspace} không có ${STATE_DIR_REL} — bỏ qua`);
+    return quiet(`${workspace} không có ${stateDirRel(workspace)} — bỏ qua`);
   }
 
   const session = payload.session_id ?? payload.sessionId ?? payload.conversationId ?? "unknown";

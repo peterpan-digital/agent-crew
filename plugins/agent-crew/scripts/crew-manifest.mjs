@@ -13,10 +13,12 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { dirname, isAbsolute, join, normalize, resolve as resolvePath, sep } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { holdsFingerprint, supersedeSeq } from "./lib/holds.mjs";
 import { READER_LEDGERS, ledgerFingerprint, ledgerFingerprints } from "./lib/reader-ledgers.mjs";
 import { controlPlaneInside, taskRel, touchesControlPlane } from "./crew-scope.mjs";
+import { isValidTask, layoutOf, loadLayout, normalizeTask, usesTask } from "./lib/crew-layout.mjs";
+import { isWorkerRole } from "./lib/crew-role.mjs";
 
 export { taskRel };
 
@@ -155,11 +157,22 @@ export function writeManifest(manifestPath, manifest) {
 }
 
 /** Read-modify-write under the lock. `mutate` receives and returns the manifest. */
+/** Field của run niêm lúc createRun. */
+const SEALED_RUN_FIELDS = ["layout", "runDir"];
+
 export function updateManifest(manifestPath, mutate) {
   const { lock, token } = acquireLock(manifestPath);
   try {
     const manifest = readManifest(manifestPath);
+    const sealed = SEALED_RUN_FIELDS.map((k) => JSON.stringify(manifest[k] ?? null));
     const next = mutate(manifest) ?? manifest;
+    // Layout quyết định evidence được tính ở đâu và job được ghi ở đâu; sửa nó
+    // trong sổ là nới chính cái cổng chấm sổ. Niêm lúc tạo, không đổi sau đó.
+    SEALED_RUN_FIELDS.forEach((k, i) => {
+      if (JSON.stringify(next[k] ?? null) !== sealed[i]) {
+        throw new ManifestError(`updateManifest không được đổi "${k}" của run\n  → layout niêm lúc createRun; muốn layout khác thì tạo run mới`);
+      }
+    });
     next.updatedAt = new Date().toISOString();
     // Check ownership again, right before writing. A holder slower than
     // LOCK_STALE_MS gets its lock reclaimed; the successor then reads, mutates
@@ -217,9 +230,35 @@ export function createRun({ runDir, runId, task, workspace, depth = 0, dispatche
   if (existsSync(manifestPath)) {
     throw new ManifestError(`run manifest already exists at ${manifestPath}`);
   }
-  const rel = taskRel(task);
-  if (!rel || isAbsolute(rel) || rel.split("/").includes("..")) {
-    throw new ManifestError(`task must be a path under tasks/ like "260615-x" or "260615-x/work-items/y", got "${task}"`);
+  // Layout chép vào manifest ngay lúc tạo: đổi crew.config.json giữa chừng
+  // không được làm lệch run đang chạy.
+  const layout = loadLayout(workspace);
+  let rel = "";
+  if (usesTask(layout)) {
+    rel = normalizeTask(layout, task);
+    if (!isValidTask(layout, rel)) {
+      throw new ManifestError(
+        `task must be a path relative to ${layout.taskDir.replace("{task}", "")} like "260615-x"` +
+        `${layout.taskNesting ? ` or "260615-x/${layout.taskNesting}/y"` : ""}, got "${task}"`,
+      );
+    }
+  } else if (task !== undefined && task !== null && task !== "") {
+    throw new ManifestError(
+      `this workspace's layout has no tasks (no taskDir in crew.config.json), got task "${task}"\n` +
+      "  → bỏ task, hoặc khai taskDir nếu workspace có sổ task",
+    );
+  }
+  const runDirRel = relative(resolvePath(workspace), resolvePath(runDir)).split(sep).join("/");
+  if (!runDirRel || runDirRel.startsWith("..") || isAbsolute(runDirRel)) {
+    throw new ManifestError(`runDir must be inside the workspace, got ${runDir}`);
+  }
+  // Cổng phạm vi ghi đọc `git status`; ở thư mục git không đọc được, mọi lần
+  // collect chết giữa chừng. Từ chối ngay đây, trước khi bắn job nào tốn token.
+  if (!insideGitWorkTree(workspace)) {
+    throw new ManifestError(
+      `workspace is not a git work tree: ${workspace}\n` +
+      "  → cổng phạm vi ghi cần git status; chạy `git init` rồi tạo run lại",
+    );
   }
   if (!Number.isInteger(depth) || depth < 0) {
     throw new ManifestError(`depth must be a non-negative integer, got ${depth}`);
@@ -235,9 +274,9 @@ export function createRun({ runDir, runId, task, workspace, depth = 0, dispatche
   // got a valid run to dispatch from. A worker may not create a run at ANY
   // depth. Depth 1 is for a dispatcher deliberately opening a sub-run, and a
   // dispatcher is not running with this variable set.
-  if (process.env.MWG_CREW_ROLE === "worker") {
+  if (isWorkerRole()) {
     throw new ManifestError(
-      `refusing to create a run at depth ${depth} while MWG_CREW_ROLE=worker\n` +
+      `refusing to create a run at depth ${depth} while CREW_ROLE/MWG_CREW_ROLE=worker\n` +
       "  → a worker cannot start a dispatch run, at any depth",
     );
   }
@@ -249,6 +288,8 @@ export function createRun({ runDir, runId, task, workspace, depth = 0, dispatche
       runId,
       task: rel,
       workspace,
+      runDir: runDirRel,
+      layout,
       dispatcher,
       depth,
       createdAt: now,
@@ -263,6 +304,16 @@ export function createRun({ runDir, runId, task, workspace, depth = 0, dispatche
       jobs: [],
     }) && readManifest(manifestPath),
   };
+}
+
+function insideGitWorkTree(workspace) {
+  try {
+    return execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: workspace, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
+    }).trim() === "true";
+  } catch {
+    return false;
+  }
 }
 
 /** HEAD, or null outside a repo. A run must not fail because git is unavailable. */
@@ -369,7 +420,8 @@ const SEALED_JOB_FIELDS = new Set([
 ]);
 
 /**
- * Evidence has to be a path inside the workspace, and inside `tasks/`.
+ * Evidence has to be a path inside the workspace, and inside the layout's
+ * `evidenceRoot` (`tasks/` in the original workspace, `.crew/` by default).
  *
  * Otherwise the doctrine has a hole with a `/tmp` in it: a job declaring
  * `evidence: "/tmp/old-pass.md"` gets read as proof if that file happens to
@@ -377,7 +429,7 @@ const SEALED_JOB_FIELDS = new Set([
  * working tree, so nothing notices. Evidence that lives where the gate cannot
  * see it is not evidence.
  */
-function assertEvidencePath(evidence) {
+function assertEvidencePath(evidence, layout) {
   if (typeof evidence !== "string" || evidence.length === 0) {
     throw new ManifestError(`evidence must be a non-empty path, got ${JSON.stringify(evidence)}`);
   }
@@ -391,10 +443,11 @@ function assertEvidencePath(evidence) {
   if (norm.startsWith("..")) {
     throw new ManifestError(`evidence must stay inside the workspace, got ${evidence}`);
   }
-  if (!norm.startsWith(`tasks${sep}`)) {
+  const root = layout.evidenceRoot.split("/").join(sep);
+  if (!norm.startsWith(`${root}${sep}`)) {
     throw new ManifestError(
-      `evidence must live under tasks/, got ${evidence}\n` +
-      "  → chỉ file trong tasks/ được tính là bằng chứng",
+      `evidence must live under ${layout.evidenceRoot}/, got ${evidence}\n` +
+      `  → chỉ file trong ${layout.evidenceRoot}/ được tính là bằng chứng`,
     );
   }
 }
@@ -404,7 +457,7 @@ function assertEvidencePath(evidence) {
  * update, because `updateJob` is where a dispatcher widens scope after the owner
  * says ok -- the moment a worker's chat could talk it into handing over more.
  */
-function assertFilesMayModify(list, workspace) {
+function assertFilesMayModify(list, workspace, layout = null) {
   if (list === undefined) return;
   // A string here reaches `.map` in the scope gate and throws mid-collect,
   // which turns a bad declaration into a dead gate.
@@ -429,7 +482,7 @@ function assertFilesMayModify(list, workspace) {
     if (normalize(prefix).split(sep).includes("..") || prefix.split(/[\\/]/).includes("..")) {
       throw new ManifestError(`filesMayModify không được chứa "..", nhận ${prefix}`);
     }
-    const inside = touchesControlPlane(prefix) ? prefix : (workspace ? controlPlaneInside(workspace, prefix) : null);
+    const inside = touchesControlPlane(prefix, layout) ? prefix : (workspace ? controlPlaneInside(workspace, prefix, layout) : null);
     if (inside) {
       throw new ManifestError(
         `filesMayModify chạm control plane hoặc file được bảo vệ: ${prefix}${inside === prefix ? "" : ` (chứa ${inside})`}\n` +
@@ -450,8 +503,8 @@ export function addJob(manifestPath, job) {
     }
     const seq = m.jobs.length + 1;
     const { role, transport } = resolveRouting(job);
-    assertEvidencePath(job.evidence);
-    assertFilesMayModify(job.filesMayModify, m.workspace);
+    assertEvidencePath(job.evidence, layoutOf(m));
+    assertFilesMayModify(job.filesMayModify, m.workspace, layoutOf(m));
     const extra = { ...job.extra };
     for (const field of SEALED_JOB_FIELDS) {
       if (field in extra) {
@@ -578,7 +631,7 @@ export function updateJob(manifestPath, seq, patch) {
         );
       }
     }
-    if ("filesMayModify" in patch) assertFilesMayModify(patch.filesMayModify, m.workspace);
+    if ("filesMayModify" in patch) assertFilesMayModify(patch.filesMayModify, m.workspace, layoutOf(m));
     Object.assign(job, patch);
     if (job.startedAt && job.endedAt) {
       job.durationSec = Math.round((Date.parse(job.endedAt) - Date.parse(job.startedAt)) / 1000);

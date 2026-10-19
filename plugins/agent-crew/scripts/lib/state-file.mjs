@@ -13,8 +13,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_LAYOUT, loadLayout } from "./crew-layout.mjs";
 
-export const STATE_DIR_REL = join("tasks", "_state");
 /** Trần cỡ. Trong `.agents/` đang có đúng một file 31 KB nhồi vào mỗi phiên -- đừng đẻ cái thứ hai. */
 export const MAX_BYTES = 4096;
 /** Quá ngưỡng này thì đánh dấu cũ. File 3 ngày trước mà đọc như đang chạy thì tệ hơn không có file. */
@@ -23,8 +23,22 @@ export const PRUNE_DAYS = 7;
 
 export const AGENTS = new Set(["claude", "codex", "anti"]);
 
+/**
+ * Thư mục state theo layout của workspace (`stateDir` của crew.config.json).
+ * Config hỏng thì rơi về thư mục mặc định: hook trạng thái chạy ở mọi phiên và
+ * không được chết vì config, mà thư mục mặc định thường không có nên hook sẽ
+ * chỉ bỏ qua.
+ */
+export function stateDirRel(workspace) {
+  try {
+    return loadLayout(workspace).stateDir;
+  } catch {
+    return DEFAULT_LAYOUT.stateDir;
+  }
+}
+
 export function stateDir(workspace) {
-  return join(workspace, STATE_DIR_REL);
+  return join(workspace, ...stateDirRel(workspace).split("/"));
 }
 
 /**

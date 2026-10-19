@@ -40,6 +40,7 @@ import { createHash } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { resolveCompanion } from "./codex-companion-path.mjs";
+import { WORKER_ROLE_ENV } from "./lib/crew-role.mjs";
 
 const COMPANION_TIMEOUT_MS = 15_000;
 const PS_TIMEOUT_MS = 10_000;
@@ -246,7 +247,7 @@ export function probeCompanionJob(jobId, { workspace, timeoutMs = COMPANION_TIME
   }
   const proc = spawnSync(process.execPath, [companion, "result", jobId, "--json", "--cwd", workspace], {
     cwd: workspace, encoding: "utf8", timeout: timeoutMs,
-    env: { ...process.env, MWG_CREW_ROLE: "worker" },
+    env: { ...process.env, ...WORKER_ROLE_ENV },
     maxBuffer: 8 * 1024 * 1024,
   });
   if (proc.error) {
@@ -291,7 +292,7 @@ function askCompanion(workspace) {
     cwd: workspace, encoding: "utf8", timeout: COMPANION_TIMEOUT_MS,
     // Same recursion guard the adapters use: anything the companion spawns
     // inherits this and reads the crew skill as a worker.
-    env: { ...process.env, MWG_CREW_ROLE: "worker" },
+    env: { ...process.env, ...WORKER_ROLE_ENV },
     maxBuffer: 8 * 1024 * 1024,
   });
   if (proc.error || proc.status !== 0) {

@@ -11,6 +11,8 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
+import { layoutOf, loadLayout, logDirRel } from "./lib/crew-layout.mjs";
+import { WORKER_ROLE_ENV } from "./lib/crew-role.mjs";
 
 // Ceilings come from mwg-agent-crew/cost-gate.md; a runaway agent burns quota.
 export const DEFAULT_TIMEOUT = "15m";
@@ -164,7 +166,7 @@ export function stripUnsafeEnv(env) {
 
 /** The env a Codex worker gets: the recursion guard, plus the strip. */
 export function workerEnv(extra = {}) {
-  return stripUnsafeEnv({ ...process.env, MWG_CREW_ROLE: "worker", ...extra });
+  return stripUnsafeEnv({ ...process.env, ...WORKER_ROLE_ENV, ...extra });
 }
 
 export class GuardError extends Error {
@@ -278,17 +280,31 @@ export function parseDuration(value) {
 }
 
 /**
- * Evidence must land inside the task folder, so a crew run leaves its trail
- * where the workspace task contract expects it and never scattered in the repo.
+ * Layout a job runs under: the one its run sealed into the manifest, else the
+ * workspace's `crew.config.json` (a loose job with no run).
  */
-export function validateEvidencePath(evidence, workspace) {
+export function jobLayout({ manifest, workspace }) {
+  if (manifest) {
+    try {
+      return layoutOf(JSON.parse(readFileSync(manifest, "utf8")));
+    } catch { /* manifest đọc lỗi thì adapter sẽ tự báo ở bước đọc sổ; layout lấy từ config */ }
+  }
+  return loadLayout(workspace);
+}
+
+/**
+ * Evidence must land inside the layout's evidence root (`tasks/` in the original
+ * workspace, `.crew/` by default), so a crew run leaves its trail where the
+ * write-scope gate looks and never scattered in the repo.
+ */
+export function validateEvidencePath(evidence, workspace, layout = loadLayout(workspace)) {
   if (!evidence) {
-    throw new GuardError("--evidence is required", "every job must write a report file under tasks/");
+    throw new GuardError("--evidence is required", `every job must write a report file under ${layout.evidenceRoot}/`);
   }
   const abs = resolve(workspace, evidence);
-  const tasksRoot = join(resolve(workspace), "tasks") + sep;
-  if (!abs.startsWith(tasksRoot)) {
-    throw new GuardError(`evidence path is outside the task tree: ${abs}`, `it must be under ${tasksRoot}`);
+  const root = join(resolve(workspace), ...layout.evidenceRoot.split("/")) + sep;
+  if (!abs.startsWith(root)) {
+    throw new GuardError(`evidence path is outside the evidence root: ${abs}`, `it must be under ${root}`);
   }
   return abs;
 }
@@ -553,8 +569,9 @@ export function judgeJob(evidenceAbs, { runtimeOk, runtimeDetail = null, context
 }
 
 /**
- * Where a job's raw log goes: the task's own `data/` folder, never next to the
- * evidence in `reports/`.
+ * Where a job's raw log goes: the layout's `logDir` (the task's own `data/`
+ * folder in the original workspace, `.crew/logs/` by default), never next to
+ * the evidence.
  *
  * The reason is that a task's `data/` folder is already ignored by git, for both
  * the flat and the work-item layout. Keeping the log beside the evidence meant
@@ -564,13 +581,7 @@ export function judgeJob(evidenceAbs, { runtimeOk, runtimeDetail = null, context
  * replaces all three, and the manifest records the path so nothing has to guess
  * the name.
  */
-export function resolveLogDir(evidenceAbs, workspace) {
-  const rel = relative(workspace, evidenceAbs).split(sep);
-  const i = rel.lastIndexOf("reports");
-  // rel[i + 1] is the run folder; if it is the evidence file itself the job was
-  // dispatched loose, without a run folder.
-  const inRunFolder = i > 0 && i + 2 <= rel.length - 1;
-  const owner = i > 0 ? rel.slice(0, i) : rel.slice(0, 2);
-  const runName = inRunFolder ? rel[i + 1] : "loose";
-  return join(workspace, ...owner, "data", "crew-logs", runName);
+export function resolveLogDir(evidenceAbs, workspace, layout = loadLayout(workspace)) {
+  const rel = relative(workspace, evidenceAbs).split(sep).join("/");
+  return join(workspace, ...logDirRel(layout, rel).split("/"));
 }

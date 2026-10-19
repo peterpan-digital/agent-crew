@@ -40,12 +40,10 @@ Skill `seo-crew` gọi script bằng đường **tương đối từ gốc works
 ```bash
 cd <workspace-cua-ban>
 git clone <URL repo này> mwg-agent-crew
-mkdir -p tasks
 ```
 
-`mkdir tasks` không phải cho đẹp. Guard `validateEvidencePath` từ chối mọi job có
-`--evidence` nằm ngoài `<workspace>/tasks/`, nên thiếu thư mục đó là mọi job bị chặn
-ngay ở cổng.
+Workspace phải là git repo. Không có `crew.config.json` thì run nằm ở `.crew/`; workspace
+có sổ task riêng thì khai bố cục theo mục *Bố cục thư mục* của `README.md`.
 
 ## 4. Cài skill vào các bề mặt agent
 
@@ -117,7 +115,7 @@ Thử một job thật, nhỏ nhất:
 cd <workspace-cua-ban>
 node mwg-agent-crew/scripts/anti-run.mjs \
   --prompt "Ghi đúng một dòng: hello" \
-  --evidence tasks/smoke/hello.md \
+  --evidence .crew/smoke/hello.md \
   --workspace "$PWD"
 ```
 
@@ -139,8 +137,10 @@ job chạy âm thầm ở tier mặc định.
 
 | Triệu chứng | Nguyên nhân |
 | --- | --- |
-| `--evidence is required` | Mọi job phải ghi file evidence dưới `tasks/` |
-| `evidence path is outside the task tree` | Thiếu `tasks/`, hoặc `--workspace` trỏ sai gốc |
+| `--evidence is required` | Mọi job phải ghi file evidence dưới `evidenceRoot` (mặc định `.crew/`) |
+| `evidence path is outside the evidence root` | Evidence nằm ngoài `evidenceRoot`, hoặc `--workspace` trỏ sai gốc |
+| `workspace is not a git work tree` | Chạy `git init` ở workspace |
+| `crew.config.json: khoá lạ …` | Gõ sai tên khoá; thông báo in danh sách khoá hợp lệ |
 | `evidence file already exists` | Dùng đường dẫn mới cho mỗi job — file cũ sẽ bị nhầm là bằng chứng của lần này |
 | `unknown flag --xxx` | Gõ sai cờ. Thông báo lỗi in ra danh sách cờ hợp lệ |
 | `could not run agy` | Chưa cài CLI Antigravity, hoặc nó không có trong `PATH` |

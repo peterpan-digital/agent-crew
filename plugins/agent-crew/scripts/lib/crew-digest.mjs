@@ -18,9 +18,10 @@
  * `cost_gate` in theo mẫu cố định + tên API đã lọc; hold `decision` do dispatcher
  * viết, vẫn lọc lại trước khi in.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { costGateQuestion, sanitizeApi } from "./holds.mjs";
+import { LayoutError, listRuns, loadLayout } from "./crew-layout.mjs";
 
 /** Ngày P1 (holds, lastCollect, reports) lên. Run tạo trước ngày này không có dấu nghiệm thu. */
 export const DIGEST_EPOCH = "2026-10-03";
@@ -36,31 +37,14 @@ const STALE_AFTER_MS = 35 * 60_000;
 const staleAfter = (job) => (Number.isFinite(job.timeoutMs) && job.timeoutMs > 0 ? job.timeoutMs + STALE_GRACE_MS : STALE_AFTER_MS);
 const localDay = (d) => d.toLocaleDateString("sv-SE");
 
-function dirs(path) {
-  try {
-    return readdirSync(path, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    return [];
-  }
-}
-
-/** Mọi manifest crew của task và của work-item, đã parse; hỏng thì bỏ. */
+/** Mọi manifest crew theo layout của workspace, đã parse; hỏng thì bỏ. Config hỏng thì ném `LayoutError`. */
 function loadManifests(workspace) {
   const found = [];
-  const scan = (base) => {
-    for (const name of dirs(join(base, "reports"))) {
-      if (!name.startsWith("crew-")) continue;
-      try {
-        const m = JSON.parse(readFileSync(join(base, "reports", name, "manifest.json"), "utf8"));
-        if (m && Array.isArray(m.jobs) && typeof m.runId === "string") found.push(m);
-      } catch { /* manifest hỏng hoặc chưa có: bỏ qua */ }
-    }
-  };
-  const tasksDir = join(workspace, "tasks");
-  for (const task of dirs(tasksDir)) {
-    const base = join(tasksDir, task);
-    scan(base);
-    for (const item of dirs(join(base, "work-items"))) scan(join(base, "work-items", item));
+  for (const run of listRuns(workspace, loadLayout(workspace))) {
+    try {
+      const m = JSON.parse(readFileSync(join(run.dir, "manifest.json"), "utf8"));
+      if (m && Array.isArray(m.jobs) && typeof m.runId === "string") found.push(m);
+    } catch { /* manifest hỏng: bỏ qua */ }
   }
   return found;
 }
@@ -101,7 +85,14 @@ export function crewDigest(workspace, { now = new Date(), epoch = DIGEST_EPOCH, 
   const today = localDay(now);
   const nowMs = now.getTime();
   const newest = (a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""));
-  const manifests = loadManifests(workspace).sort(newest);
+  let manifests;
+  try {
+    manifests = loadManifests(workspace).sort(newest);
+  } catch (err) {
+    // Bảng này chạy ở đầu mọi phiên: config hỏng phải nói ra một dòng, không được làm hỏng phiên.
+    if (err instanceof LayoutError) return [`! ${String(err.message).replace(/\s+/g, " ").slice(0, 200)}`];
+    throw err;
+  }
 
   const holds = [];
   const jobs = [];

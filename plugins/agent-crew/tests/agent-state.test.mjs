@@ -12,7 +12,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MAX_BYTES, STATE_DIR_REL, renderState, statePath, writeStateAtomic } from "../scripts/lib/state-file.mjs";
+import { MAX_BYTES, renderState, statePath, writeStateAtomic } from "../scripts/lib/state-file.mjs";
+import { DEFAULT_LAYOUT } from "../scripts/lib/crew-layout.mjs";
+
+// Workspace ở đây không có crew.config.json, nên state đi theo layout mặc định.
+const STATE_DIR_REL = DEFAULT_LAYOUT.stateDir;
 import { deriveFromTranscript, sniffFormat } from "../scripts/lib/derive-state.mjs";
 import { MODULE_ROOT, makeChecker } from "./helpers.mjs";
 

@@ -49,6 +49,7 @@ import {
   isWatchBlind,
   displayCredentialDir,
   readWorkerStatus,
+  jobLayout,
   resolveLogDir,
   stripUnsafeEnv,
   validateEvidencePath,
@@ -429,7 +430,7 @@ export function chatQuietDefaults(timeoutMs) {
 
 export async function antiRun(options, deps = {}) {
   const workspace = resolve(options.workspace ?? process.cwd());
-  const evidenceAbs = validateEvidencePath(options.evidence, workspace);
+  const evidenceAbs = validateEvidencePath(options.evidence, workspace, jobLayout({ manifest: options.manifest, workspace }));
   // Antigravity runs with --dangerously-skip-permissions (see buildArgs), so it
   // is ALWAYS outside a sandbox -- unlike Codex, where this is opt-in per job.
   // `--chat on` là giá trị duy nhất, giống `--workspace-cli on` của Codex: cờ
@@ -703,8 +704,9 @@ export async function main(argv, { deps = {} } = {}) {
 
       const job = readManifest(opts.manifest).jobs.find((j) => j.seq === seq);
       const workspace = resolve(opts.workspace ?? process.cwd());
-      const evidenceAbs = validateEvidencePath(opts.evidence, workspace);
-      const sidecarPath = join(resolveLogDir(evidenceAbs, workspace), `${basename(evidenceAbs).replace(/\.[^.]+$/, "")}.anti-watch.jsonl`);
+      const layout = jobLayout({ manifest: opts.manifest, workspace });
+      const evidenceAbs = validateEvidencePath(opts.evidence, workspace, layout);
+      const sidecarPath = join(resolveLogDir(evidenceAbs, workspace, layout), `${basename(evidenceAbs).replace(/\.[^.]+$/, "")}.anti-watch.jsonl`);
       runOpts = {
         ...opts,
         filesMayModify: job?.filesMayModify ?? [],

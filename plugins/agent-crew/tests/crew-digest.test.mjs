@@ -13,14 +13,15 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DIGEST_EPOCH, crewDigest } from "../scripts/lib/crew-digest.mjs";
-import { MODULE_ROOT, makeChecker } from "./helpers.mjs";
+import { MODULE_ROOT, makeChecker, writeLegacyConfig } from "./helpers.mjs";
 
 const t = makeChecker("crew-digest");
 const READ = join(MODULE_ROOT, "scripts", "agent-state-read.mjs");
 const NOW = new Date("2026-10-05T10:00:00+07:00");
 const HOURS = 3_600_000;
 
-const ws = () => mkdtempSync(join(tmpdir(), "digest-"));
+// Layout gốc: các ca dưới đây đặt manifest vào tasks/{task}/reports/crew-{run}/.
+const ws = () => writeLegacyConfig(mkdtempSync(join(tmpdir(), "digest-")));
 
 /** Ghi một manifest tối giản. `jobs` là mảng patch trên job mặc định `done`. */
 function addRun(w, runId, { createdAt = "2026-10-04T08:00:00+07:00", jobs = [{}], holds, lastCollect, reports, task = "t", item } = {}) {

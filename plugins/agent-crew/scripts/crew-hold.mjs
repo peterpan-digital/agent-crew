@@ -18,6 +18,7 @@
  */
 import { readManifest, updateManifest } from "./crew-manifest.mjs";
 import { addDecisionHold, answerHold, coverHold, deferHold, HoldError } from "./lib/holds.mjs";
+import { isWorkerRole } from "./lib/crew-role.mjs";
 
 const WITH_VALUE = new Set(["--seq", "--question", "--words", "--outcome", "--via", "--until", "--by"]);
 const REPEATABLE = new Set(["--option"]);
@@ -108,9 +109,9 @@ function main(argv) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
     // Rào phụ, xem docblock. Chạy TRƯỚC khi đọc manifest: worker không cần thấy gì cả.
-    if (process.env.MWG_CREW_ROLE === "worker") {
+    if (isWorkerRole()) {
       throw new HoldError(
-        "crew-hold từ chối chạy dưới MWG_CREW_ROLE=worker\n" +
+        "crew-hold từ chối chạy dưới CREW_ROLE/MWG_CREW_ROLE=worker\n" +
         "  → hold là câu hỏi của owner; worker không trả lời hộ, và không được sửa hàng chờ của chính run mình",
       );
     }

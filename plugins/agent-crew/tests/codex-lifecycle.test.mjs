@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { createRun, addJob, claimRunSlot, readManifest } from "../scripts/crew-manifest.mjs";
 import { resolveLogDir } from "../scripts/codex-run.mjs";
 import { FIXTURE_BIN, FIXTURES, MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
+import { DEFAULT_LAYOUT, LEGACY_LAYOUT } from "../scripts/lib/crew-layout.mjs";
 
 const t = makeChecker("codex-lifecycle");
 const ADAPTER = join(MODULE_ROOT, "scripts", "codex-run.mjs");
@@ -66,8 +67,9 @@ t.check("...so reports/ keeps only the evidence", existsSync(join(ws, RUN_DIR_RE
 
 // resolveLogDir must hold for both task layouts, since only those two are
 // covered by the data/ ignore rule.
-t.check("log dir: flat task", resolveLogDir("/w/tasks/t/reports/crew-1/w.md", "/w"), join("/w", "tasks/t/data/crew-logs/crew-1"));
-t.check("log dir: work item", resolveLogDir("/w/tasks/p/work-items/c/reports/crew-1/w.md", "/w"), join("/w", "tasks/p/work-items/c/data/crew-logs/crew-1"));
+t.check("log dir: flat task", resolveLogDir("/w/tasks/t/reports/crew-1/w.md", "/w", LEGACY_LAYOUT), join("/w", "tasks/t/data/crew-logs/crew-1"));
+t.check("log dir: work item", resolveLogDir("/w/tasks/p/work-items/c/reports/crew-1/w.md", "/w", LEGACY_LAYOUT), join("/w", "tasks/p/work-items/c/data/crew-logs/crew-1"));
+t.check("log dir: layout mặc định", resolveLogDir("/w/.crew/runs/1/w.md", "/w", DEFAULT_LAYOUT), join("/w", ".crew/logs/1"));
 
 // --- C1: a grandchild holding stdout must not hold the run open ------------
 const gc = run({ mode: "grandchild", evidence: join(RUN_DIR_REL, "grandchild.md"), extra: ["--idle-timeout", "60s"] });

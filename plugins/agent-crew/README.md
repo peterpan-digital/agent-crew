@@ -3,8 +3,52 @@
 Module điều phối multi-agent cho workspace `mwg-ai-worker`. Claude làm foreman, giao
 việc cho Codex và Antigravity, gom kết quả về một task folder.
 
-Đây **không** phải task folder và **không** chứa evidence của run cụ thể. Evidence của
-mỗi lần chạy nằm trong `tasks/{task}/reports/crew-{yymmdd-hhmm}/`.
+Đây **không** chứa evidence của run cụ thể. Evidence của mỗi lần chạy nằm trong
+workspace đang dùng crew, ở chỗ layout của workspace đó quy định (mục *Bố cục thư mục*).
+
+## Bố cục thư mục: `crew.config.json`
+
+Không có file này thì mọi run nằm ở `.crew/`:
+
+```text
+.crew/runs/{run}/      manifest, brief, evidence, report
+.crew/logs/{run}/      log thô của worker (nên gitignore)
+.crew/state/           trạng thái phiên — chỉ ghi khi thư mục đã có
+```
+
+Workspace có sổ task riêng thì khai trong `crew.config.json` ở gốc workspace. Ví dụ bố
+cục của workspace nơi module ra đời:
+
+```json
+{
+  "runDir": "tasks/{task}/reports/crew-{run}",
+  "taskDir": "tasks/{task}",
+  "taskNesting": "work-items",
+  "reportDir": "tasks/{task}/reports",
+  "logDir": "tasks/{task}/data/crew-logs/crew-{run}",
+  "evidenceRoot": "tasks",
+  "nestedRepos": ["tasks"],
+  "stateDir": "tasks/_state"
+}
+```
+
+| Khoá | Nghĩa |
+| --- | --- |
+| `runDir` | Thư mục một run. Phải có `{run}` ở đoạn cuối |
+| `taskDir` | Thư mục task, nơi mọi job của run được ghi không cần khai. `null` = không có task, job được ghi trong chính thư mục run |
+| `taskNesting` | Tên thư mục chứa task con (`x/work-items/y`) |
+| `reportDir` | Nơi report tổng được ghi. Mặc định = thư mục run |
+| `logDir` | Log thô. Phải có `{run}` ở đoạn cuối |
+| `evidenceRoot` | Chỉ file trong đây được tính là bằng chứng |
+| `nestedRepos` | Repo git lồng mà cổng phạm vi phải đọc thêm `git status` |
+| `stateDir` | Thư mục file trạng thái phiên dùng chung giữa các agent |
+
+Khoá lạ bị từ chối: gõ sai tên khoá là config âm thầm không có tác dụng. Mỗi run chép
+layout vào manifest lúc tạo và niêm nó lại; đổi config không làm lệch run đang chạy.
+Manifest ghi trước khi có layout thì đọc theo bố cục ví dụ ở trên.
+
+Workspace phải là git repo: cổng phạm vi ghi đọc `git status`, nên `createRun` từ chối
+thư mục không phải git trước khi bắn job nào.
 
 Cài trên máy mới: đọc [`INSTALL.md`](INSTALL.md).
 

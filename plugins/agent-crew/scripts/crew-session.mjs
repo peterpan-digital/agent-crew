@@ -12,21 +12,36 @@
  * `<dir>` là thư mục task hoặc work item: thư mục có `reports/crew-*`. Chỉ đọc,
  * không ghi gì. Id in ra luôn qua kiểm dạng: một id lạ đi thẳng vào `--resume`.
  */
-import { existsSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { MAX_JOBS, readManifest } from "./crew-manifest.mjs";
+import { listRuns, loadLayout, usesTask } from "./lib/crew-layout.mjs";
 
 const WORKERS = { anti: "antigravity", antigravity: "antigravity", codex: "codex" };
 const ID_SHAPE = /^[0-9a-f]{8}(-?[0-9a-f]{4}){3}-?[0-9a-f]{12}$|^[0-9a-f]{16,64}$/i;
 
-/** Mọi run đọc được của task, mới trước. Run hỏng bị bỏ qua chứ không làm hỏng lệnh. */
-function runsOf(taskDir) {
-  const reports = join(resolve(taskDir), "reports");
-  if (!existsSync(reports)) return [];
+/**
+ * Phạm vi để tìm run: `{ workspace, task }`. Vẫn nhận kiểu cũ là một thư mục
+ * task (`tasks/x` hay đường tuyệt đối tới nó): workspace là thư mục chứa
+ * `crew.config.json` gần nhất phía trên, task là phần còn lại.
+ */
+function scopeOf(arg) {
+  if (arg && typeof arg === "object") return { workspace: resolve(arg.workspace ?? process.cwd()), task: arg.task };
+  const dir = resolve(String(arg));
+  let ws = dir;
+  while (!existsSync(join(ws, "crew.config.json")) && resolve(ws, "..") !== ws) ws = resolve(ws, "..");
+  if (!existsSync(join(ws, "crew.config.json"))) ws = process.cwd();
+  const rel = relative(ws, dir).split(sep).join("/");
+  return { workspace: ws, task: rel.startsWith("..") || isAbsolute(rel) ? String(arg) : rel };
+}
+
+/** Mọi run đọc được của task (hay của workspace khi layout không có task), mới trước. Run hỏng bị bỏ qua chứ không làm hỏng lệnh. */
+function runsOf(scope) {
+  const { workspace, task } = scopeOf(scope);
+  const layout = loadLayout(workspace);
   const out = [];
-  for (const d of readdirSync(reports)) {
-    if (!d.startsWith("crew-")) continue;
-    const path = join(reports, d, "manifest.json");
+  for (const run of listRuns(workspace, layout, usesTask(layout) && task !== undefined ? { task } : {})) {
+    const path = join(run.dir, "manifest.json");
     try { out.push({ path, m: readManifest(path) }); } catch { /* không phải run, hoặc hỏng */ }
   }
   return out.sort((a, b) => String(b.m.runId).localeCompare(String(a.m.runId)));
@@ -43,9 +58,9 @@ export function todayStamp(now = new Date()) {
  * dưới MAX_JOBS job. Run đã qua cổng là đã đóng sổ — nhét job mới vào là mở lại một
  * run người ta đã nghiệm thu. Không có thì `null` (CLI in `new`).
  */
-export function runFor(taskDir, { date = todayStamp() } = {}) {
+export function runFor(scope, { date = todayStamp() } = {}) {
   if (!/^\d{6}$/.test(date)) throw new Error(`--date cần dạng YYMMDD, nhận "${date}"`);
-  const open = runsOf(taskDir).find(({ m }) => String(m.runId).startsWith(`${date}-`)
+  const open = runsOf(scope).find(({ m }) => String(m.runId).startsWith(`${date}-`)
     && !(m.reports?.length) && m.lastCollect?.exitCode !== 0 && (m.jobs?.length ?? 0) < MAX_JOBS);
   return open?.path ?? null;
 }
@@ -55,11 +70,11 @@ export function runFor(taskDir, { date = todayStamp() } = {}) {
  * `resumeMismatch`: id của nó là phiên đã chạy, không phải phiên được xin, nên
  * resume vào đó là tiếp nhầm chỗ. Id sai dạng cũng bỏ, không in.
  */
-export function latestConversation(taskDir, worker) {
+export function latestConversation(scope, worker) {
   const name = WORKERS[worker];
   if (!name) throw new Error(`--worker cần anti|codex, nhận "${worker}"`);
   let best = null;
-  for (const { path, m } of runsOf(taskDir)) {
+  for (const { path, m } of runsOf(scope)) {
     for (const j of m.jobs ?? []) {
       if (j.worker !== name || j.resumeMismatch || typeof j.conversationId !== "string" || !ID_SHAPE.test(j.conversationId)) continue;
       const at = Date.parse(j.startedAt ?? "") || 0;
@@ -78,7 +93,7 @@ function parseArgs(argv) {
   const opts = {};
   for (let i = 0; i < rest.length; i += 2) {
     const k = rest[i];
-    if (!["--task", "--date", "--worker"].includes(k) || rest[i + 1] === undefined) throw new Error(`cờ lạ hoặc thiếu giá trị: ${k}`);
+    if (!["--task", "--date", "--worker", "--workspace"].includes(k) || rest[i + 1] === undefined) throw new Error(`cờ lạ hoặc thiếu giá trị: ${k}`);
     opts[k.slice(2)] = rest[i + 1];
   }
   return { cmd, opts };
@@ -87,15 +102,19 @@ function parseArgs(argv) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
     const { cmd, opts } = parseArgs(process.argv.slice(2));
-    if (!opts.task) throw new Error("thiếu --task <thư mục task hoặc work item>");
+    const workspace = resolve(opts.workspace ?? process.cwd());
+    const layout = loadLayout(workspace);
+    if (usesTask(layout) && !opts.task) throw new Error("thiếu --task <task hoặc thư mục task/work item>");
+    // --task là đường thư mục (cách gọi cũ) thì để scopeOf tự tìm workspace; còn lại là id task trong --workspace.
+    const scope = opts.task && !opts.workspace && existsSync(resolve(opts.task)) ? opts.task : { workspace, task: opts.task };
     if (cmd === "run-for") {
-      console.log(runFor(opts.task, opts.date ? { date: opts.date } : {}) ?? "new");
+      console.log(runFor(scope, opts.date ? { date: opts.date } : {}) ?? "new");
     } else if (cmd === "latest") {
-      const hit = latestConversation(opts.task, opts.worker);
+      const hit = latestConversation(scope, opts.worker);
       if (!hit) { console.log("chưa có conversation"); process.exit(1); }
       console.log(JSON.stringify(hit));
     } else {
-      throw new Error("usage: crew-session.mjs run-for --task <dir> [--date YYMMDD] | latest --task <dir> --worker anti|codex");
+      throw new Error("usage: crew-session.mjs run-for [--task <task|dir>] [--workspace <dir>] [--date YYMMDD] | latest [--task <task|dir>] [--workspace <dir>] --worker anti|codex");
     }
   } catch (err) {
     console.error(`crew-session: ${err.message}`);
