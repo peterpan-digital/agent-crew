@@ -9,8 +9,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmdirSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { addJob, createRun, readManifest } from "../crew-manifest.mjs";
+import { resolveLogDir } from "../crew-guards.mjs";
 import { crewDigest } from "../lib/crew-digest.mjs";
-import { loadLayout, normalizeTask, runDirRel, usesTask } from "../lib/crew-layout.mjs";
+import { layoutOf, loadLayout, normalizeTask, runDirRel, usesTask } from "../lib/crew-layout.mjs";
 
 export class CliError extends Error {}
 
@@ -132,6 +133,77 @@ export function digest(argv, { cwd }) {
     const { flags } = parseFlags(argv, ["workspace"]);
     const lines = crewDigest(flags.workspace ? resolve(flags.workspace) : workspaceRoot(cwd));
     if (lines.length) process.stdout.write(`${lines.join("\n")}\n`);
+    return 0;
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+const flagValue = (argv, name) => {
+  const i = argv.indexOf(`--${name}`);
+  return i >= 0 ? argv[i + 1] : undefined;
+};
+
+/** Job `seq` trong sổ, hoặc null khi sổ không đọc được / không có job đó. */
+function jobOf(manifestPath, seq) {
+  try {
+    const m = readManifest(manifestPath);
+    const job = m.jobs.find((j) => String(j.seq) === String(seq));
+    return job ? { m, job } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `crew run anti|codex --manifest M --job N ...`: cờ nào sổ đã ghi mà lệnh không
+ * truyền thì lấy từ sổ — `--evidence`, `--workspace`, `--mode`. Gõ tay ba cờ đó
+ * là chỗ lệch hay gặp nhất (evidence khác sổ, mode khác transport), và adapter
+ * từ chối khi lệch. Cờ truyền tay vẫn thắng; adapter vẫn kiểm khớp như cũ.
+ * Không có `--manifest`/`--job` thì không đụng gì.
+ */
+export function expandRunArgs(argv, { cwd }) {
+  const mp = flagValue(argv, "manifest");
+  const seq = flagValue(argv, "job");
+  if (!mp || !seq) return argv;
+  const manifestPath = resolve(cwd, mp);
+  const found = jobOf(manifestPath, seq);
+  if (!found) return argv;
+  const { m, job } = found;
+  const out = [...argv];
+  const idx = out.indexOf("--manifest");
+  out[idx + 1] = manifestPath;
+  if (flagValue(argv, "workspace") === undefined) out.push("--workspace", m.workspace);
+  if (flagValue(argv, "evidence") === undefined) out.push("--evidence", join(m.workspace, ...job.evidence.split("/")));
+  if (flagValue(argv, "mode") === undefined && job.transport) out.push("--mode", job.transport);
+  return out;
+}
+
+/**
+ * `crew paths <manifest> --job N`: các đường của một job theo layout của run —
+ * evidence, brief nên lưu ở đâu, thư mục log thô, sidecar anti-watch. Skill và
+ * lệnh Monitor đọc ở đây thay vì tự ghép đường theo một bố cục đoán trước.
+ */
+export function paths(argv, { cwd }) {
+  try {
+    const { pos, flags } = parseFlags(argv, ["job"], { positional: 1 });
+    if (!flags.job) throw new CliError("thiếu --job");
+    const manifestPath = resolve(cwd, pos[0]);
+    const found = jobOf(manifestPath, flags.job);
+    if (!found) throw new Error(`không đọc được job ${flags.job} trong ${manifestPath}`);
+    const { m, job } = found;
+    const evidence = join(m.workspace, ...job.evidence.split("/"));
+    const logs = resolveLogDir(evidence, m.workspace, layoutOf(m));
+    const stem = job.evidence.split("/").pop().replace(/\.[^.]+$/, "");
+    const short = SHORT[job.worker] ?? job.worker;
+    const rows = [
+      ["manifest", manifestPath],
+      ["evidence", evidence],
+      ["brief", join(dirname(manifestPath), `brief-${short}-${job.seq}.md`)],
+      ["logs", logs],
+      ...(job.worker === "antigravity" ? [["anti-watch", join(logs, `${stem}.anti-watch.jsonl`)]] : []),
+    ];
+    process.stdout.write(`${rows.map(([k, v]) => `${k}\t${v}`).join("\n")}\n`);
     return 0;
   } catch (err) {
     return fail(err);

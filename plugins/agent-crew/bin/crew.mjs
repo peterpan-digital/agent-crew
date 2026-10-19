@@ -39,6 +39,7 @@ const ADAPTERS = { anti: "anti-run.mjs", antigravity: "anti-run.mjs", codex: "co
 const CLI_COMMANDS = {
   "new-run": { load: () => import("../scripts/cli/run-commands.mjs"), fn: "newRun", help: "tạo run: [--task <task>] [--label <chữ>] → in đường manifest" },
   "add-job": { load: () => import("../scripts/cli/run-commands.mjs"), fn: "addJobCli", help: "ghi job vào sổ trước khi bắn: <manifest> --worker --role --title ... → in seq" },
+  paths: { load: () => import("../scripts/cli/run-commands.mjs"), fn: "paths", help: "đường của một job: <manifest> --job N → evidence, brief, logs, anti-watch" },
   digest: { load: () => import("../scripts/cli/run-commands.mjs"), fn: "digest", help: "bảng crew còn dở của workspace này" },
   doctor: { load: () => import("../scripts/cli/setup.mjs"), fn: "doctor", help: "máy này chạy được gì: node, git, config, agy, codex, model còn sống" },
   init: { load: () => import("../scripts/cli/setup.mjs"), fn: "init", help: "chuẩn bị .crew/ trong repo này" },
@@ -48,7 +49,7 @@ const CLI_COMMANDS = {
 
 function usage() {
   const rows = [
-    ["run anti|codex ...", "bắn một job qua adapter của worker"],
+    ["run anti|codex ...", "bắn một job; có --manifest --job thì --evidence/--workspace/--mode lấy từ sổ"],
     ...Object.entries(CLI_COMMANDS).map(([k, v]) => [k, v.help]),
     ...Object.entries(SCRIPT_COMMANDS).map(([k, v]) => [k, v.help]),
   ];
@@ -89,7 +90,8 @@ async function main(argv) {
       process.stderr.write(`crew run: worker phải là anti|codex, nhận "${worker ?? ""}"\n`);
       return 2;
     }
-    return runScript(file, args);
+    const { expandRunArgs } = await import("../scripts/cli/run-commands.mjs");
+    return runScript(file, expandRunArgs(args, { cwd: process.cwd() }));
   }
   if (SCRIPT_COMMANDS[cmd]) return runScript(SCRIPT_COMMANDS[cmd].file, rest);
   if (CLI_COMMANDS[cmd]) {

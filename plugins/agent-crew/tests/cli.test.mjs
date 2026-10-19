@@ -8,6 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFil
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { readManifest } from "../scripts/crew-manifest.mjs";
+import { expandRunArgs } from "../scripts/cli/run-commands.mjs";
 import { parseAgyModels, shimScript, stableNode } from "../scripts/cli/setup.mjs";
 import { FIXTURE_BIN, MODULE_ROOT, makeChecker, tmpWorkspace } from "./helpers.mjs";
 
@@ -70,6 +71,25 @@ const gitRepo = (prefix) => {
   const d = crew(["digest"], { cwd: join(ws, ".crew") });
   t.check("digest chạy từ thư mục con vẫn thấy run của repo", d.out.includes("crew-261019-1200"), true);
 
+  // run: cờ sổ đã ghi thì lấy từ sổ, cờ truyền tay vẫn thắng.
+  const ex = expandRunArgs(["--manifest", ".crew/runs/261019-1200/manifest.json", "--job", "1", "--model", "m"], { cwd: ws });
+  t.check("run: --manifest tương đối đổi thành tuyệt đối", ex[1], mp);
+  t.check("run: thiếu --evidence → lấy từ sổ", ex[ex.indexOf("--evidence") + 1], join(ws, ".crew", "runs", "261019-1200", "worker-anti-1.md"));
+  t.check("run: thiếu --workspace → lấy từ sổ", ex[ex.indexOf("--workspace") + 1], ws);
+  t.check("run: thiếu --mode → lấy transport trong sổ", ex[ex.indexOf("--mode") + 1], "headless");
+  const kept = expandRunArgs(["--manifest", mp, "--job", "1", "--evidence", "x.md", "--mode", "app"], { cwd: ws });
+  t.check("run: cờ truyền tay không bị đè", [kept[kept.indexOf("--evidence") + 1], kept[kept.indexOf("--mode") + 1], kept.filter((a) => a === "--evidence").length].join("|"), "x.md|app|1");
+  t.check("run: không --manifest/--job → không đụng", JSON.stringify(expandRunArgs(["--model", "m"], { cwd: ws })), '["--model","m"]');
+  t.check("run: job không có trong sổ → không đụng", expandRunArgs(["--manifest", mp, "--job", "9"], { cwd: ws }).length, 4);
+
+  const p1 = crew(["paths", mp, "--job", "1"], { cwd: ws });
+  const rows = Object.fromEntries(p1.out.split("\n").map((l) => l.split("\t")));
+  t.check("paths: brief cạnh manifest", rows.brief, join(ws, ".crew", "runs", "261019-1200", "brief-anti-1.md"));
+  t.check("paths: log thô theo layout", rows.logs, join(ws, ".crew", "logs", "261019-1200"));
+  t.check("paths: job Anti có sidecar anti-watch", rows["anti-watch"], join(ws, ".crew", "logs", "261019-1200", "worker-anti-1.anti-watch.jsonl"));
+  t.check("paths: job Codex không có anti-watch", crew(["paths", mp, "--job", "2"], { cwd: ws }).out.includes("anti-watch"), false);
+  t.check("paths: job không có → exit 1", crew(["paths", mp, "--job", "9"], { cwd: ws }).code, 1);
+
   // collect đi qua cửa vào: exit giống gọi thẳng.
   const viaCollect = crew(["collect", mp, "--dry-run"], { cwd: ws });
   const directCollect = spawnSync(process.execPath, [join(MODULE_ROOT, "scripts", "crew-collect.mjs"), mp, "--dry-run"], { cwd: ws, encoding: "utf8" });
@@ -83,6 +103,9 @@ const gitRepo = (prefix) => {
   const nr = crew(["new-run", "--task", "tasks/t", "--run", "261019-1300"], { cwd: ws });
   t.check("--task có tiền tố tasks/ → run trong tasks/t/reports", nr.out, join(ws, "tasks", "t", "reports", "crew-261019-1300", "manifest.json"));
   t.check("...task trong sổ đã chuẩn hoá", readManifest(nr.out).task, "t");
+  crew(["add-job", nr.out, "--worker", "anti", "--role", "assist", "--title", "x", "--model", "m"], { cwd: ws });
+  const logs = crew(["paths", nr.out, "--job", "1"], { cwd: ws }).out.split("\n").find((l) => l.startsWith("logs\t"));
+  t.check("paths ở layout sổ task: log thô trong data/crew-logs", logs, `logs\t${join(ws, "tasks", "t", "data", "crew-logs", "crew-261019-1300")}`);
 }
 
 // ---- thư mục không phải git ----

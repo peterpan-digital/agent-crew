@@ -38,6 +38,8 @@ export const DEFAULT_LAYOUT = Object.freeze({
   evidenceRoot: ".crew",
   nestedRepos: Object.freeze([]),
   stateDir: ".crew/state",
+  protectedPaths: Object.freeze([]),
+  controlPlanePaths: Object.freeze([]),
 });
 
 /** Layout của workspace gốc — và của mọi manifest ghi trước khi có field `layout`. */
@@ -50,6 +52,17 @@ export const LEGACY_LAYOUT = Object.freeze({
   evidenceRoot: "tasks",
   nestedRepos: Object.freeze(["tasks"]),
   stateDir: "tasks/_state",
+  // Protected Files và control plane riêng của workspace gốc, cộng thêm vào danh
+  // sách chung trong crew-scope.mjs. Đường kết thúc bằng "/" là thư mục.
+  protectedPaths: Object.freeze([
+    "mwg-workflow-n8n/.env", "mwg-workflow-n8n/.claude/.mcp.json",
+    "mwg-workflow-n8n/.codex/config.toml", "mwg-workflow-n8n/.gemini/settings.json",
+    "mwg-workflow-n8n/.agents/mcp_config.json",
+    "mwg-seo-analytics/.env", "mwg-seo-analytics/config/client_secret.json",
+    "mwg-workflow-n8n/.agents/skills/", "mwg-workflow-n8n/.codex/skills/",
+    "mwg-workflow-n8n/.claude/skills/", "mwg-workflow-n8n/.gemini/skills/",
+  ]),
+  controlPlanePaths: Object.freeze(["harness/", "harness.config.json", "harness.config.example.json", "mwg-agent-crew/scripts/"]),
 });
 
 export const LAYOUT_KEYS = Object.freeze(Object.keys(DEFAULT_LAYOUT));
@@ -126,7 +139,20 @@ export function validateLayout(input) {
     assertRelPath("nestedRepos", p);
     if (/[{}]/.test(p)) throw new LayoutError(`nestedRepos không nhận {task}/{run}: "${p}"`);
   }
-  return Object.freeze({ ...l, nestedRepos: Object.freeze([...l.nestedRepos]) });
+  for (const key of ["protectedPaths", "controlPlanePaths"]) {
+    if (!Array.isArray(l[key]) || l[key].some((p) => typeof p !== "string")) throw new LayoutError(`${key} phải là mảng đường dẫn`);
+    for (const p of l[key]) {
+      // "/" cuối là thư mục -- được phép ở đây, khác các khoá đường dẫn khác.
+      assertRelPath(key, p.endsWith("/") ? p.slice(0, -1) : p);
+      if (/[{}]/.test(p)) throw new LayoutError(`${key} không nhận {task}/{run}: "${p}"`);
+    }
+  }
+  return Object.freeze({
+    ...l,
+    nestedRepos: Object.freeze([...l.nestedRepos]),
+    protectedPaths: Object.freeze([...l.protectedPaths]),
+    controlPlanePaths: Object.freeze([...l.controlPlanePaths]),
+  });
 }
 
 /**

@@ -85,56 +85,62 @@ const WALK_LIMIT = 20_000;
 /**
  * Paths a worker must never write, checked whatever git thinks of them.
  *
- * This list exists because `git status` cannot see them: every one of these is
- * gitignored in this repo, so the diff-based check is blind to a worker that
- * overwrites a runtime config or a credential file. Kept in sync with the
- * Protected Files list in CLAUDE.md.
+ * This list exists because `git status` cannot see them: they are normally
+ * gitignored, so the diff-based check is blind to a worker that overwrites a
+ * runtime config or a credential file. A workspace adds its own Protected Files
+ * through `protectedPaths` in its layout; an entry ending in "/" is a directory.
  */
-export const PROTECTED_PATHS = [
+const BASE_PROTECTED_PATHS = Object.freeze([
   ".mcp.json", ".claude/.mcp.json", ".agents/mcp_config.json",
-  ".codex/config.toml", ".gemini/settings.json", "skills-lock.json",
-  "mwg-workflow-n8n/.env", "mwg-workflow-n8n/.claude/.mcp.json",
-  "mwg-workflow-n8n/.codex/config.toml", "mwg-workflow-n8n/.gemini/settings.json",
-  "mwg-workflow-n8n/.agents/mcp_config.json",
-  "mwg-seo-analytics/.env", "mwg-seo-analytics/config/client_secret.json",
-];
+  ".codex/config.toml", ".gemini/settings.json", "skills-lock.json", ".env",
+]);
 
 /**
- * Protected *directories* from CLAUDE.md — everything under them is protected.
+ * Protected *directories*: everything under them is protected.
  *
- * Split out because the check was an exact-path match, so the eight skill
- * directories CLAUDE.md protects were protected in the document and unprotected
- * in the code: a worker editing `.claude/skills/seo-crew/SKILL.md` matched no
- * entry above, then matched the task's allowed prefixes, and landed in
- * `inScope`. Prefix-matched here instead.
+ * Split out because the check was an exact-path match, so skill directories
+ * were protected in the document and unprotected in the code: a worker editing
+ * `.claude/skills/x/SKILL.md` matched no entry above, then matched the task's
+ * allowed prefixes, and landed in `inScope`. Prefix-matched here instead.
  */
-export const PROTECTED_DIRS = [
-  ".agents/skills/", ".codex/skills/", ".claude/skills/", ".gemini/skills/",
-  "mwg-workflow-n8n/.agents/skills/", "mwg-workflow-n8n/.codex/skills/",
-  "mwg-workflow-n8n/.claude/skills/", "mwg-workflow-n8n/.gemini/skills/",
-];
-
-/** True when a path is a protected file, or sits under a protected directory. */
-export function isProtectedPath(path) {
-  if (PROTECTED_PATHS.includes(path)) return true;
-  return PROTECTED_DIRS.some((d) => path.startsWith(d));
-}
+const BASE_PROTECTED_DIRS = Object.freeze([".agents/skills/", ".codex/skills/", ".claude/skills/", ".gemini/skills/"]);
 
 /**
  * Control plane: the files that decide what the crew is allowed to do -- harness
- * settings, hooks, the gate code itself, and the agent instruction files. Unlike
- * PROTECTED_PATHS this list is not about git being blind; it is about who may
- * widen a job's write scope. `filesMayModify` is how the dispatcher accepts a
- * write outside the task folder, and none of these may be accepted that way,
- * whatever the owner said in a worker's chat. The owner edits them by hand.
- * Entries ending in "/" are directories.
+ * settings, hooks, the crew config, and the agent instruction files. Unlike the
+ * protected list this is not about git being blind; it is about who may widen a
+ * job's write scope. `filesMayModify` is how the dispatcher accepts a write
+ * outside the run's home, and none of these may be accepted that way, whatever
+ * the owner said in a worker's chat. The owner edits them by hand. A workspace
+ * adds its own through `controlPlanePaths`. Entries ending in "/" are directories.
  */
-export const CONTROL_PLANE_PATHS = [
+const BASE_CONTROL_PLANE = Object.freeze([
   ".claude/settings.json", ".claude/settings.local.json", ".claude/agents/", ".claude/agent-memory/",
   ".agents/hooks.json", ".agents/hooks/", ".codex/hooks.json",
-  ".githooks/", ".git/", "harness/", "harness.config.json", "harness.config.example.json",
-  "mwg-agent-crew/scripts/",
-];
+  ".githooks/", ".git/", "crew.config.json",
+]);
+
+/**
+ * The three lists for a layout. No layout means "whichever workspace this is":
+ * the union of the default and the original workspace's lists, since on the
+ * blocking side a wider match is the safe one.
+ */
+export function guardLists(layout = null) {
+  const layouts = layout ? [layout] : [DEFAULT_LAYOUT, LEGACY_LAYOUT];
+  const extraProtected = layouts.flatMap((l) => l.protectedPaths ?? []);
+  return {
+    files: [...BASE_PROTECTED_PATHS, ...extraProtected.filter((p) => !p.endsWith("/"))],
+    dirs: [...BASE_PROTECTED_DIRS, ...extraProtected.filter((p) => p.endsWith("/"))],
+    control: [...BASE_CONTROL_PLANE, ...layouts.flatMap((l) => l.controlPlanePaths ?? [])],
+  };
+}
+
+/** True when a path is a protected file, or sits under a protected directory. */
+export function isProtectedPath(path, layout = null) {
+  const { files, dirs } = guardLists(layout);
+  if (files.includes(path)) return true;
+  return dirs.some((d) => path.startsWith(d));
+}
 
 /** Agent instruction files: control plane at any depth, since every module carries its own copy. */
 const INSTRUCTION_FILES = new Set(["claude.md", "agents.md", "gemini.md"]);
@@ -162,10 +168,10 @@ function canonical(path) {
  * not count run manifests -- other runs rewrite theirs all the time, and that
  * is not a write this run made.
  */
-export function isControlPlanePath(path) {
+export function isControlPlanePath(path, layout = null) {
   const file = canonical(path);
   if (INSTRUCTION_FILES.has(file.split("/").at(-1))) return true;
-  return CONTROL_PLANE_PATHS.some((entry) => {
+  return guardLists(layout).control.some((entry) => {
     const bare = canonical(entry);
     return file === bare || file.startsWith(`${bare}/`);
   });
@@ -183,7 +189,8 @@ export function touchesControlPlane(prefix, layout = null) {
   const layouts = layout ? [layout] : [DEFAULT_LAYOUT, LEGACY_LAYOUT];
   if (layouts.some((l) => reachesRunManifest(l, dir))) return true;
   const under = `${dir}/`;
-  return [...CONTROL_PLANE_PATHS, ...PROTECTED_PATHS, ...PROTECTED_DIRS].some((entry) => {
+  const { files, dirs, control } = guardLists(layout);
+  return [...control, ...files, ...dirs].some((entry) => {
     const bare = canonical(entry);
     return dir === bare || under.startsWith(`${bare}/`) || `${bare}/`.startsWith(under);
   });
@@ -318,13 +325,13 @@ function watchedPaths(workspace, manifest) {
   const found = new Set();
   const add = (rel) => found.add(rel.split(sep).join("/"));
 
-  for (const file of PROTECTED_PATHS) {
+  for (const file of guardLists(layoutOf(manifest)).files) {
     try {
       statSync(join(workspace, file));
       add(file);
     } catch { /* absent here; nothing to attribute */ }
   }
-  // PROTECTED_DIRS are deliberately not walked: unlike the files above they are
+  // Protected directories are deliberately not walked: unlike the files above they are
   // git-tracked, so `changedPaths` already reports any write inside them. What
   // they needed was the right classification, not discovery -- see
   // isProtectedPath. Walking them would add thousands of paths for nothing.
@@ -421,6 +428,7 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
     throw new Error(`--grace không hợp lệ: ${graceMs}. Phải là số ms từ 0 đến 86400000.`);
   }
   const intervals = jobIntervals(manifest, graceMs);
+  const layout = layoutOf(manifest);
   const result = {
     intervals, inScope: [], outOfScope: [], suspect: [],
     protectedHits: [], outsideWindow: [], unattributable: [],
@@ -457,7 +465,7 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
     // whatever another manifest claims, and a worker can write a manifest-shaped
     // file inside its own task folder; a claim like that must not be able to
     // excuse a write no run is allowed to make.
-    if (!mine && foreign.has(path) && !isProtectedPath(path) && !isControlPlanePath(path)) {
+    if (!mine && foreign.has(path) && !isProtectedPath(path, layout) && !isControlPlanePath(path, layout)) {
       result.ownedElsewhere.push({ path, owner: foreign.get(path) });
       continue;
     }
@@ -477,7 +485,7 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
       bounded: mine ? true : hits.some((h) => h.bounded),
     };
 
-    const protectedHit = isProtectedPath(path);
+    const protectedHit = isProtectedPath(path, layout);
     if (!protectedHit && allowedFor(manifest, seqs).some((p) => path.startsWith(p))) {
       result.inScope.push(entry);
       continue;

@@ -10,9 +10,9 @@ import { join } from "node:path";
 import { addJob, createRun, readManifest, updateJob, updateManifest } from "../scripts/crew-manifest.mjs";
 import { collectRun, writeRunReport } from "../scripts/crew-collect.mjs";
 import { validateEvidencePath } from "../scripts/crew-guards.mjs";
-import { runHome } from "../scripts/crew-scope.mjs";
+import { isControlPlanePath, isProtectedPath, runHome, touchesControlPlane } from "../scripts/crew-scope.mjs";
 import { crewDigest } from "../scripts/lib/crew-digest.mjs";
-import { DEFAULT_LAYOUT } from "../scripts/lib/crew-layout.mjs";
+import { DEFAULT_LAYOUT, LEGACY_LAYOUT, loadLayout } from "../scripts/lib/crew-layout.mjs";
 import { MODULE_ROOT, makeChecker, writeFile } from "./helpers.mjs";
 
 const t = makeChecker("layout-generic");
@@ -85,6 +85,38 @@ function bareRepo(prefix) {
   writeFileSync(join(ws, "crew.config.json"), '{"runDri": "x"}');
   const broken = crewDigest(ws);
   t.check("config hỏng → một dòng báo, không ném", broken.length === 1 && broken[0].startsWith("! crew.config.json"), true);
+}
+
+// ---- file bảo vệ / control plane: danh sách chung + phần workspace khai ----
+{
+  t.check("harness/ của workspace gốc không phải control plane ở repo khác", touchesControlPlane("harness/", DEFAULT_LAYOUT), false);
+  t.check("...nhưng vẫn là control plane ở layout gốc", touchesControlPlane("harness/", LEGACY_LAYOUT), true);
+  t.check("không truyền layout → chặn theo cả hai (rộng hơn là an toàn hơn)", touchesControlPlane("harness/"), true);
+  t.check("crew.config.json là control plane ở mọi layout", isControlPlanePath("crew.config.json", DEFAULT_LAYOUT) && isControlPlanePath("crew.config.json", LEGACY_LAYOUT), true);
+  t.check("thư mục skill chung được bảo vệ ở mọi layout", isProtectedPath(".claude/skills/x/SKILL.md", DEFAULT_LAYOUT), true);
+  t.check("file bảo vệ riêng của workspace gốc không dính repo khác", isProtectedPath("mwg-seo-analytics/.env", DEFAULT_LAYOUT), false);
+
+  const ws = bareRepo("generic-protect-");
+  writeFileSync(join(ws, "crew.config.json"), JSON.stringify({ protectedPaths: ["secrets/", "app/.env.local"], controlPlanePaths: ["ops/"] }));
+  const l = loadLayout(ws);
+  t.check("config khai thư mục bảo vệ", isProtectedPath("secrets/key.pem", l), true);
+  t.check("config khai file bảo vệ", isProtectedPath("app/.env.local", l), true);
+  t.check("config khai control plane: filesMayModify không với tới", touchesControlPlane("ops/deploy/", l), true);
+  writeFileSync(join(ws, "crew.config.json"), JSON.stringify({ protectedPaths: ["/etc/passwd"] }));
+  t.check("đường tuyệt đối trong protectedPaths → từ chối", /protectedPaths/.test(msg(() => loadLayout(ws))), true);
+  writeFileSync(join(ws, "crew.config.json"), JSON.stringify({ protectedPaths: ["secrets/", "app/.env.local"], controlPlanePaths: ["ops/"] }));
+
+  const runRel = ".crew/runs/261019-1600";
+  const { manifestPath } = createRun({ runDir: join(ws, runRel), runId: "261019-1600", workspace: ws });
+  const j = addJob(manifestPath, { worker: "codex", role: "assist", title: "x", evidence: `${runRel}/worker-codex-1.md` });
+  t.check("khai filesMayModify vào control plane của config → từ chối",
+    /control plane|điều khiển/i.test(msg(() => addJob(manifestPath, { worker: "codex", role: "assist", title: "y", evidence: `${runRel}/w2.md`, filesMayModify: ["ops/"] }))), true);
+  updateJob(manifestPath, j.seq, { status: "running", startedAt: new Date(Date.now() - 60_000).toISOString() });
+  writeFile(join(ws, runRel, "worker-codex-1.md"), DONE);
+  writeFile(join(ws, "secrets", "key.pem"), "x\n");
+  updateJob(manifestPath, j.seq, { status: "done", endedAt: new Date().toISOString(), exitCode: 0 });
+  const r = collectRun(manifestPath, { workspace: ws });
+  t.check("worker ghi vào thư mục bảo vệ của config → protected hit, gate đỏ", r.scope.protectedHits.some((e) => e.path === "secrets/key.pem") && r.exitCode === 2, true);
 }
 
 // ---- thư mục không phải git: từ chối trước khi tốn token ----
