@@ -11,6 +11,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
+import { loadCrewConfig } from "./lib/crew-config.mjs";
 import { layoutOf, loadLayout, logDirRel } from "./lib/crew-layout.mjs";
 import { WORKER_ROLE_ENV } from "./lib/crew-role.mjs";
 
@@ -411,7 +412,7 @@ function assertBriefFits(text, where) {
 export const OWNER_CHANGE_LINE = "Owner đổi mục tiêu hoặc phạm vi giữa chừng → ghi mục `## Thay đổi từ owner` trong evidence:"
   + " owner muốn đổi gì, lúc nào. Câu hỏi hay trò chuyện không đổi việc thì không ghi.";
 export const OUTSIDE_BRIEF_LINE = "Đã ghi hoặc cần ghi thứ brief không giao → liệt kê ở mục `## Ghi ngoài brief`:"
-  + " đường dẫn ngoài task folder, hoặc Sheet/CMS kèm URL/ID. Việc brief đã giao thì không liệt kê.";
+  + " đường dẫn ngoài thư mục của run, hoặc Sheet/CMS kèm URL/ID. Việc brief đã giao thì không liệt kê.";
 /**
  * Đo 09/10 trên 6 run để dở: worker ghi mục trống bằng đủ kiểu câu phủ định ("Không có.
  * Chỉ ghi file evidence này.", "Không ghi ngoài task folder…"), và collect không phân biệt
@@ -471,6 +472,23 @@ export const CHAT_LINE = "Đây là phiên chat với owner. Trả lời owner b
  * author's wording. Two copies of a write-scope rule is how a worker learns to
  * pick whichever it likes.
  */
+/**
+ * Dòng cổng chi phí, lấy từ `costGate` trong config của workspace. Tên API phải
+ * đi nguyên vào sau `COST_GATE — `: đó là thứ collect đọc để tạo hold. Config
+ * hỏng thì adapter đã dừng từ lúc nạp layout; ở đây chỉ không thêm dòng.
+ */
+export function costGateLine(workspace) {
+  let costGate;
+  try {
+    ({ costGate } = loadCrewConfig(workspace));
+  } catch {
+    return null;
+  }
+  if (!costGate.length) return null;
+  const names = costGate.map(({ api, via }) => (via ? `${api} (qua ${via})` : api)).join(", ");
+  return `Cổng chi phí: KHÔNG tự gọi ${names}. Cần tới thì dừng trước khi gọi, ghi \`Concerns/Blockers: COST_GATE — {tên API}\` và \`Status: BLOCKED\`.`;
+}
+
 export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed = false, chat = false }) {
   const evidenceRel = evidenceAbs.startsWith(workspace + sep)
     ? evidenceAbs.slice(workspace.length + 1)
@@ -482,7 +500,7 @@ export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed
     runId
       ? `Bạn là worker trong crew run ${runId}. Không được dispatch worker khác.`
       : "Bạn là worker trong một crew run. Không được dispatch worker khác.",
-    `Chỉ được ghi đúng file: ${evidenceRel} (và data bạn tự sinh trong task folder).`,
+    `Chỉ được ghi đúng file: ${evidenceRel} (và file nháp bạn tự sinh trong thư mục của run).`,
     ...(evidenceRel.includes("/") ? [scratchLine(evidenceRel)] : []),
     ...(chat ? [CHAT_LINE] : [STATUS_LINE, REPORT_LINE]),
     OWNER_CHANGE_LINE,
@@ -490,6 +508,8 @@ export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed
     // CHAT_LINE đã tự dặn "không có gì thì ghi Không có" cho cả 4 mục.
     ...(chat ? [] : [EMPTY_SECTION_LINE]),
   ];
+  const costLine = costGateLine(workspace);
+  if (costLine) lines.push(costLine);
   // Owner chốt 22/09: gộp --workspace-cli on với --sandbox-mode danger-full-access
   // KHÔNG bị cấm, vì một job cần cả trình duyệt lẫn Sheet mà phải tách đôi là trả
   // giá quá đắt cho một rủi ro chưa xảy ra. Đổi lại, khi lớp sandbox không còn thì
@@ -497,7 +517,7 @@ export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed
   // credential vẫn chạy, nhưng nó PHÁT HIỆN sau khi hỏng, không chặn trước.
   if (unsandboxed) {
     lines.push(
-      "Job này chạy NGOÀI sandbox: ghi được toàn máy. Chỉ đụng workspace và task folder;"
+      "Job này chạy NGOÀI sandbox: ghi được toàn máy. Chỉ đụng workspace này;"
         + " không đọc/ghi `~/.config/gws/`, `.env`, secret, token, hay config ngoài repo.",
     );
   }

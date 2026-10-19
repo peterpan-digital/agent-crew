@@ -56,7 +56,7 @@ export const LAYOUT_KEYS = Object.freeze(Object.keys(DEFAULT_LAYOUT));
 const PATH_KEYS = ["runDir", "taskDir", "reportDir", "logDir", "evidenceRoot", "stateDir"];
 
 /** Đường tương đối kiểu posix, không `..`, không `/` đầu/cuối, không backslash, không đoạn rỗng. */
-function assertRelPath(key, value) {
+export function assertRelPath(key, value) {
   if (typeof value !== "string" || value.length === 0) throw new LayoutError(`${key} phải là chuỗi đường dẫn, nhận ${JSON.stringify(value)}`);
   if (value.includes("\\") || value.startsWith("/") || value.endsWith("/") || /^[A-Za-z]:/.test(value)) {
     throw new LayoutError(`${key} phải là đường tương đối kiểu posix, không / ở đầu hay cuối: "${value}"`);
@@ -130,12 +130,13 @@ export function validateLayout(input) {
 }
 
 /**
- * Layout của workspace: `crew.config.json` nếu có, không thì mặc định. Chỉ lấy
- * các khoá layout; khoá khác trong file thuộc về phần khác của config.
+ * Nội dung thô của `crew.config.json`, hoặc `null` khi không có file. Ném
+ * `LayoutError` khi file hỏng hay có khoá lạ: gõ sai tên khoá là config âm thầm
+ * không có tác dụng, nên nó phải lỗi to.
  */
-export function loadLayout(workspace) {
+export function readConfigRaw(workspace) {
   const path = join(workspace, CONFIG_NAME);
-  if (!existsSync(path)) return validateLayout({});
+  if (!existsSync(path)) return null;
   let raw;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
@@ -145,6 +146,16 @@ export function loadLayout(workspace) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new LayoutError(`${CONFIG_NAME} phải là một object JSON`);
   const unknown = Object.keys(raw).filter((k) => !CONFIG_KEYS.has(k));
   if (unknown.length) throw new LayoutError(`${CONFIG_NAME}: khoá lạ ${unknown.join(", ")} (nhận: ${[...CONFIG_KEYS].join(", ")})`);
+  return raw;
+}
+
+/**
+ * Layout của workspace: `crew.config.json` nếu có, không thì mặc định. Chỉ lấy
+ * các khoá layout; khoá khác trong file thuộc về `crew-config.mjs`.
+ */
+export function loadLayout(workspace) {
+  const raw = readConfigRaw(workspace);
+  if (!raw) return validateLayout({});
   const picked = Object.fromEntries(LAYOUT_KEYS.filter((k) => k in raw).map((k) => [k, raw[k]]));
   try {
     return validateLayout(picked);
@@ -153,8 +164,11 @@ export function loadLayout(workspace) {
   }
 }
 
-/** Mọi khoá `crew.config.json` nhận. Khoá lạ bị từ chối, vì gõ sai tên khoá là config âm thầm không có tác dụng. */
-export const CONFIG_KEYS = new Set([...LAYOUT_KEYS]);
+/** Khoá không thuộc layout; kiểm ở `crew-config.mjs`. */
+export const RULE_KEYS = Object.freeze(["routingTriggers", "routingLog", "costGate"]);
+
+/** Mọi khoá `crew.config.json` nhận. */
+export const CONFIG_KEYS = new Set([...LAYOUT_KEYS, ...RULE_KEYS]);
 
 /** Layout mà một run đã chép lúc tạo; manifest cũ không có thì là `LEGACY_LAYOUT`. */
 export function layoutOf(manifest) {

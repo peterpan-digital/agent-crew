@@ -9,6 +9,9 @@
  */
 import { join, sep } from "node:path";
 import { appendWorkerContract, readPrompt, MAX_BRIEF_BYTES, CHAT_LINE, EMPTY_SECTION_LINE, OUTSIDE_BRIEF_LINE, OWNER_CHANGE_LINE, REPORT_LINE, STATUS_LINE } from "../scripts/crew-guards.mjs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { extractCostGateApi } from "../scripts/lib/holds.mjs";
 import { makeChecker } from "./helpers.mjs";
 
 const t = makeChecker("worker-contract");
@@ -31,7 +34,7 @@ const ctx = { evidenceAbs: EV, workspace: WS };
 {
   // A brief that already carries a line keeps the author's wording; two copies
   // of a write-scope rule teaches a worker to pick whichever it prefers.
-  const authored = `Chỉ được ghi đúng file: ${REL} (và data bạn tự sinh trong task folder).`;
+  const authored = `Chỉ được ghi đúng file: ${REL} (và file nháp bạn tự sinh trong thư mục của run).`;
   const out = appendWorkerContract(`## Cần gì\nX.\n${authored}`, ctx);
   t.check("an already-present line is not duplicated",
     out.split(authored).length - 1, 1);
@@ -112,6 +115,19 @@ const ctx = { evidenceAbs: EV, workspace: WS };
   t.check("job thường chạy lại không đổi gì", appendWorkerContract(out, ctx), out);
   const pasted = appendWorkerContract(`brief\n${CHAT_LINE}`, ctx);
   t.check("brief thường lỡ chép câu chat: vẫn có dòng Status đứng riêng", pasted.split("\n").includes(STATUS_LINE), true);
+}
+
+{
+  // Cổng chi phí đi từ config của workspace vào brief, không từ trí nhớ dispatcher.
+  t.check("không khai costGate → không có dòng cổng chi phí", appendWorkerContract("brief", ctx).includes("COST_GATE"), false);
+  const ws = mkdtempSync(join(tmpdir(), "contract-cost-"));
+  writeFileSync(join(ws, "crew.config.json"), JSON.stringify({ costGate: ["Ahrefs", { api: "Gemini API", via: "image pipeline" }] }));
+  const out = appendWorkerContract("brief", { evidenceAbs: join(ws, ".crew", "runs", "r", "w.md"), workspace: ws });
+  const line = out.split("\n").find((l) => l.startsWith("Cổng chi phí"));
+  t.check("có costGate → dòng liệt kê đủ API", Boolean(line) && line.includes("Ahrefs") && line.includes("Gemini API (qua image pipeline)"), true);
+  t.check("...dòng đó không bị collect đọc nhầm thành hold", extractCostGateApi(line), "unknown");
+  t.check("...nhưng dòng thật phía sau vẫn đọc ra tên", extractCostGateApi(`${line}\nConcerns/Blockers: COST_GATE — Ahrefs`), "Ahrefs");
+  t.check("...chạy lại không nhân đôi", appendWorkerContract(out, { evidenceAbs: join(ws, ".crew", "runs", "r", "w.md"), workspace: ws }), out);
 }
 
 process.exit(t.finish() ? 0 : 1);

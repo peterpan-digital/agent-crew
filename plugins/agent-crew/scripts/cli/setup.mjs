@@ -12,6 +12,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFile
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadCrewConfig } from "../lib/crew-config.mjs";
 import { CONFIG_NAME, DEFAULT_LAYOUT, loadLayout } from "../lib/crew-layout.mjs";
 import { CliError, parseFlags, workspaceRoot } from "./run-commands.mjs";
 
@@ -74,9 +75,13 @@ export async function doctor(argv, { cwd }) {
   if (!inRepo) problems.push("thư mục này không phải git repo — crew new-run sẽ từ chối (chạy git init)");
 
   try {
-    const layout = loadLayout(workspace);
+    const { layout, routingTriggers, routingLog, costGate } = loadCrewConfig(workspace);
     const custom = existsSync(join(workspace, CONFIG_NAME));
     say("layout", `${custom ? CONFIG_NAME : "mặc định (chưa có crew.config.json)"} — run ở ${layout.runDir}, evidence trong ${layout.evidenceRoot}/`);
+    say("routing", routingTriggers.length
+      ? `${routingTriggers.length} trigger (${[...new Set(routingTriggers.map((t) => t.kind))].join(", ")})${routingLog ? `, log ${routingLog}` : ""}`
+      : "không khai trigger — hook chỉ nói khi owner gõ @anti/@codex");
+    say("cost gate", costGate.length ? costGate.map((c) => c.api).join(", ") : "không khai — brief không có dòng cổng chi phí");
   } catch (err) {
     say("layout", "HỎNG");
     problems.push(err.message);
@@ -188,6 +193,8 @@ export function init(argv, { cwd }) {
     "  - cách tạo task, nếu dự án có sổ task",
     "  - công cụ crew KHÔNG được tự gọi (chấm công, đóng task, ghi hệ thống ngoài)",
     "  - skill nào giao Antigravity / Codex / Claude",
+    "",
+    `Thứ máy phải đọc (hook, brief) khai ở ${CONFIG_NAME}: routingTriggers, routingLog, costGate.`,
     "",
   ].join("\n"));
   return 0;

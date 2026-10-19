@@ -71,6 +71,9 @@ export function extractCostGateApi(text) {
   const body = String(text ?? "");
   if (!body.includes("COST_GATE")) return null;
   for (const hit of body.matchAll(/COST_GATE[ \t]*[—–:-][ \t]*([^\n]*)/g)) {
+    // `{tên API}` là chỗ trống của mẫu câu trong brief (dòng cổng chi phí), không
+    // phải tên: worker chép brief vào evidence thì nó không được thành một hold.
+    if (/^[`'"]?[{<]/.test(hit[1])) continue;
     // `:` cũng cắt: lý do chặn của hook cổng chi phí ("COST_GATE — Ahrefs: lệnh này…") bị worker
     // chép nguyên văn vào evidence, và đọc tới hết câu thì tên API thành cả một mệnh đề (đo 09/10).
     const name = sanitizeApi(hit[1].split(/[,;.(:]/)[0]);

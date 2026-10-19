@@ -43,6 +43,7 @@ const CLI_COMMANDS = {
   doctor: { load: () => import("../scripts/cli/setup.mjs"), fn: "doctor", help: "máy này chạy được gì: node, git, config, agy, codex, model còn sống" },
   init: { load: () => import("../scripts/cli/setup.mjs"), fn: "init", help: "chuẩn bị .crew/ trong repo này" },
   install: { load: () => import("../scripts/cli/setup.mjs"), fn: "install", help: "ghi shim ~/.local/bin/crew trỏ vào bản này" },
+  hook: { load: () => import("../scripts/cli/hook.mjs"), fn: "hook", help: "cho hook plugin: session-start | stop | prompt (payload qua stdin, luôn exit 0)" },
 };
 
 function usage() {
