@@ -6,7 +6,7 @@
  * nhưng cũng KHÔNG được ghi khi chưa che được. Một bộ test chỉ kiểm "chạy xong
  * exit 0" sẽ xanh y hệt cho cả bản ghi thẳng credential ra file.
  *
- * Run: node mwg-agent-crew/tests/agent-state.test.mjs
+ * Run: node plugins/agent-crew/tests/agent-state.test.mjs
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";

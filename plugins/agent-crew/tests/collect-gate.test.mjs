@@ -9,7 +9,7 @@
  * running the gate over the runs already in tasks/ and comparing with what is
  * known to have happened.
  *
- * Run: node mwg-agent-crew/tests/collect-gate.test.mjs
+ * Run: node plugins/agent-crew/tests/collect-gate.test.mjs
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, renameSync, writeFileSync } from "node:fs";

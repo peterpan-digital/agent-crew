@@ -2,11 +2,11 @@
 /**
  * Hàng chờ quyết định của một run, ghi bằng lệnh thay vì sửa tay manifest.
  *
- *   crew-hold.mjs <manifest> list
- *   crew-hold.mjs <manifest> add --seq N --question "..." [--option "..."]...
- *   crew-hold.mjs <manifest> answer <id> --words "<câu owner gõ>" --outcome drop|resume [--via chat]
- *   crew-hold.mjs <manifest> defer <id> --until YYYY-MM-DD --words "..."
- *   crew-hold.mjs <manifest> cover <id> --by <seq>
+ *   crew hold <manifest> list
+ *   crew hold <manifest> add --seq N --question "..." [--option "..."]...
+ *   crew hold <manifest> answer <id> --words "<câu owner gõ>" --outcome drop|resume [--via chat]
+ *   crew hold <manifest> defer <id> --until YYYY-MM-DD --words "..."
+ *   crew hold <manifest> cover <id> --by <seq>
  *
  * Hai rào ở đây là rào PHỤ. Đo 01/10: `MWG_CREW_ROLE` không tới được worker của
  * Antigravity app, nên "từ chối dưới vai worker" chỉ chặn được worker headless. Rào
@@ -49,11 +49,11 @@ function intFlag(opts, name) {
 }
 
 const USAGE =
-  "usage: crew-hold.mjs <manifest.json> list\n" +
-  "       crew-hold.mjs <manifest.json> add --seq N --question \"...\" [--option \"...\"]...\n" +
-  "       crew-hold.mjs <manifest.json> answer <id> --words \"<câu owner gõ>\" --outcome drop|resume [--via chat]\n" +
-  "       crew-hold.mjs <manifest.json> defer <id> --until YYYY-MM-DD --words \"...\"\n" +
-  "       crew-hold.mjs <manifest.json> cover <id> --by <seq>\n" +
+  "usage: crew hold <manifest.json> list\n" +
+  "       crew hold <manifest.json> add --seq N --question \"...\" [--option \"...\"]...\n" +
+  "       crew hold <manifest.json> answer <id> --words \"<câu owner gõ>\" --outcome drop|resume [--via chat]\n" +
+  "       crew hold <manifest.json> defer <id> --until YYYY-MM-DD --words \"...\"\n" +
+  "       crew hold <manifest.json> cover <id> --by <seq>\n" +
   "exit: 0 = xong | 2 = sai cú pháp hoặc bị từ chối";
 
 function list(manifestPath) {

@@ -16,7 +16,7 @@
  * compared rather than the warning text: two asserted facts are a measurement,
  * a stderr phrase is a guess about wording that is free to change.
  *
- * Run: node mwg-agent-crew/tests/anti-resume.test.mjs
+ * Run: node plugins/agent-crew/tests/anti-resume.test.mjs
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";

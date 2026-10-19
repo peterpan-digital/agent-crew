@@ -11,7 +11,7 @@
  *   2. id conversation vào manifest trước vòng poll;
  *   3. cảnh báo đi ra sidecar, còn adapter vẫn chạy tới timeout.
  *
- * Run: node mwg-agent-crew/tests/anti-stall.test.mjs
+ * Run: node plugins/agent-crew/tests/anti-stall.test.mjs
  */
 import { spawn, spawnSync } from "node:child_process";
 import { execFileSync } from "node:child_process";

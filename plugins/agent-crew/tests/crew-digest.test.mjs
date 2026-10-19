@@ -6,7 +6,7 @@
  * kẹt từ tháng trước), và nó phải KHÔNG ngập phiên bằng run cũ hay đẻ ra văn bản
  * từ evidence. Một test chỉ kiểm "có in gì đó" xanh y hệt cho cả hai kiểu hỏng.
  *
- * Run: node mwg-agent-crew/tests/crew-digest.test.mjs
+ * Run: node plugins/agent-crew/tests/crew-digest.test.mjs
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -107,7 +107,7 @@ t.check("DIGEST_EPOCH là ngày P1 lên", DIGEST_EPOCH, "2026-10-03");
   const out = digest(w).join("\n");
   t.check("job pending cũ (không startedAt) lộ ra", /crew-260819-0010 job 1 pending.*quá hạn/.test(out), true);
   t.check("job running cũ lộ ra", /crew-260905-1459 job 1 running.*quá hạn/.test(out), true);
-  t.check("...kèm đường xem", out.includes("crew-collect"), true);
+  t.check("...kèm đường xem", out.includes("crew collect"), true);
 }
 {
   const w = ws();
@@ -140,7 +140,7 @@ t.check("DIGEST_EPOCH là ngày P1 lên", DIGEST_EPOCH, "2026-10-03");
   for (let i = 0; i < 30; i += 1) addRun(w, `r${String(i).padStart(2, "0")}`, { ...accepted, holds: [hold({ id: `h${i + 1}` })] });
   const out = digest(w);
   t.check("quá nhiều mục: tối đa 15 dòng", out.length, 15);
-  t.check("...dòng cuối nói còn bao nhiêu mục và cách xem đủ", /…và \d+ mục khác.*crew-hold\.mjs <manifest> list/.test(out.at(-1)), true);
+  t.check("...dòng cuối nói còn bao nhiêu mục và cách xem đủ", /…và \d+ mục khác.*crew hold <manifest> list/.test(out.at(-1)), true);
   const shown = out.filter((l) => l.startsWith("?")).length;
   t.check("...số trong dòng cuối cộng với số đã in = 30", Number(/và (\d+) mục/.exec(out.at(-1))[1]) + shown, 30);
 }

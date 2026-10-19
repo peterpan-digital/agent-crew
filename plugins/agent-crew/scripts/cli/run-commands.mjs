@@ -8,10 +8,11 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmdirSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { addJob, createRun, readManifest } from "../crew-manifest.mjs";
+import { addJob, appendNote, createRun, readManifest, updateJob } from "../crew-manifest.mjs";
 import { resolveLogDir } from "../crew-guards.mjs";
 import { crewDigest } from "../lib/crew-digest.mjs";
 import { layoutOf, loadLayout, normalizeTask, runDirRel, usesTask } from "../lib/crew-layout.mjs";
+import { isWorkerRole } from "../lib/crew-role.mjs";
 
 export class CliError extends Error {}
 
@@ -157,9 +158,9 @@ function jobOf(manifestPath, seq) {
 
 /**
  * `crew run anti|codex --manifest M --job N ...`: cờ nào sổ đã ghi mà lệnh không
- * truyền thì lấy từ sổ — `--evidence`, `--workspace`, `--mode`. Gõ tay ba cờ đó
- * là chỗ lệch hay gặp nhất (evidence khác sổ, mode khác transport), và adapter
- * từ chối khi lệch. Cờ truyền tay vẫn thắng; adapter vẫn kiểm khớp như cũ.
+ * truyền thì lấy từ sổ — `--evidence`, `--workspace`, `--mode`, `--model`,
+ * `--effort`. Gõ tay mấy cờ đó là chỗ lệch hay gặp nhất (evidence khác sổ, mode
+ * khác transport, model khác cái đã ghi). Cờ truyền tay vẫn thắng.
  * Không có `--manifest`/`--job` thì không đụng gì.
  */
 export function expandRunArgs(argv, { cwd }) {
@@ -176,6 +177,12 @@ export function expandRunArgs(argv, { cwd }) {
   if (flagValue(argv, "workspace") === undefined) out.push("--workspace", m.workspace);
   if (flagValue(argv, "evidence") === undefined) out.push("--evidence", join(m.workspace, ...job.evidence.split("/")));
   if (flagValue(argv, "mode") === undefined && job.transport) out.push("--mode", job.transport);
+  // Adapter không đối chiếu model với sổ, nên "phải khớp Bước 4" từng chỉ là chữ.
+  // Lấy từ sổ thì khớp theo cấu tạo. Job resume không nhận --model (guard chặn).
+  if (flagValue(argv, "resume") === undefined) {
+    if (flagValue(argv, "model") === undefined && job.model) out.push("--model", job.model);
+    if (flagValue(argv, "effort") === undefined && job.effort) out.push("--effort", job.effort);
+  }
   return out;
 }
 
@@ -204,6 +211,36 @@ export function paths(argv, { cwd }) {
       ...(job.worker === "antigravity" ? [["anti-watch", join(logs, `${stem}.anti-watch.jsonl`)]] : []),
     ];
     process.stdout.write(`${rows.map(([k, v]) => `${k}\t${v}`).join("\n")}\n`);
+    return 0;
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/**
+ * `crew amend <manifest> --job N [--allow <prefix>]... --note "..."`: owner cho
+ * một job ghi thêm chỗ ngoài thư mục run giữa chừng, hoặc dispatcher ghi chú vào
+ * job (review chưa đạt, lời owner). Nới phạm vi bắt buộc kèm `--note` — lời
+ * owner là thứ người đọc sổ cần thấy cạnh quyền vừa được nới. Control plane và
+ * file bảo vệ vẫn bị sổ từ chối như lúc add-job. Worker không được gọi.
+ */
+export function amend(argv, { cwd }) {
+  try {
+    const { pos, flags } = parseFlags(argv, ["job", "allow", "note"], { positional: 1, repeatable: ["allow"] });
+    if (isWorkerRole()) throw new Error("worker không được sửa sổ (CREW_ROLE=worker)");
+    if (!flags.job) throw new CliError("thiếu --job");
+    if (!flags.allow && !flags.note) throw new CliError("cần --allow hoặc --note");
+    if (flags.allow && !flags.note) throw new CliError("nới phạm vi phải kèm --note (ai cho, vì sao)");
+    const manifestPath = resolve(cwd, pos[0]);
+    const found = jobOf(manifestPath, flags.job);
+    if (!found) throw new Error(`không đọc được job ${flags.job} trong ${manifestPath}`);
+    const seq = found.job.seq;
+    if (flags.allow) {
+      const merged = [...new Set([...(found.job.filesMayModify ?? []), ...flags.allow])];
+      updateJob(manifestPath, seq, { filesMayModify: merged });
+    }
+    const job = appendNote(manifestPath, seq, flags.allow ? `${flags.note} (nới phạm vi: ${flags.allow.join(", ")})` : flags.note);
+    process.stdout.write(`${seq}\t${(job.filesMayModify ?? []).join(",")}\n`);
     return 0;
   } catch (err) {
     return fail(err);

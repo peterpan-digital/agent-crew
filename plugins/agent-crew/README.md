@@ -1,7 +1,9 @@
-# mwg-agent-crew
+# agent-crew
 
-Module điều phối multi-agent cho workspace `mwg-ai-worker`. Claude làm foreman, giao
-việc cho Codex và Antigravity, gom kết quả về một task folder.
+Plugin Claude Code điều phối multi-agent, dùng được ở mọi repo. Claude làm foreman, giao
+việc cho Codex và Antigravity, gom kết quả về file evidence trên đĩa, và chấm bằng cổng
+tự động thay vì tin lời worker tự khai. Ra đời trong workspace `mwg-ai-worker`; luật của
+workspace đó giờ nằm ở `CLAUDE.md` và `crew.config.json` của nó, không ở đây.
 
 Đây **không** chứa evidence của run cụ thể. Evidence của mỗi lần chạy nằm trong
 workspace đang dùng crew, ở chỗ layout của workspace đó quy định (mục *Bố cục thư mục*).
@@ -21,11 +23,14 @@ Một run, từ đầu tới cuối:
 
 ```bash
 MP=$(crew new-run)                                   # layout có task: --task <task>
-IFS=$'\t' read -r SEQ EV < <(crew add-job "$MP" --worker codex --role owner \
-  --title "sửa test" --effort medium --allow src/)
-crew run codex --manifest "$MP" --job "$SEQ" --evidence "$EV" --effort medium --prompt-file brief.md
+crew add-job "$MP" --worker codex --role owner --title "sửa test" --effort medium --allow src/
+crew paths "$MP" --job 1                             # brief lưu ở dòng "brief"
+crew run codex --manifest "$MP" --job 1 --prompt-file <brief>
 crew collect "$MP"
 ```
+
+`crew run --manifest --job` lấy `--evidence`, `--workspace`, `--mode`, `--model`,
+`--effort` từ sổ — đúng cái `add-job` đã ghi, nên không lệch được. Cờ truyền tay thắng.
 
 `crew --help` liệt kê mọi lệnh. Lệnh nào đã có script thì chạy đúng script đó ở tiến
 trình con, giữ nguyên tham số và exit code; cờ lạ vẫn bị script từ chối.
@@ -66,6 +71,8 @@ cục của workspace nơi module ra đời:
 | `evidenceRoot` | Chỉ file trong đây được tính là bằng chứng |
 | `nestedRepos` | Repo git lồng mà cổng phạm vi phải đọc thêm `git status` |
 | `stateDir` | Thư mục file trạng thái phiên dùng chung giữa các agent |
+| `protectedPaths` | File/thư mục (kết thúc `/`) worker không được ghi, cộng thêm vào danh sách chung (MCP config, `.env`, thư mục skill) |
+| `controlPlanePaths` | Đường quyết định crew được làm gì (hook, harness), cộng thêm vào danh sách chung (settings, hook, `.git/`, `crew.config.json`, file chỉ dẫn agent). `--allow` không với tới |
 
 Khoá lạ bị từ chối: gõ sai tên khoá là config âm thầm không có tác dụng. Mỗi run chép
 layout vào manifest lúc tạo và niêm nó lại; đổi config không làm lệch run đang chạy.
@@ -74,50 +81,61 @@ Manifest ghi trước khi có layout thì đọc theo bố cục ví dụ ở tr
 Workspace phải là git repo: cổng phạm vi ghi đọc `git status`, nên `createRun` từ chối
 thư mục không phải git trước khi bắn job nào.
 
+## Luật máy đọc: cũng trong `crew.config.json`
+
+```json
+{
+  "costGate": ["Ahrefs", { "api": "Gemini API", "via": "image pipeline" }],
+  "routingTriggers": [
+    { "id": "internal-link", "kind": "content", "pattern": "chèn link nội bộ|interlink" },
+    { "id": "competitor-research", "kind": "research", "pattern": "phân tích đối thủ" }
+  ],
+  "routingLog": ".crew/logs/routing-gate.jsonl"
+}
+```
+
+| Khoá | Nghĩa |
+| --- | --- |
+| `costGate` | API tính tiền theo lượt gọi. Adapter chèn danh sách vào brief; worker gặp thì dừng, trả `COST_GATE — {api}`; collect tạo hold chờ owner |
+| `routingTriggers` | Regex (không phân biệt hoa thường) trên prompt. Khớp ≥2 `kind` khác nhau → hook gợi ý chia việc; 1 `kind` → gợi ý một job. Trigger khớp tên trong `costGate` bị từ chối lúc nạp |
+| `routingLog` | Nơi hook ghi lượt bắn (`ts, branch, decision, triggers` — không bao giờ ghi prompt). Không khai = không ghi |
+
+Luật viết bằng lời — mục tiêu, cách tạo/đóng task, công cụ không được tự gọi — nằm ở
+`CLAUDE.md`/`AGENTS.md` của repo. Skill đọc nó; hook thì không.
+
+## Hook của plugin
+
+| Sự kiện | Lệnh | Repo chưa bật crew |
+| --- | --- | --- |
+| SessionStart | `crew hook session-start` — trạng thái phiên khác + bảng crew còn dở | im |
+| UserPromptSubmit | `crew hook prompt` — routing gate | im |
+| Stop | `crew hook stop` — ghi trạng thái phiên | không ghi |
+
+"Bật" = có `crew.config.json` hoặc `.crew/`. Hook luôn exit 0, kể cả khi config hỏng
+(cảnh báo ra stderr). Gate không bao giờ in tên script hay lệnh dispatch: nó chỉ gợi ý
+kích hoạt skill, và im với prompt nhắc API tốn tiền.
+
 Cài trên máy mới: đọc [`INSTALL.md`](INSTALL.md).
 
 ## Nội dung
 
 | File | Vai trò |
 | --- | --- |
-| `INSTALL.md` | Dựng module trên workspace mới: yêu cầu, cách đặt, cách kiểm. |
-| `CUSTOMIZE.md` | Chỗ nào trong skill generic phải khai theo workspace bạn, và chỗ nào đừng đụng. |
-| `routing-table.md` | Việc nào giao worker nào. **Sửa file này** khi muốn đổi phân việc. |
-| `docs/transport-measurements.md` | Nhật ký đo transport: các phép đo đã sinh ra luật ở `routing-table.md` và `references/` của skill. Không nạp khi vận hành. |
-| `worker-brief.md` | Format brief gửi worker. Dùng nguyên schema `~/.claude/rules/orchestration-protocol.md`. |
-| `cost-gate.md` | API tốn tiền worker không được tự gọi + ngưỡng cứng chống đốt credit. |
-| `scripts/` | Adapter gọi Antigravity (phase 2). |
-| `skill/agent-crew/` | Skill điều phối, bản generic — cửa vào module. |
+| `INSTALL.md` | Cài plugin, shim `crew`, bật crew cho một repo, cách kiểm. |
+| `skills/agent-crew/` | Skill điều phối — cửa vào. `references/` chứa bảng phân việc (`routing-table.md`), khung brief (`worker-brief.md`), cổng chi phí (`cost-gate.md`) và luật chi tiết |
+| `bin/crew.mjs` | Lệnh `crew`: một cửa vào cho mọi script |
+| `hooks/hooks.json` | Hook SessionStart / UserPromptSubmit / Stop của plugin |
+| `docs/transport-measurements.md` | Nhật ký đo transport: các phép đo đã sinh ra luật ở `references/` của skill. Không nạp khi vận hành. |
+| `scripts/` | Adapter (Antigravity, Codex), cổng nghiệm thu, sổ manifest, lớp layout/config |
 
-## Ai gọi module này
+## Một skill, một nguồn
 
-Một skill điều phối đọc 3 file `.md` ở đây và gọi `scripts/`. Module là nguồn duy nhất —
-skill không copy nội dung ra, chỉ trỏ vào.
+Chỉ có một skill: `skills/agent-crew/`. Không còn bản riêng cho workspace gốc hay cơ chế
+`.derived-from`/`STALE` — phần riêng của từng repo đọc từ `CLAUDE.md` và
+`crew.config.json` lúc chạy, nên không có gì phải đồng bộ tay.
 
-Có **hai bản skill, cố ý khác nhau**:
-
-| Bản | Ở đâu | Dành cho |
-| --- | --- | --- |
-| `seo-crew` | `.claude/skills/` của workspace gốc, mirror sang `.codex/`, `.agents/`, `.gemini/` | Workspace gốc. Mang KPI, tên skill nội bộ, sổ task riêng |
-| `agent-crew` | `skill/agent-crew/` ngay trong module này | Bất kỳ ai clone module. Đã gỡ chi tiết riêng, chừa chỗ `ĐIỀN VÀO` |
-
-Bản generic tồn tại vì module được publish riêng bằng
-`git subtree push --prefix=mwg-agent-crew`. Ship thẳng bản workspace cho người lạ là đưa
-họ một skill trỏ vào những thứ họ không có.
-
-Bốn bản mirror do `scripts/sync-skill-surfaces.mjs --apply` giữ khớp. Bản generic thì
-**không**: nó viết tay, và `--apply` không bao giờ ghi đè nó.
-
-Đổi lại, script theo dõi **độ lệch**. `skill/agent-crew/.derived-from` ghi vân tay của
-canonical lúc hai bản được đối chiếu lần cuối. Canonical đổi → `--check` báo `STALE`:
-
-```bash
-node mwg-agent-crew/scripts/sync-skill-surfaces.mjs --check   # STALE nếu canonical đã đi trước
-node mwg-agent-crew/scripts/sync-skill-surfaces.mjs --bless   # sau khi đã đọc lại cả hai
-```
-
-`--bless` chỉ ghi lại vân tay. Nó **không** kiểm hộ bạn — đọc lại rồi hãy chạy, không thì
-nó chỉ là nút tắt cảnh báo.
+Runtime khác Claude (Codex, Antigravity) muốn làm dispatcher thì chép
+`skills/agent-crew/` vào thư mục skill của runtime đó; lệnh `crew` vẫn là đường gọi.
 
 ## Giới hạn cứng
 
@@ -175,7 +193,7 @@ canh field **bên cạnh** field quan trọng.
 | Lỗ | Sửa |
 | --- | --- |
 | `MWG_CREW_ROLE=worker` chỉ chặn `depth === 0`, nên worker gọi `createRun({depth:1})` là lách được cả hai nửa của guard | Worker không được mở run ở **bất kỳ** depth nào |
-| `evidence` nhận path tuyệt đối, nên `/tmp/old-pass.md` có dòng `Status: DONE` được đọc **như bằng chứng thật** — và scope gate chỉ soi working tree nên không thấy | Evidence phải là path tương đối, nằm dưới `tasks/` |
+| `evidence` nhận path tuyệt đối, nên `/tmp/old-pass.md` có dòng `Status: DONE` được đọc **như bằng chứng thật** — và scope gate chỉ soi working tree nên không thấy | Evidence phải là path tương đối, nằm dưới `evidenceRoot` của layout |
 | `job.extra` spread cuối, ghi đè được `transport` vừa validate — và `assertTransport` bỏ qua khi transport là null, nên adapter cũng thôi kiểm | `extra` không được chạm 7 field đã niêm |
 | `updateJob` sửa được `seq`, làm hai job trùng seq và `jobs.find` lấy sai con | Patch được tiến độ, không được danh tính |
 | version 0 hoặc âm đọc như "manifest cũ", tắt luôn cảnh báo provenance chỉ bật từ version 2 | Dưới 1 là manifest hỏng, không phải manifest cũ |
@@ -212,7 +230,7 @@ quyết định của dispatcher, nằm trong brief để audit.
 | --- | --- |
 | `scripts/anti-env.mjs` | Discover runtime của app Antigravity 2.0 (pid, gRPC address, projectId). Không hardcode giá trị nào; app restart thì tự discover lại. |
 | `scripts/anti-run.mjs` | Chạy 1 job Antigravity. `--mode headless` (agy, nhanh, có token usage) hoặc `--mode app` (hiện conversation trong app để xem trực tiếp). Ở app mode: ghi `conversationId` ngay khi có, ghi sự kiện `anti.watch` vào sidecar khi conversation im quá `--quiet-warn`/`--quiet-alert` (mặc định 5m/10m, không tự giết job), sự kiện `idle` khi conversation đã `done` hơn 2 phút mà chưa có evidence (trừ phiên chat), `--chat on` mở phiên chat có giám sát cho owner, và bắt SIGTERM để ghi `failed` có kiểm credential. |
-| `scripts/codex-run.mjs` | Chạy 1 job Codex. `--mode headless` (mặc định) qua `codex exec --json`, watchdog giết job không phát event trong `--idle-timeout` (mặc định 2m) — đúng ca pid chết mà state vẫn đọc là running. `--mode app` mở thread thật trong app Codex qua companion của plugin — hiện trong danh sách thread với tên `Codex Companion Task: {dòng đầu brief}`, và resume được bằng `codex resume <id>`. Sau khi settle nó gọi `result <job-id>` để lấy câu trả lời của worker về, ghi cạnh log và trỏ qua `lastMessage` như headless; kèm `companionExitStatus` và `touchedFiles` mà companion tự khai. Chịu được cuộc đua job store ngay sau dispatch (id vừa cấp bị phủ nhận, hoặc job trả về chưa có `status`) trong cửa sổ 45s tính theo đồng hồ, và ghi số lần hỏi lại vào `settleRetries` thay vì nuốt. Log ghi vào `tasks/{task}/data/crew-logs/{run}/` — thuộc `data/` vì nó mang nội dung file worker đọc; đường dẫn nằm trong manifest. |
+| `scripts/codex-run.mjs` | Chạy 1 job Codex. `--mode headless` (mặc định) qua `codex exec --json`, watchdog giết job không phát event trong `--idle-timeout` (mặc định 2m) — đúng ca pid chết mà state vẫn đọc là running. `--mode app` mở thread thật trong app Codex qua companion của plugin — hiện trong danh sách thread với tên `Codex Companion Task: {dòng đầu brief}`, và resume được bằng `codex resume <id>`. Sau khi settle nó gọi `result <job-id>` để lấy câu trả lời của worker về, ghi cạnh log và trỏ qua `lastMessage` như headless; kèm `companionExitStatus` và `touchedFiles` mà companion tự khai. Chịu được cuộc đua job store ngay sau dispatch (id vừa cấp bị phủ nhận, hoặc job trả về chưa có `status`) trong cửa sổ 45s tính theo đồng hồ, và ghi số lần hỏi lại vào `settleRetries` thay vì nuốt. Log ghi vào `logDir` của layout (mặc định `.crew/logs/{run}/`, nên gitignore) vì nó mang nội dung file worker đọc; đường dẫn nằm trong manifest và `crew paths`. |
 | `scripts/codex-companion-path.mjs` | Tìm `codex-companion.mjs` của plugin Codex (ngoài repo). Env override `MWG_CODEX_COMPANION` là **quyết định cuối** — trỏ sai thì báo lỗi, không dò tiếp sang bản khác. |
 | `scripts/anti-status.mjs` | Đọc tiến độ 1 conversation. Luôn read-only: copy `.db`+`-wal`+`-shm` sang temp rồi query bản copy. |
 | `scripts/crew-guards.mjs` | Guard dùng chung cho mọi worker: evidence gate, duration ceiling, đọc brief. |
@@ -228,49 +246,25 @@ quyết định của dispatcher, nằm trong brief để audit.
 | `scripts/crew-scope.mjs` | Quy file thay đổi trong working tree về từng job: ưu tiên `touchedFiles` runtime tự khai, còn lại theo mtime nằm trong khoảng job đó chạy. Tách khỏi collect vì đây là logic quy trách nhiệm, không phải logic phán quyết. |
 | `scripts/claude-session-export.mjs` | Xuất transcript của 1 session Claude thành markdown gầy để bàn giao sang agent khác. Gộp 3 nguồn (dòng chính, `subagents/`, `tool-results/`), bỏ `attachment`/`thinking`/`image`/tool output replay được, redact theo hình dạng giá trị, trần tuyệt đối 200 KB có assert. Rào chống injection mang nonce mỗi lần chạy. Thiếu module redact thì **abort**, không xuất file; `--out` trỏ vào path git đang theo dõi thì **từ chối**, không có cờ bỏ qua. |
 | `scripts/lib/redact-values.mjs` | Bộ dò bí mật **theo hình dạng giá trị**, vendored trong repo. Không phải bộ dò từ khoá — `secret-keywords.cjs` của hooks là bộ dò chủ đề prompt, nó vừa để lọt key đứng một mình vừa phá 5,9% text block nói về LLM token. Domain nội bộ (host `cms.`/`staging.`… của website, host công cụ tự host, domain email công ty) **không viết trong code**: đọc mục `redact` của `harness.config.json` cạnh thư mục module (hoặc file `CREW_HARNESS_CONFIG` trỏ tới), mọi `<mục>.origin` trong đó tự được che. Thiếu config thì chỉ che theo hình dạng chung và lệnh export in cảnh báo; config hỏng thì export dừng. |
-| `scripts/agent-state-write.mjs` | Ghi trạng thái phiên hiện tại vào `tasks/_state/{agent}-{phiên}.md`. Chạy trong hook, **không phải model gọi** — suy từ transcript nên tốn 0 token. Mỗi phiên một đường dẫn riêng nên không cần khoá file. Thiếu module redact thì **không ghi gì**, nhưng vẫn exit 0 để không chặn phiên. |
+| `scripts/agent-state-write.mjs` | Ghi trạng thái phiên hiện tại vào `{stateDir}/{agent}-{phiên}.md` (mặc định `.crew/state`). Chạy trong hook, **không phải model gọi** — suy từ transcript nên tốn 0 token. Mỗi phiên một đường dẫn riêng nên không cần khoá file. Thiếu module redact thì **không ghi gì**, nhưng vẫn exit 0 để không chặn phiên. |
 | `scripts/agent-state-read.mjs` | In trạng thái các phiên khác cho hook `SessionStart` nạp vào đầu phiên. Bỏ qua file của chính mình, in tuổi từng file, đánh dấu file quá 12 giờ. Luôn exit 0. |
 | `scripts/lib/state-file.mjs` · `scripts/lib/derive-state.mjs` | Định dạng + I/O atomic + dọn file cũ; và bộ suy trạng thái đọc được **cả hai** định dạng transcript (Claude và Codex `rollout-*.jsonl`). |
 
-```bash
-node mwg-agent-crew/scripts/codex-run.mjs \
-  --prompt-file <brief.md> \
-  --evidence tasks/<task>/reports/<job>.md \
-  --timeout 15m --idle-timeout 2m --effort medium --workspace "$PWD" \
-  --manifest <run>/manifest.json --job 2
-```
-
-`--mode app` chỉ dùng cho job đã xin `app` kèm `note` trong manifest:
+Mọi script gọi qua `crew` (bảng `crew --help`). Có `--manifest --job` thì `crew run`
+lấy evidence/workspace/mode/model/effort từ sổ:
 
 ```bash
-node mwg-agent-crew/scripts/codex-run.mjs --mode app \
-  --prompt-file <brief.md> \
-  --evidence tasks/<task>/reports/<job>.md \
-  --timeout 15m --effort medium --workspace "$PWD" \
-  --manifest <run>/manifest.json --job 2
-```
-
-```bash
-node mwg-agent-crew/scripts/anti-run.mjs --mode headless \
-  --prompt-file <brief.md> \
-  --evidence tasks/<task>/reports/<job>.md \
-  --timeout 5m --workspace "$PWD" \
-  --manifest <run>/manifest.json --job 1
-```
-
-```bash
-node mwg-agent-crew/scripts/crew-reconcile.mjs <run>/manifest.json [--dry-run] [--cancel-orphans]
-```
-
-```bash
-node mwg-agent-crew/scripts/crew-collect.mjs <run>/manifest.json \
+crew run codex --manifest <run>/manifest.json --job 2 --prompt-file <brief.md> --timeout 15m --idle-timeout 2m
+crew run anti  --manifest <run>/manifest.json --job 1 --prompt-file <brief.md> --timeout 5m
+crew reconcile <run>/manifest.json [--dry-run] [--cancel-orphans]
+crew collect <run>/manifest.json \
   [--abandon <seq>] [--grace <ms>] [--dry-run] \
   [--not-ours <path>]... [--ack-runtime <seq>[@sha]]... [--replaced <hỏng>=<thay>]... --reason "..."
+crew probe --workspace "$PWD" [--json] [--no-companion]
 ```
 
-```bash
-node mwg-agent-crew/scripts/crew-runtime-probe.mjs --workspace "$PWD" [--json] [--no-companion]
-```
+`--mode app` chỉ dùng cho job đã xin `app` kèm `--note` lúc `add-job`; `crew run` tự lấy
+mode đó từ sổ.
 
 ### Hai app mode không giống nhau, đừng suy từ cái này sang cái kia
 
@@ -315,10 +309,10 @@ bù là sổ sách, không phải quan sát, và một giờ kết thúc bịa �
 chết một tiếng trước cái cửa sổ chạy tới hiện tại.
 
 **Git không thấy file bị ignore, nên phải tự đi tìm.** `.codex/config.toml`,
-`*.env`, `tasks/*/data/`, và `mwg-content-editor/content-workspaces/` đều bị
-gitignore ở repo này — tức là chỗ ghi hợp lệ mà tài liệu vẫn đang chỉ cho
+`*.env`, thư mục log thô, và các thư mục nội dung làm việc thường bị gitignore ở repo
+dùng crew — tức là chỗ ghi hợp lệ mà tài liệu vẫn đang chỉ cho
 `filesMayModify` lại là chỗ git mù hoàn toàn. Nên gate stat thêm 2 nhóm ngoài
-`git status`: mọi prefix có khai `filesMayModify`, và danh sách `PROTECTED_PATHS`
+`git status`: mọi prefix có khai `filesMayModify`, và danh sách file bảo vệ
 lấy từ Protected Files của `CLAUDE.md`. Ghi vào file được bảo vệ là exit 2, không
 có đường khai để hợp lệ hoá.
 
@@ -352,8 +346,8 @@ xoá cũng không quy được cho job nào (xoá thì không còn mtime) nên c
 chặn — repo này đang mang sẵn một file xoá không liên quan, gate mà fail vì nó thì hôm sau
 không ai chạy nữa.
 
-File ghi hợp lệ ra ngoài `tasks/{task}/` phải khai `filesMayModify` lúc `addJob`
-(ví dụ `mwg-content-editor/content-workspaces/{slug}/`). Prefix được chuẩn hoá kết
+File ghi hợp lệ ra ngoài thư mục của run (layout có task: thư mục task) phải khai
+`--allow` lúc `crew add-job` (ví dụ `content/{slug}/`). Prefix được chuẩn hoá kết
 thúc bằng `/` và chỉ áp cho **chính job đã khai** — khai `docs` không mở đường cho
 `docs-secret.md`, và job 2 không dùng được quyền của job 1.
 
@@ -385,8 +379,7 @@ thoả mãn — gate không thoả mãn nổi là gate người ta học cách �
 là một câu của người đọc, ghi lại cạnh run:
 
 ```bash
-node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json" \
-  --ack-runtime 2 --reason "đọc evidence rồi, agy báo ERROR nhưng bài đã ghi đủ"
+crew collect "$MP" --ack-runtime 2 --reason "đọc evidence rồi, agy báo ERROR nhưng bài đã ghi đủ"
 ```
 
 `--reason` bắt buộc, cùng lý do với `--not-ours`: nhận một job mà runtime báo
@@ -424,7 +417,8 @@ ai theo. Giờ mất dấu là hủy: job adapter không còn theo được là 
 ### Report tổng: ba chốt, và cái mà `existsSync` không thấy
 
 `--report` chỉ ghi khi gate trả exit 0, không đi cùng `--dry-run`, và đường dẫn phải
-nằm **trực tiếp** trong `tasks/{task}/reports/`. Ba chốt đó là chốt cũ. Ngày 25/08 một
+nằm **trực tiếp** trong thư mục report của layout (`reportDir`, không khai thì là thư mục
+run; ví dụ dưới dùng bố cục sổ task). Ba chốt đó là chốt cũ. Ngày 25/08 một
 worker Codex rà lại và tìm thêm hai đường lách, cả hai đã bịt:
 
 | Đường lách | Vì sao chốt cũ không thấy | Bịt bằng |
@@ -492,14 +486,14 @@ Có đổi exit code: `EVIDENCE-ĐỔI`. Adapter (và reconcile, khi nó là bê
 `evidenceSha256` của bản đã chấm. File khác đi thì gate chặn (exit 1) tới khi có
 `--ack-runtime {seq}@{sha}`, ghim đúng bản người đọc đã thấy.
 
-**Control plane không bao giờ đi qua worker.** `addJob`/`updateJob` từ chối `filesMayModify`
+**Control plane không bao giờ đi qua worker.** `crew add-job`/`crew amend` từ chối `--allow`
 chạm `.claude/settings*.json`, `.claude/agents/`, `.claude/agent-memory/`, hook của
-`.agents/` và `.codex/`, `.githooks/`, `.git/`, `harness/`, `harness.config*.json`,
-`mwg-agent-crew/scripts/`, `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` ở mọi cấp, và manifest của run
-(so không phân biệt hoa thường). Claim "file của run khác" cũng không miễn được những file đó.
+`.agents/` và `.codex/`, `.githooks/`, `.git/`, `crew.config.json`, `controlPlanePaths` của
+repo, `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` ở mọi cấp, và manifest của run (so không phân biệt
+hoa thường). Claim "file của run khác" cũng không miễn được những file đó.
 
 Resume vào conversation còn job sống bị `claimRunSlot` từ chối (xem `crew-session.mjs` ở
-bảng Scripts). Luật vận hành cho Claude: `skill/agent-crew/references/phoi-hop-owner.md`.
+bảng Scripts). Luật vận hành cho Claude: `skills/agent-crew/references/phoi-hop-owner.md`.
 
 ### `headless` là mặc định; `app` là ngoại lệ có lý do viết ra
 
@@ -597,7 +591,7 @@ ra exit 0 mà không nói gì.
 ## Tests
 
 ```bash
-node mwg-agent-crew/tests/run.mjs
+node plugins/agent-crew/tests/run.mjs
 ```
 
 Chạy mọi `tests/*.test.mjs`, mỗi file 1 process, exit khác 0 nếu có case fail.
@@ -623,7 +617,7 @@ không có ca nào trong đó một `codex` thật chịu tái hiện theo yêu 
 ### Contract không thương lượng
 
 Worker tự báo thành công **không được tính là thành công**. Chỉ tính khi có file evidence
-không rỗng nằm trong `tasks/`, và dòng `Status:` cuối file mới là phán quyết. Lý do:
+không rỗng nằm trong `evidenceRoot`, và dòng `Status:` cuối file mới là phán quyết. Lý do:
 `agy` đã được quan sát trả `status=SUCCESS` với response rỗng và không làm gì, khi một
 tool nó cần bị chặn bởi permission prompt mà nó không hiển thị được; và một job dừng ở
 cost gate vẫn để lại file không rỗng nên nếu chỉ kiểm sự tồn tại thì bị đếm nhầm là xong.

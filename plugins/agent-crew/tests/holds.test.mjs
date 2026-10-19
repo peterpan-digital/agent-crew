@@ -7,7 +7,7 @@
  * `conversationId` với job gốc nhưng KHÔNG có `resumedFrom`. Run thật không
  * được đụng ở đây; mọi ca chạy trên workspace tạm.
  *
- * Run: node mwg-agent-crew/tests/holds.test.mjs
+ * Run: node plugins/agent-crew/tests/holds.test.mjs
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";

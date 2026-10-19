@@ -16,7 +16,7 @@ Hai lỗi hay gặp:
 
 ## Chọn worker
 
-Đọc `mwg-agent-crew/routing-table.md`. Tiêu chí là **rule đã thành văn hay chưa**,
+Đọc `routing-table.md` (cùng thư mục) và bảng skill → worker trong `CLAUDE.md` của repo nếu có. Tiêu chí là **rule đã thành văn hay chưa**,
 không phải dễ/khó:
 
 - Có `SKILL.md` ràng đủ case, chỉ cần thi hành → **Antigravity**. Nó nhanh và rất gọn
@@ -55,13 +55,13 @@ nó là transport harness **quan sát được**: có `exitCode`, có `usage`, c
 watchdog. Đo 25/08 trên 6 job app thật thì `app` không có một cái nào trong số đó ở Anti,
 và thiếu watchdog + `exitCode` ở Codex.
 
-Chọn `app` chỉ trong 3 ca, và `addJob` đòi `note` nói ca nào:
+Chọn `app` chỉ trong 3 ca, và `crew add-job` đòi `--note` nói ca nào:
 
 | Ca | Vì sao app thắng |
 | --- | --- |
 | Job Anti sẽ gặp **prompt permission cần người trả** | Headless gặp prompt là silent-fail: `SUCCESS` với `response` rỗng |
 | **Việc mở/khám phá**, chưa viết nổi acceptance trước | Không có tiêu chí chấm thì mất evidence-first cũng không mất gì |
-| Cần **thread resume** làm tiếp buổi sau | `codex resume <id>` (Codex) hoặc `anti-run.mjs --resume <conversationId>` (Anti, thêm 2026-09-17) — chỉ thread app có |
+| Cần **thread resume** làm tiếp buổi sau | `codex resume <id>` (Codex) hoặc `crew run anti --resume <conversationId>` (Anti, thêm 2026-09-17) — chỉ thread app có |
 
 Ghi đè không `note` bị từ chối, và lời từ chối liệt kê luôn 3 ca này.
 
@@ -140,7 +140,7 @@ Crew làm gì:
 > *"Đo giúp anh mấy chỉ số này."*
 
 Một đầu việc. Làm trực tiếp bằng skill đo sẵn có. Tạo run 1 job chỉ thêm overhead và
-thêm file rác trong task folder.
+thêm file rác trong thư mục run.
 
 > *"Đọc file này rồi tóm tắt cho anh."*
 
@@ -209,7 +209,7 @@ xuất ra cũng được, miễn ánh xạ đủ:
 | `goal_link` | Việc này nối về mục tiêu workspace ra sao |
 | `cost_gate` | Có mặt = job chạm API tốn tiền |
 
-`ĐIỀN VÀO`: nếu workspace bạn có file hợp đồng mô tả hình dạng job list, trỏ nó ở đây.
+Repo có file hợp đồng mô tả hình dạng job list thì `CLAUDE.md` của repo trỏ tới nó; đọc file đó trước bảng trên.
 
 Ba việc phải làm khi nhận job list, không được bỏ:
 
@@ -228,7 +228,7 @@ sau — **không tự chạy nó**.
 
 ## Ngưỡng job: code ép từ 26/08
 
-Quá `MAX_JOBS` job thì dừng, báo user, không tự chạy tiếp. Từ 26/08 `addJob` tự từ chối
+Quá `MAX_JOBS` job thì dừng, báo user, không tự chạy tiếp. Từ 26/08 `crew add-job` tự từ chối
 job thứ 7, `claimRunSlot` tự từ chối adapter thứ 4, và `readPrompt` tự từ chối brief quá
 2048 B — nên ba ngưỡng này không còn phụ thuộc vào việc người điều phối có nhớ hay không.
 
@@ -246,13 +246,13 @@ thước** brief.
 
 ## Lệnh chạm guard: cấp sẵn nguyên văn
 
-`MWG_CREW_ROLE=worker` chặn `createRun`, nên worker **không chạy được test của
-`mwg-agent-crew/`**. Job nào cần chạy test thì brief thêm mục `## Lệnh được cấp sẵn`
-với lệnh nguyên văn:
+`CREW_ROLE=worker` chặn `createRun`, nên worker **không chạy được test của chính
+crew**. Job nào cần chạy test thì brief thêm mục `## Lệnh được cấp sẵn` với lệnh
+nguyên văn (đường plugin lấy từ `crew doctor`):
 
 ```text
 ## Lệnh được cấp sẵn
-- env -u MWG_CREW_ROLE node mwg-agent-crew/tests/collect-gate.test.mjs
+- env -u CREW_ROLE -u MWG_CREW_ROLE node <plugin>/tests/collect-gate.test.mjs
 ```
 
 Vì sao cấp sẵn thay vì để worker tự xử: đo 25/08, cả hai worker Codex đều vướng guard;
@@ -265,17 +265,17 @@ Chỉ cấp cho **đúng lệnh test**, không cấp chung cho cả job. Chốt 
 
 ## Guard: vì sao nằm đầu file
 
-Guard `MWG_CREW_ROLE` là mục đầu tiên của `SKILL.md`. Lý do guard nằm ở đây thay vì cuối file: skill này được mirror sang cả 4 runtime
-(`.claude`, `.codex`, `.agents`, `.gemini`), nên một worker đọc được chính nó và
-có thể dispatch tiếp thành đệ quy. Manifest cũng chặn tầng hai bằng `depth`:
+Guard `CREW_ROLE` là mục đầu tiên của `SKILL.md`. Lý do guard nằm ở đây thay vì cuối
+file: worker chạy trong cùng repo và có thể đọc được chính skill này (plugin cài cấp
+máy, hoặc bản chép sang `.codex`/`.agents`/`.gemini`), rồi dispatch tiếp thành đệ quy. Manifest cũng chặn tầng hai bằng `depth`:
 `depth > 1` là từ chối.
 
 ## `model`/`effort`: vì sao bắt buộc
 
 **`model`/`effort` là bắt buộc.** Trước đây mọi job trong mọi manifest đều `null`, nên
 không có cách nào biết model nào hay fail ngoài đoán. Bảng bậc ở
-`mwg-agent-crew/routing-table.md` mục *Model* — chọn theo lượng phán đoán cần, không
-theo cảm giác nặng nhẹ.
+`routing-table.md` mục *Model* — chọn theo lượng phán đoán cần, không theo cảm giác
+nặng nhẹ. Tên model lấy từ `crew doctor`, không từ trí nhớ.
 
 ## Trần 2 KB của brief
 
@@ -284,11 +284,11 @@ làm brief phình lên 7.2 KB hôm 24/08. Ba loại brief và ví dụ đối ch
 
 ## Bước 4: ghi `role` và `transport`
 
-**`role` là bắt buộc** (`owner` | `assist`). Thiếu là `addJob` từ chối. `transport`
+**`role` là bắt buộc** (`owner` | `assist`). Thiếu là `crew add-job` từ chối. `transport`
 mặc định `headless` cho cả hai role, và được ghi tường minh vào manifest để lần sau đọc
 không phải suy lại.
 
-Muốn `app` thì truyền `transport: "app"` **kèm `note`** nói ca nào trong 3 ca ở Bước 3.
+Muốn `app` thì truyền `--transport app` **kèm `--note`** nói ca nào trong 3 ca ở Bước 3.
 Ghi đè không `note` bị từ chối, và lời từ chối liệt kê luôn 3 ca — đó đúng là đường quay
 lại chọn theo cảm tính.
 
@@ -296,6 +296,8 @@ lại chọn theo cảm tính.
 
 **`--mode` phải khớp `transport` đã ghi ở Bước 4.** Ghi một transport rồi bắn đường
 khác là để lại một dòng sai trong sổ — và sổ đó là thứ duy nhất sau này đo được.
+`crew run --manifest --job` lấy `--mode` (và model/effort) từ sổ nên khớp theo cấu tạo;
+đừng truyền tay trừ khi có lý do.
 
 ## Ca `app` thứ ba: resume làm tiếp buổi sau
 

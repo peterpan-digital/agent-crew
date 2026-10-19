@@ -15,7 +15,7 @@
  * Deliberately NOT built on ~/.claude/hooks/lib/transcript-parser.cjs: see the
  * note above resolveRedactor().
  *
- * Run: node mwg-agent-crew/scripts/claude-session-export.mjs --session <uuid>
+ * Run: node plugins/agent-crew/scripts/claude-session-export.mjs --session <uuid>
  */
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";

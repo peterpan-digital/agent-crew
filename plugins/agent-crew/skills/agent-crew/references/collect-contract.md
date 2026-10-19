@@ -1,6 +1,6 @@
 # Collect contract
 
-Cách nghiệm thu một run và viết lại nó. Đọc sau khi `crew-collect.mjs` trả exit 0.
+Cách nghiệm thu một run và viết lại nó. Đọc sau khi `crew collect` trả exit 0.
 
 ## Ranh giới của bước này
 
@@ -8,13 +8,13 @@ Crew **làm việc và viết lại việc đã làm**. Nó không chấm công 
 
 | Việc | Ai làm |
 | --- | --- |
-| Phán từng job đạt hay không | `crew-collect.mjs` — exit code là phán quyết |
+| Phán từng job đạt hay không | `crew collect` — exit code là phán quyết |
 | Viết report nghiệm thu | Agent, ở Bước 8 |
-| Ghi log định kỳ của workspace | công cụ riêng, **user gọi khi muốn** |
-| Đổi task sang `done` | công cụ đóng task của workspace, **user gọi khi muốn** |
+| Ghi log định kỳ của repo | công cụ `CLAUDE.md` chỉ định, **user gọi khi muốn** |
+| Đổi task sang `done` | công cụ đóng task `CLAUDE.md` chỉ định, **user gọi khi muốn** |
 
-`ĐIỀN VÀO`: thay hai dòng cuối bằng tên công cụ thật ở workspace bạn. Không có công cụ
-nào thì vẫn giữ nguyên tắc: crew không tự đóng task.
+Tên công cụ thật nằm ở `CLAUDE.md` của repo. Không có công cụ nào thì vẫn giữ nguyên
+tắc: crew không tự đóng task.
 
 Vì sao không tự chain: user còn review report, và thường trả lại để sửa. Một run xong không
 có nghĩa là task xong. Tự đóng task ở đây sẽ đóng những task mà người ta còn đang đọc.

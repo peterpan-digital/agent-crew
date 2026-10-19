@@ -9,7 +9,7 @@
  * the watchdog re-armed on stderr chatter, and a retry appended into the
  * previous attempt's log.
  *
- * Run: node mwg-agent-crew/tests/codex-lifecycle.test.mjs
+ * Run: node plugins/agent-crew/tests/codex-lifecycle.test.mjs
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { readdirSync, renameSync, mkdirSync } from "node:fs";
@@ -418,6 +418,8 @@ t.check("...and the message prints real CLI spellings", typo.stderr.includes("--
 
   const explicit = writeFile(join(ws, "elsewhere", "codex-companion.mjs"), "// stand-in\n");
   t.check("an explicit override wins", resolveCompanion({ MWG_CODEX_COMPANION: explicit }, home), explicit);
+  t.check("the general name is read too", resolveCompanion({ CREW_CODEX_COMPANION: explicit }, home), explicit);
+  t.check("...and wins over the old name", resolveCompanion({ CREW_CODEX_COMPANION: explicit, MWG_CODEX_COMPANION: join(ws, "gone.mjs") }, home), explicit);
 
   let msg = "no throw";
   try { resolveCompanion({ MWG_CODEX_COMPANION: join(ws, "gone.mjs") }, home); } catch (err) { msg = err.message; }

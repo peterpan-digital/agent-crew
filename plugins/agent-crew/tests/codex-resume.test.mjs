@@ -16,7 +16,7 @@
  * opens with `{"type":"thread.started","thread_id":"01a0..."}`. Nothing read it,
  * so the one thing needed to continue a job was discarded on every run.
  *
- * Run: node mwg-agent-crew/tests/codex-resume.test.mjs
+ * Run: node plugins/agent-crew/tests/codex-resume.test.mjs
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";

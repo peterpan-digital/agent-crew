@@ -249,7 +249,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const dryRun = args.includes("--dry-run");
   const cancelOrphans = args.includes("--cancel-orphans");
   if (!manifestPath) {
-    console.error("usage: crew-reconcile.mjs <manifest.json> [--dry-run] [--cancel-orphans]");
+    console.error("usage: crew reconcile <manifest.json> [--dry-run] [--cancel-orphans]");
     process.exit(2);
   }
   try {

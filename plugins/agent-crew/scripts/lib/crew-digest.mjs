@@ -114,7 +114,7 @@ export function crewDigest(workspace, { now = new Date(), epoch = DIGEST_EPOCH, 
       const since = Date.parse(j.startedAt ?? "") || Date.parse(m.createdAt ?? "") || 0;
       const late = !since || nowMs - since > staleAfter(j);
       jobs.push(late
-        ? `! ${label} job ${Number(j.seq)} ${j.status} quá hạn → xem: crew-collect.mjs <manifest> --dry-run`
+        ? `! ${label} job ${Number(j.seq)} ${j.status} quá hạn → xem: crew collect <manifest> --dry-run`
         : `· ${label} job ${Number(j.seq)} ${j.status}, đang trong hạn`);
       flagged = true;
     }
@@ -138,5 +138,5 @@ export function crewDigest(workspace, { now = new Date(), epoch = DIGEST_EPOCH, 
   const room = maxLines - head.length;
   if (items.length <= room) return [...head, ...items];
   const shown = items.slice(0, room - 1);
-  return [...head, ...shown, `…và ${items.length - shown.length} mục khác — xem hold: node mwg-agent-crew/scripts/crew-hold.mjs <manifest> list`];
+  return [...head, ...shown, `…và ${items.length - shown.length} mục khác — xem hold: crew hold <manifest> list`];
 }

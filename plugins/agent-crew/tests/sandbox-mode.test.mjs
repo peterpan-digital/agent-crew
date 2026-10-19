@@ -17,7 +17,7 @@
  * means the hash guard is the only thing left, so it has to be proven at this
  * permission level and not merely assumed to carry over.
  *
- * Run: node mwg-agent-crew/tests/sandbox-mode.test.mjs
+ * Run: node plugins/agent-crew/tests/sandbox-mode.test.mjs
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";

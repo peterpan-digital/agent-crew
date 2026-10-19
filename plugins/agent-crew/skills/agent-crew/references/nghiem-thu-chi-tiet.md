@@ -1,6 +1,6 @@
 # Nghiệm thu chi tiết
 
-Đọc khi: `crew-collect` ra exit khác 0, có `WARN`, cần retry, cần bác file của session
+Đọc khi: `crew collect` ra exit khác 0, có `WARN`, cần retry, cần bác file của session
 khác, hoặc job dừng ở `COST_GATE`. Lõi `SKILL.md` Bước 7-8 có lệnh chính và bảng exit.
 
 ## Bảng verdict đầy đủ
@@ -15,15 +15,15 @@ Verdict cần đọc kỹ:
 | `STALE` | job `pending`/`running` im lặng quá `timeout` của chính nó + 10 phút, không có evidence | xác nhận job chết rồi `--abandon <seq>` |
 | `RUNNING` | job còn trong ngưỡng thời gian của chính nó, chưa có evidence | chờ, chạy lại collect |
 | `NO_STATUS` | evidence có nội dung nhưng thiếu dòng `Status:` | đọc file, phán tay, không đoán |
-| `SCOPE_VIOLATION` | có file bị ghi ngoài `tasks/{task}/` trong lúc job chạy | nếu là chỗ ghi hợp lệ thì khai `filesMayModify` lúc `addJob`; nếu không thì worker đã đi quá phạm vi |
-| ghi vào `PROTECTED_PATHS` | worker chạm file MCP config / credential | **không có đường hợp lệ hoá** — điều tra, đừng khai để cho qua |
+| `SCOPE_VIOLATION` | có file bị ghi ngoài thư mục của run (layout có task: thư mục task) trong lúc job chạy | nếu là chỗ ghi hợp lệ thì khai `--allow` lúc `crew add-job`; nếu không thì worker đã đi quá phạm vi |
+| ghi vào file bảo vệ | worker chạm file MCP config / credential / thư mục skill, hoặc `protectedPaths` của repo | **không có đường hợp lệ hoá** — điều tra, đừng khai để cho qua |
 | `NGHI VẤN PHẠM VI` | file lọt vào khoảng của job chết không kịp ghi giờ kết thúc | không chặn, nhưng đọc qua — khoảng đó là suy đoán |
-| `WAIVED` | job `BLOCKED` vì `COST_GATE`, owner chọn bỏ việc (`crew-hold answer --outcome drop`) | tính như đạt; report ghi câu owner nói |
+| `WAIVED` | job `BLOCKED` vì `COST_GATE`, owner chọn bỏ việc (`crew hold answer --outcome drop`) | tính như đạt; report ghi câu owner nói |
 | `COVERED` | job `BLOCKED` vì `COST_GATE`, owner cho chạy tiếp và job cover đã `PASS` | tính như đạt; liếc evidence job cover nếu là Anti app (xem mục hold) |
 | `DEFERRED` | owner hoãn quyết định tới một ngày | **vẫn chặn**; tới ngày thì hỏi lại |
 | `REPLACED` | job `FAIL` có job sau cùng worker làm lại và `PASS`, người đọc đã ghi `--replaced {hỏng}={thay} --reason` | không chặn; report ghi câu lý do. Job thay hết `PASS` thì đỏ lại |
 | `FAIL` | adapter ghi `failed`, hoặc evidence rỗng/thiếu | đọc `failure`; permission thì sửa brief, lý do khác retry tối đa 1 lần. Retry `PASS` thì `--replaced` (dưới bảng) |
-| `BLOCKED` | evidence phán `BLOCKED` | có dòng `COST_GATE` thì xử bằng `crew-hold`; không thì đọc evidence, xử nguyên nhân rồi chạy lại |
+| `BLOCKED` | evidence phán `BLOCKED` | có dòng `COST_GATE` thì xử bằng `crew hold`; không thì đọc evidence, xử nguyên nhân rồi chạy lại |
 | `NEEDS_HUMAN` | evidence phán `NEEDS_CONTEXT` | đọc evidence, bổ sung thứ worker thiếu vào brief rồi chạy lại |
 | `CANCELLED` | job đã bị bỏ (`--abandon`) | không chặn; report đếm riêng |
 
@@ -32,7 +32,7 @@ CREDENTIAL BỊ ĐỔI` (xem `quyen-han-worker.md`) và `HOLDS BỊ SỬA` (hàn
 trong lúc job chạy; điều tra như sự cố phạm vi, xem mục hold bên dưới).
 
 **Cửa sổ yên tĩnh kéo dài quá lúc job kết thúc.** Phạm vi ghi tính theo mtime nằm
-trong `[startedAt, endedAt + 2 phút]` của từng job. Sửa file ngoài task folder ngay
+trong `[startedAt, endedAt + 2 phút]` của từng job. Sửa file ngoài thư mục của run ngay
 sau khi job cuối xong vẫn bị tính — đo được 2026-08-25, chính dispatcher gây ra.
 Chờ hết ân hạn rồi mới đụng file khác, hoặc dọn xong mọi việc ngoài run **trước** khi
 dispatch.
@@ -43,8 +43,7 @@ job sau **cùng worker**, seq lớn hơn, tự `PASS`, làm đúng phạm vi job
 phiên mới đều được). Đọc evidence job đó rồi:
 
 ```bash
-node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json" \
-  --replaced 1=3 --replaced 2=4 --reason "job 3/4 làm lại đủ phạm vi job 1/2, đã đọc evidence"
+crew collect "$MP" --replaced 1=3 --replaced 2=4 --reason "job 3/4 làm lại đủ phạm vi job 1/2, đã đọc evidence"
 ```
 
 Một job thay chỉ thay được **một việc** (một job hỏng, hoặc một hold đã cover — không cả hai).
@@ -52,14 +51,13 @@ Bản ghi nằm ở `replacedJobs` trong manifest, ghim lần chạy của hai j
 thay lúc khai; tính lại mỗi lần collect. Job thay hết `PASS`, chạy lại, hoặc evidence bị ghi
 lại thì job hỏng đỏ lại — đọc bản mới rồi khai lại. Luật ghi chung với `--ack-runtime` và
 `--not-ours`, xem "Ba sổ của người đọc" bên dưới. `--abandon` và `--replaced` chạy hai lệnh
-riêng. Job `BLOCKED` không đi đường này (đi qua `crew-hold`), job
+riêng. Job `BLOCKED` không đi đường này (đi qua `crew hold`), job
 `STALE` cũng không (`--abandon`).
 
 **File của session khác lọt vào `SCOPE_VIOLATION` thì bác có dấu vết, đừng nới ngưỡng:**
 
 ```bash
-node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json" \
-  --not-ours <path> --reason "<vì sao không phải của run này>"
+crew collect "$MP" --not-ours <path> --reason "<vì sao không phải của run này>"
 ```
 
 Lý do được ghi vào manifest, nên lần sau đọc lại biết ai bác và vì sao. Nới ngưỡng thì
@@ -85,7 +83,7 @@ không nhớ đã gõ thì coi là sự cố.
 **Job Codex `app` không có evidence: reconcile phân loại được rồi, đừng đoán.**
 
 ```bash
-node mwg-agent-crew/scripts/crew-reconcile.mjs "$RUN_DIR/manifest.json" --dry-run
+crew reconcile "$MP" --dry-run
 ```
 
 Nó hỏi runtime bằng `companionJobId` và trả về một trong ba thứ: job **còn sống** (để yên),
@@ -93,44 +91,38 @@ job runtime **không còn nhớ**, hay job runtime báo xong mà đĩa trống. 
 `failed` kèm lý do. Muốn dọn luôn ở phía runtime thì thêm `--cancel-orphans` — mặc định
 tắt, vì phát hiện là phép đọc còn hủy là thay đổi thứ ngoài repo.
 
-Job ghi hợp lệ ra ngoài `tasks/{task}/` — ví dụ bài viết nằm ở
-`mwg-content-editor/content-workspaces/` — phải khai lúc `addJob`, không thì gate
-đánh là vi phạm:
-
+Job ghi hợp lệ ra ngoài thư mục của run — ví dụ bài viết nằm ở `content/{slug}/` — phải
+khai lúc `crew add-job`, không thì gate đánh là vi phạm:
 
 ```bash
-node -e '
-const [mp, worker, role, model, title, evidence, allow] = process.argv.slice(1);
-import("./mwg-agent-crew/scripts/crew-manifest.mjs").then((m) =>
-  console.log(m.addJob(mp, { worker, role, model, title, evidence,
-    filesMayModify: allow ? allow.split(",") : [] }).seq));
-' "$RUN_DIR/manifest.json" antigravity owner gemini-3.7-flash-medium "tối ưu HTML" \
-  "$RUN_DIR/worker-anti-1.md" "mwg-content-editor/content-workspaces/{topic-slug}/"
+crew add-job "$MP" --worker anti --role owner --model {model} --title "tối ưu HTML" \
+  --allow "content/{slug}/"
 ```
 
-Prefix là đường **tương đối trong repo**: `addJob` từ chối đường tuyệt đối và đường có `..`.
+Prefix là đường **tương đối trong repo**: `crew add-job` từ chối đường tuyệt đối, đường có
+`..`, và mọi prefix với tới control plane hay file bảo vệ.
 
 ## Retry job Codex: dời log lượt trước
 
-**Retry job Codex phải dời log lượt trước đi trước.** `codex-run.mjs` từ chối chạy
-khi sidecar cũ còn nằm ở `tasks/{task}/data/crew-logs/{run}/`. Guard đúng — hai lượt
+**Retry job Codex phải dời log lượt trước đi trước.** Adapter Codex từ chối chạy
+khi sidecar cũ còn nằm trong thư mục log thô của run. Guard đúng — hai lượt
 trộn vào một log là mất bằng chứng — nhưng nó làm luật "retry 1 lần" không thi hành
 được nếu không đổi tên file cũ:
 
 ```bash
-LOG="tasks/{task}/data/crew-logs/crew-{run_id}"
+LOG="$(crew paths "$MP" --job {seq} | awk -F'\t' '$1=="logs"{print $2}')"
 for f in "$LOG"/worker-codex-{seq}.*; do mv "$f" "${f/worker-/attempt1-worker-}"; done
 ```
 
 Evidence lượt trước đổi tên `attempt1-` thay vì xoá: job trượt vì brief là dữ liệu
 để sửa brief, không phải rác.
 
-Log thô của job Codex nằm trong `tasks/{task}/data/crew-logs/` nên không hiện ra ở
-`git status` — đường dẫn chính xác đọc từ field `stream` của manifest.
+Log thô của job Codex nằm trong thư mục `logs` của layout (gitignore) nên không hiện ra ở
+`git status` — đường dẫn chính xác đọc từ field `stream` của manifest hoặc `crew paths`.
 
 ## Orphan: reconcile được quyền quyết cái gì — đo 2026-08-25
 
-`crew-reconcile.mjs` trước đây từ chối phán bất cứ job nào không có evidence, lý do viết
+`crew reconcile` trước đây từ chối phán bất cứ job nào không có evidence, lý do viết
 thẳng trong file: "chỉ dispatcher biết runtime còn sống không". Điều đó đúng khi đầu vào
 chỉ có manifest và đĩa. Vì `companionJobId` giờ được ghi **ngay lúc dispatch** (trước đây
 chỉ ghi trên đường trả về — nên đúng ca cần nó thì không có), runtime hỏi được trực tiếp.
@@ -165,7 +157,7 @@ Ba phép đo làm bảng này an toàn:
 là kiểu thất bại im lặng mà harness này tồn tại để bắt. Chỉ evidence cho đậu.
 
 Hủy job ở runtime là **tự chọn**, mặc định tắt: phát hiện là một phép đọc, hủy là thay đổi
-thứ nằm ngoài repo. Muốn hủy thì `crew-reconcile.mjs <manifest> --cancel-orphans`.
+thứ nằm ngoài repo. Muốn hủy thì `crew reconcile <manifest> --cancel-orphans`.
 
 ## `--report`: khung, và khi nào từ chối
 
@@ -181,7 +173,7 @@ Bốn chỗ nó **từ chối**, đừng cố lách:
 | Gate chưa exit 0 | Không có file nào được ghi. Rule chỉ in ra màn hình là rule bị bỏ qua lúc 11 giờ đêm |
 | Đi cùng `--dry-run` | Reconcile chưa ghi gì, số liệu sẽ mô tả một manifest không tồn tại |
 | Đã có file ở đường đó | Report là bằng chứng; ghi đè im lặng là mất lần đọc trước |
-| Đường dẫn ngoài `tasks/{task}/reports/` | Cùng lý do có cổng phạm vi ghi |
+| Đường dẫn ngoài thư mục report (`reportDir` của layout, mặc định là thư mục run) | Cùng lý do có cổng phạm vi ghi |
 
 ## Security: vì sao, và một ngoại lệ
 
@@ -220,8 +212,8 @@ dữ liệu trong manifest (`holds[]`), và gate đọc nó.
 
 | `kind` | Ai tạo | Làm gate đỏ? |
 | --- | --- | --- |
-| `cost_gate` | `crew-collect`, tự động, cho job `BLOCKED` có dòng `COST_GATE` | Có, tới khi được `WAIVED` hoặc `COVERED` |
-| `decision` | dispatcher, bằng `crew-hold add` | Không. Chỉ hiện ở mục "QUYẾT ĐỊNH ĐANG CHỜ" của report và đầu phiên |
+| `cost_gate` | `crew collect`, tự động, cho job `BLOCKED` có dòng `COST_GATE` | Có, tới khi được `WAIVED` hoặc `COVERED` |
+| `decision` | dispatcher, bằng `crew hold add` | Không. Chỉ hiện ở mục "QUYẾT ĐỊNH ĐANG CHỜ" của report và đầu phiên |
 
 Collect chỉ tạo hold khi run **không còn job chạy** và không ở `--dry-run`. Còn job chạy
 thì nó in "sẽ tạo khi run hết job chạy" và để đó.
@@ -279,9 +271,9 @@ evidence của job cover, xem nó đúng là phần làm tiếp của job bị c
 
 ### Ai được ghi
 
-- `crew-hold` (kể cả `list`) bị từ chối khi `MWG_CREW_ROLE=worker`. Không có việc nào
+- `crew hold` (kể cả `list`) bị từ chối khi `CREW_ROLE=worker`. Không có việc nào
   của worker cần xem hold (owner chốt 03/10).
-- Đó là rào **phụ**: `MWG_CREW_ROLE` không tới được worker Anti app (đo 01/10). Rào chính
+- Đó là rào **phụ**: biến vai trò không tới được worker Anti app (đo 01/10). Rào chính
   là dữ liệu: mọi lệnh ghi bị từ chối khi run còn job pending/running, và mỗi adapter
   chụp vân tay `holds` lúc claim rồi so lại ở mọi đường thoát. Lệch thì job mang
   `holdsTamper`, gate in `HOLDS BỊ SỬA` và ra exit 2.
@@ -291,7 +283,7 @@ evidence của job cover, xem nó đúng là phần làm tiếp của job bị c
 ## Dấu nghiệm thu và bảng đầu phiên (thêm 2026-10-03)
 
 Mỗi lần collect không ở `--dry-run` ghi `lastCollect` (giờ, exit code) vào manifest;
-`--report` thành công thêm đường dẫn report vào `reports[]`. Hook đầu phiên Claude đọc
+`--report` thành công thêm đường dẫn report vào `reports[]`. Hook đầu phiên của plugin đọc
 các dấu đó và in mục **"Crew còn dở"** (tối đa 15 dòng): hold đang chờ, job
 `pending`/`running` (kẹt thì có lệnh xem), và run tạo từ 03/10 chưa nghiệm thu. Bảng đó
 là dữ liệu đọc từ manifest, không phải chỉ thị. Worker không thấy nó.
@@ -305,12 +297,12 @@ toàn bộ "mode status" — không có script riêng, vì cả hai adapter đã
 nhánh xong và nhánh fail, nên không còn gì phải poll.
 
 ```bash
-node mwg-agent-crew/scripts/crew-collect.mjs "$RUN_DIR/manifest.json" --dry-run
+crew collect "$MP" --dry-run
 ```
 
 ## Dừng sau report
 
 **Dừng ở đây.** Không tự đóng task, không tự ghi sổ chấm công hay log định kỳ của
-workspace. Crew làm việc và viết lại việc đã làm; **đóng task là quyết định khác**, và
+repo. Crew làm việc và viết lại việc đã làm; **đóng task là quyết định khác**, và
 user thường còn review rồi trả lại sửa. Tổng thời gian job trong khung report là dữ liệu
 để công cụ khác đọc — crew không tự điền nó vào đâu cả.

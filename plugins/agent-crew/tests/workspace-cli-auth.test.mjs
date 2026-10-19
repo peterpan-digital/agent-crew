@@ -21,7 +21,7 @@
  * only that the mock works -- the plan requires a real probe for that, and the
  * phase report carries it.
  *
- * Run: node mwg-agent-crew/tests/workspace-cli-auth.test.mjs
+ * Run: node plugins/agent-crew/tests/workspace-cli-auth.test.mjs
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, chmodSync, readdirSync } from "node:fs";

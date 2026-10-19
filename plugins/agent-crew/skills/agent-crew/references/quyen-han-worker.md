@@ -2,7 +2,7 @@
 
 Đọc khi: job Codex cần Google Workspace, trình duyệt, Computer Use, hoặc ghi ngoài repo;
 job ra `401`; hoặc gate đỏ `KHO CREDENTIAL BỊ ĐỔI`. Bảng tra nhanh ở lõi `SKILL.md`
-Bước 6. Nhật ký đo nằm ở `mwg-agent-crew/docs/transport-measurements.md`.
+Bước 6. Nhật ký đo nằm ở `docs/transport-measurements.md` của plugin.
 
 ## Job cần Google Workspace CLI — `--workspace-cli on` (thêm 2026-09-19)
 
@@ -10,12 +10,8 @@ Bước 6. Nhật ký đo nằm ở `mwg-agent-crew/docs/transport-measurements.
 nguyên nhân của `401` → `BLOCKED`, và worker **không được** tự vá:
 
 ```bash
-node mwg-agent-crew/scripts/codex-run.mjs \
-  --mode headless --effort medium --workspace-cli on \
-  --prompt-file "$RUN_DIR/brief-codex-2.md" \
-  --evidence "$RUN_DIR/worker-codex-2.md" \
-  --timeout 15m --workspace "$PWD" \
-  --manifest "$PWD/$RUN_DIR/manifest.json" --job 2
+crew run codex --manifest "$MP" --job 2 --workspace-cli on \
+  --prompt-file {brief job 2} --timeout 15m
 ```
 
 Vì sao phải bật tay: `codex exec` chạy dưới Seatbelt `workspace-write`, cấm ghi ngoài
@@ -127,9 +123,8 @@ hỏng hẳn. Bằng chứng: phép đo so tool 3 bề mặt ngày 22/09 (report
 | `--mode app` | ❌ | ❌ | ❌ |
 
 ```bash
-node mwg-agent-crew/scripts/codex-run.mjs \
-  --mode headless --effort medium --sandbox-mode danger-full-access \
-  --prompt-file "$RUN/brief-codex-1.md" ...
+crew run codex --manifest "$MP" --job 1 --sandbox-mode danger-full-access \
+  --prompt-file {brief job 1} ...
 ```
 
 **Mặc định `workspace-write`, và giữ nguyên vậy.** Chỉ gõ cờ khi việc **thật sự** cần
@@ -142,15 +137,15 @@ chặn. **Owner chốt 22/09: không cấm** — nhưng phải có lý do.
 
 Bốn điều adapter tự lo, khỏi nhớ:
 
-- **Brief tự có thêm dòng ranh giới** khi job chạy ngoài sandbox: chỉ đụng workspace +
-  task folder, không `~/.config/gws/`, `.env`, secret, token, config ngoài repo. Không
+- **Brief tự có thêm dòng ranh giới** khi job chạy ngoài sandbox: chỉ đụng workspace
+  này, không `~/.config/gws/`, `.env`, secret, token, config ngoài repo. Không
   cần gõ tay. Antigravity luôn nhận dòng này.
 - Giá trị lạ bị **từ chối**, không âm thầm rơi về mặc định.
 - `--mode app` chỉ nhận mức mặc định; mức nới bị từ chối vì app tự sandbox job dispatch.
-- Worker **không tự nới được** — `MWG_CREW_ROLE=worker` gặp mức nới là bị chặn.
+- Worker **không tự nới được** — `CREW_ROLE=worker` gặp mức nới là bị chặn.
 
 Dấu vết để lại: `sandboxMode` trong manifest (**cả khi job chết**), cảnh báo ở stderr và
-trong sidecar `*.codex-stream.jsonl`, và cờ `FULL-ACCESS` trên dòng job của `crew-collect`.
+trong sidecar `*.codex-stream.jsonl`, và cờ `FULL-ACCESS` trên dòng job của `crew collect`.
 Cờ đó **không** làm cổng đỏ — nới quyền là cố ý, nhưng người chấm phải nhìn thấy nó.
 
 ### `--sandbox-mode` — nới quyền, opt-in (thêm 2026-09-22)
@@ -161,10 +156,10 @@ Cờ đó **không** làm cổng đỏ — nới quyền là cố ý, nhưng ng�
 | Nới quyền | `--sandbox-mode danger-full-access` — mở khoá Computer Use, trình duyệt, ghi ngoài repo |
 | Giá trị lạ | Bị **từ chối**, không rơi về mặc định |
 | App mode | Chỉ từ chối mức nới; mức mặc định vẫn nhận. Job app ghi `sandboxMode: "app-managed"` vì app tự quyết sandbox, adapter không có tiếng nói |
-| Worker | **Không được tự nới.** `MWG_CREW_ROLE=worker` + mức nới → từ chối |
+| Worker | **Không được tự nới.** `CREW_ROLE=worker` + mức nới → từ chối |
 
 Ghi lại ở: manifest (`sandboxMode`, **mọi** đường thoát kể cả job chết), stderr, và
-sidecar `*.codex-stream.jsonl`. `crew-collect` gắn cờ `FULL-ACCESS` vào dòng job —
+sidecar `*.codex-stream.jsonl`. `crew collect` gắn cờ `FULL-ACCESS` vào dòng job —
 **không** tính vào `violation`: nới quyền là cố ý, nhưng người đọc phải thấy nó khi
 chấm mọi thứ còn lại.
 
@@ -174,12 +169,12 @@ chặn. **Owner chốt 22/09: không cấm** — một job cần cả trình duy
 tách làm hai là trả giá quá đắt cho rủi ro chưa xảy ra.
 
 Đổi lại, ràng buộc chuyển vào **brief**: mọi job chạy ngoài sandbox được adapter tự
-chèn thêm một dòng ranh giới (chỉ đụng workspace + task folder; không `~/.config/gws/`,
+chèn thêm một dòng ranh giới (chỉ đụng workspace này; không `~/.config/gws/`,
 `.env`, secret, token, config ngoài repo). Tự chèn theo bậc sandbox, không trông vào
 việc người giao việc nhớ gõ. Antigravity luôn nhận dòng này vì nó luôn chạy
 `--dangerously-skip-permissions`. Cảnh báo stderr + `stream.note()` vẫn nêu thẳng cặp cờ.
 
-## Connector có sẵn của worker: đừng dùng mặc định — ĐIỀN VÀO
+## Connector có sẵn của worker: đừng dùng mặc định
 
 Worker thường được nhà cung cấp bật sẵn connector (mail, drive, spreadsheet...). Chúng
 đi OAuth **riêng của worker**, nằm ngoài mọi rào định tuyến tài khoản mà workspace bạn
@@ -189,7 +184,8 @@ là kịch bản có thật, không phải giả định.
 Rule mặc định: **worker không dùng connector sẵn có để chạm dữ liệu thật.** Muốn chạm
 thì đi qua đúng CLI/credential mà workspace bạn đã định tuyến.
 
-`ĐIỀN VÀO`: liệt kê connector nào bị cấm ở workspace bạn, và đường thay thế là gì.
+Connector nào bị cấm ở repo này, và đường thay thế là gì, nằm ở `CLAUDE.md` của repo.
+Không ghi gì thì giữ rule mặc định ở trên.
 Adapter Codex có cờ `--workspace-cli on` để mint credential **ngoài** sandbox rồi bơm
 qua env — dùng nó nếu workspace bạn đi theo hướng đó.
 
@@ -211,7 +207,7 @@ Ghi ở đây để lần sau không ai "phát hiện" lại rồi bật lên.
 
 Hai adapter băm `credentials.enc` và `client_secret.json` trong `~/.config/gws` **trước khi
 spawn** và so lại trên mọi đường thoát. Lệch là ghi `credentialTamper` vào job, và
-`crew-collect` tính nó vào `violation` → **exit 2**.
+`crew collect` tính nó vào `violation` → **exit 2**.
 
 | Điểm thiết kế | Vì sao |
 | --- | --- |

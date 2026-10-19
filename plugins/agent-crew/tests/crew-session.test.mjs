@@ -2,7 +2,7 @@
 /**
  * crew-session (run-for, latest) và guard "conversation đang bận" ở claimRunSlot.
  *
- * Run: node mwg-agent-crew/tests/crew-session.test.mjs
+ * Run: node plugins/agent-crew/tests/crew-session.test.mjs
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";

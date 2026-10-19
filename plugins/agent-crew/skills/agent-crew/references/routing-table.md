@@ -24,8 +24,8 @@ Chia theo **rule đã thành văn hay chưa**, không theo dễ/khó:
 | **Codex** | Code và pipeline: viết/refactor tool, workflow, dedup/clustering, transform dữ liệu phức tạp, chạy theo lô |
 | **Antigravity** | Việc đã có rule viết sẵn trong một skill: lọc theo tiêu chí, readback/export, chuẩn hoá bảng, điền metadata theo mẫu, audit nhiều URL, việc cần browser tools |
 
-`ĐIỀN VÀO`: thêm tên skill cụ thể của workspace bạn vào từng hàng. Bảng trống vẫn route
-được theo loại việc, nhưng có tên skill thì Claude khỏi phải đoán.
+Tên skill cụ thể của từng repo nằm ở `CLAUDE.md` của repo đó, không ở đây. Repo có bảng
+skill → worker thì bảng đó thắng; không có thì route theo loại việc ở trên.
 
 Bảng này chỉ trả lời **ai làm**. Nó không có cột transport: transport không phải thuộc
 tính của loại việc. Cùng một việc có thể là owner hay assist tuỳ ai chịu trách nhiệm về
@@ -34,7 +34,7 @@ tính của loại việc. Cùng một việc có thể là owner hay assist tu�
 ## Transport
 
 **`headless` là mặc định cho cả `owner` và `assist`.** Chọn `app` là ghi đè, và ghi đè
-phải kèm `note` nói vì sao — không note thì `addJob` từ chối.
+phải kèm `--note` nói vì sao — không note thì `crew add-job` từ chối.
 
 | Vai trò | Nghĩa là | Transport mặc định |
 | --- | --- | --- |
@@ -67,7 +67,7 @@ có lý do, không phải mặc định.
    headless gặp prompt là silent-fail. Đây là ca app mạnh nhất còn lại.
 2. **Việc mở/khám phá, chưa viết nổi acceptance trước.** Không có tiêu chí chấm thì mất
    evidence-first cũng không mất gì; đổi lại owner nhìn được quá trình.
-3. **Cần thread resume làm tiếp buổi sau.** `codex resume <id>` cho Codex, `anti-run.mjs
+3. **Cần thread resume làm tiếp buổi sau.** `codex resume <id>` cho Codex, `crew run anti
    --resume <conversationId>`. Từ 23/09 **cả 4 bề mặt đều resume được**, chung một
    cờ `--resume <id>`.
 
@@ -89,8 +89,7 @@ Ngoài 3 ca này, chọn `app` là đang trả giá quan sát để lấy một 
 
 ### Luật transport chi tiết nằm ở đâu
 
-Bảng này chỉ đủ để chọn đường. Luật chi tiết nằm ở `references/` của skill điều phối
-(trong module: `skill/agent-crew/references/`):
+Bảng này chỉ đủ để chọn đường. Luật chi tiết nằm ở các file cùng thư mục:
 
 | Cần biết | File |
 | --- | --- |
@@ -100,22 +99,22 @@ Bảng này chỉ đủ để chọn đường. Luật chi tiết nằm ở `ref
 | Owner gõ `@anti`/`@codex`, resume theo manifest, phiên chat với worker, review 2 vòng | `phoi-hop-owner.md` |
 
 Nhật ký đo (vì sao các luật đó ra đời, số đo từng ngày) ở
-`docs/transport-measurements.md`. Không cần đọc để vận hành.
+`docs/transport-measurements.md` của plugin. Không cần đọc để vận hành.
 
 ## Bảo vệ theo thư mục, không theo tên file
 
-`CLAUDE.md` bảo vệ tám **thư mục** skill (`.claude/skills/`, `.codex/skills/`,
-`.agents/skills/`, `.gemini/skills/`, cùng bốn bản trong `mwg-workflow-n8n/`). Đến
-25/08 code kiểm bằng `PROTECTED_PATHS.includes(path)` — **khớp tuyệt đối** — nên mọi
-thứ *bên trong* các thư mục đó không được bảo vệ: worker sửa
-`.claude/skills/seo-crew/SKILL.md` không khớp entry nào, rồi khớp prefix cho phép của
-task, và rơi vào `inScope`.
+Cổng phạm vi có hai danh sách: file bảo vệ (MCP config, credential, thư mục skill của
+các runtime) và control plane (settings, hook, `.git/`, `crew.config.json`, file chỉ
+dẫn agent ở mọi cấp). Phần chung nằm trong code; repo thêm phần riêng bằng
+`protectedPaths` / `controlPlanePaths` trong `crew.config.json`. Đường kết thúc bằng `/`
+là thư mục, khớp theo prefix.
 
-Giờ có `PROTECTED_DIRS` khớp theo prefix. Hai hệ quả cần biết:
+Khớp theo prefix có lý do: đến 25/08 code kiểm bằng khớp tuyệt đối, nên mọi thứ *bên
+trong* thư mục skill không được bảo vệ — worker sửa `.claude/skills/x/SKILL.md` không
+khớp entry nào, rồi khớp prefix cho phép của task, và rơi vào `inScope`. Hai hệ quả:
 
-- **Khai `filesMayModify` không mua được quyền ghi vào thư mục được bảo vệ.** Trước
-  đây khai `[".claude/skills/"]` là đủ; giờ vẫn bị tính là protected hit.
-- **Protected hit vẫn bác được bằng `--not-ours`.** Có chủ ý: repo này thường có vài
+- **Khai `--allow` không mua được quyền ghi vào thư mục được bảo vệ** hay control plane.
+- **Protected hit vẫn bác được bằng `--not-ours`.** Có chủ ý: một repo thường có vài
   session chạy cùng lúc, nên session khác sửa file skill là chuyện thật và hay xảy ra.
   Cấm bác hoàn toàn thì không run nào đi qua được khi có người bên cạnh chạy sync — mà
   một cổng không thể thoả mãn một cách trung thực là cổng người ta học cách bỏ qua.
@@ -153,9 +152,10 @@ Ràng buộc từng runtime:
 
 **Không truyền `--model` thì không dispatch.** Trước phase 03, mọi job trong mọi
 manifest đều `"model": null` — knob có mà chưa ai bật, nên không có cách nào đo model
-nào hay fail ngoài đoán. `addJob` ghi `model` (và `effort` cho Codex) để lần sau đo được.
+nào hay fail ngoài đoán. `crew add-job` ghi `model` (và `effort` cho Codex) để lần sau đo
+được, và `crew run` lấy lại đúng giá trị đó từ sổ.
 
-Dispatch Codex đi qua `codex-run.mjs`, **không** qua subagent `codex:codex-rescue`.
+Dispatch Codex đi qua `crew run codex`, **không** qua subagent `codex:codex-rescue`.
 Lý do không phải transport của subagent tệ — nó lái app-server thật và mở thread thật
 trong app. Lý do là **subagent bị cấm quan sát**: `agents/codex-rescue.md` cấm nó
 poll, monitor, fetch result, cancel. Runtime `codex-companion.mjs` bên dưới có đủ

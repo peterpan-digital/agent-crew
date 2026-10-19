@@ -114,7 +114,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (!hit) { console.log("chưa có conversation"); process.exit(1); }
       console.log(JSON.stringify(hit));
     } else {
-      throw new Error("usage: crew-session.mjs run-for [--task <task|dir>] [--workspace <dir>] [--date YYMMDD] | latest [--task <task|dir>] [--workspace <dir>] --worker anti|codex");
+      throw new Error("usage: crew session run-for [--task <task|dir>] [--workspace <dir>] [--date YYMMDD] | latest [--task <task|dir>] [--workspace <dir>] --worker anti|codex");
     }
   } catch (err) {
     console.error(`crew-session: ${err.message}`);

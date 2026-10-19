@@ -17,7 +17,7 @@
  * is the part worth testing, and a test that needed a live runtime could not
  * cover the case where the runtime has forgotten the job.
  *
- * Run: node mwg-agent-crew/tests/runtime-probe.test.mjs
+ * Run: node plugins/agent-crew/tests/runtime-probe.test.mjs
  */
 import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";

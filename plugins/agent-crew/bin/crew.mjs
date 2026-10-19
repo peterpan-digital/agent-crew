@@ -39,6 +39,7 @@ const ADAPTERS = { anti: "anti-run.mjs", antigravity: "anti-run.mjs", codex: "co
 const CLI_COMMANDS = {
   "new-run": { load: () => import("../scripts/cli/run-commands.mjs"), fn: "newRun", help: "tạo run: [--task <task>] [--label <chữ>] → in đường manifest" },
   "add-job": { load: () => import("../scripts/cli/run-commands.mjs"), fn: "addJobCli", help: "ghi job vào sổ trước khi bắn: <manifest> --worker --role --title ... → in seq" },
+  amend: { load: () => import("../scripts/cli/run-commands.mjs"), fn: "amend", help: "sửa job đã ghi: <manifest> --job N [--allow <prefix>]... --note \"...\"" },
   paths: { load: () => import("../scripts/cli/run-commands.mjs"), fn: "paths", help: "đường của một job: <manifest> --job N → evidence, brief, logs, anti-watch" },
   digest: { load: () => import("../scripts/cli/run-commands.mjs"), fn: "digest", help: "bảng crew còn dở của workspace này" },
   doctor: { load: () => import("../scripts/cli/setup.mjs"), fn: "doctor", help: "máy này chạy được gì: node, git, config, agy, codex, model còn sống" },
@@ -49,7 +50,7 @@ const CLI_COMMANDS = {
 
 function usage() {
   const rows = [
-    ["run anti|codex ...", "bắn một job; có --manifest --job thì --evidence/--workspace/--mode lấy từ sổ"],
+    ["run anti|codex ...", "bắn một job; có --manifest --job thì evidence/workspace/mode/model lấy từ sổ"],
     ...Object.entries(CLI_COMMANDS).map(([k, v]) => [k, v.help]),
     ...Object.entries(SCRIPT_COMMANDS).map(([k, v]) => [k, v.help]),
   ];

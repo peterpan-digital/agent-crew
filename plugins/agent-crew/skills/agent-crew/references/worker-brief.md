@@ -3,13 +3,13 @@
 Một profile cho cả 3 worker. Brief nói **WHAT + NEED**, không nói HOW.
 
 Phép thử: chỉ viết thứ worker **không tự suy ra được** từ file + `SKILL.md`. Trần 2 KB.
-Lưu bản đã gửi tại `{reports_path}/brief-{runtime}-{seq}.md`.
+Lưu bản đã gửi đúng đường `brief` mà `crew paths <manifest> --job N` in ra.
 
 ## Lệnh chạm guard thì cấp nguyên văn
 
-`MWG_CREW_ROLE=worker` chặn `createRun`, nên **worker không chạy được test của
-`mwg-agent-crew/`**. Đo 25/08: cả hai worker Codex đều vướng; một con tự lách bằng
-`env -u MWG_CREW_ROLE` rồi khai ra trong evidence.
+`CREW_ROLE=worker` chặn `createRun`, nên **worker không chạy được test của chính
+crew**. Đo 25/08: cả hai worker Codex đều vướng; một con tự lách bằng `env -u` biến vai
+trò rồi khai ra trong evidence.
 
 Job nào cần chạy test thì brief **cấp sẵn nguyên văn** lệnh đó ở mục `## Lệnh được
 cấp sẵn`. Để worker tự đoán rằng nó được phép lách guard là dạy nó sai thứ: lần sau
@@ -41,7 +41,7 @@ cho một lệnh test **không** nới `depth`.
 
 ## Được ghi
 - {evidence_path}
-- {data job tự sinh, trong tasks/{task}/}
+- {file nháp job tự sinh, trong thư mục của run}
 
 KHÔNG ghi file nào ngoài danh sách trên.
 
@@ -49,20 +49,20 @@ KHÔNG ghi file nào ngoài danh sách trên.
 - [ ] {kiểm được bằng mắt hoặc bằng lệnh}
 
 ## Ranh giới
-- Không đọc `.env`/secret/token. Không sửa Protected Files của `CLAUDE.md`.
+- Không đọc `.env`/secret/token. Không sửa file bảo vệ hay control plane (danh sách
+  trong `CLAUDE.md` và `crew.config.json` của repo).
 - **Không ghi, không xoá, không đổi tên bất cứ thứ gì trong `~/.config/gws/`** — kho
-  credential Google Workspace. Adapter băm thư mục đó trước và sau job; lệch là
+  credential Google Workspace CLI. Adapter băm thư mục đó trước và sau job; lệch là
   cổng nghiệm thu đỏ và cả run bị chặn.
-- Sheet read-only trừ khi brief ghi rõ. Không dispatch worker khác (`MWG_CREW_ROLE=worker`).
+- Sheet read-only trừ khi brief ghi rõ. Không dispatch worker khác (`CREW_ROLE=worker`).
 - **Trình duyệt dùng được, nếu job được cấp `--sandbox-mode danger-full-access`.**
-  Không phải đi qua skill trình duyệt của Claude — rào đó là của Claude, vì tài
-  khoản Claude dùng chung nhiều người nên có thể mở tab nhầm máy. Worker chạy cục
-  bộ, không dính.
+  Rào trình duyệt riêng của Claude (nếu `CLAUDE.md` có) là của Claude, không áp cho
+  worker chạy cục bộ.
 - **Job chạy ngoài sandbox thì tự giữ ranh giới.** Dòng này **adapter tự chèn**,
   không cần gõ tay: `appendWorkerContract` thêm nó khi job được cấp
   `--sandbox-mode danger-full-access` (Codex) và luôn thêm cho Antigravity, vốn
-  chạy `--dangerously-skip-permissions`. Nội dung: chỉ đụng workspace + task
-  folder; không `~/.config/gws/`, `.env`, secret, token, config ngoài repo.
+  chạy `--dangerously-skip-permissions`. Nội dung: chỉ đụng workspace này; không
+  `~/.config/gws/`, `.env`, secret, token, config ngoài repo.
   Lý do nó nằm ở brief chứ không ở code: owner chốt 22/09 **không cấm** gộp
   `--workspace-cli on` với mức nới, nên khi lớp sandbox không còn thì chỗ ràng
   duy nhất còn lại là thứ worker thật sự đọc. Rào hash quanh kho credential vẫn
@@ -70,7 +70,8 @@ KHÔNG ghi file nào ngoài danh sách trên.
 - **Không tự nới quyền.** Bậc sandbox do người giao việc cấp lúc dispatch. Worker
   gọi lại adapter với mức nới sẽ bị từ chối; thiếu quyền thì trả `BLOCKED` nêu rõ
   cần gì, đừng đi đường vòng.
-- Cost gate {cost_gate}: gặp thì DỪNG, trả BLOCKED / COST_GATE.
+- Cost gate: adapter tự chèn danh sách API từ `costGate` của `crew.config.json`. Gặp
+  thì DỪNG trước khi gọi, trả BLOCKED / COST_GATE.
 - **Không tự đặt biến môi trường cho Workspace CLI**, đặc biệt là
   `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND`. Đặt `=file` làm CLI mất khoá Keychain,
   kết luận kho credential hỏng, rồi **ra lệnh xoá nó**. Ngày 09/09 sandbox chặn
@@ -87,8 +88,8 @@ KHÔNG ghi file nào ngoài danh sách trên.
   worker được tự vá.
 
 ## Lệnh được cấp sẵn
-- {lệnh cần env đặc biệt, cấp nguyên văn — vd chạy test module:
-  `env -u MWG_CREW_ROLE node mwg-agent-crew/tests/<file>.test.mjs`}
+- {lệnh cần env đặc biệt, cấp nguyên văn — vd chạy test của crew:
+  `env -u CREW_ROLE -u MWG_CREW_ROLE node <plugin>/tests/<file>.test.mjs`}
 
 ## Kết thúc
 
@@ -101,7 +102,7 @@ làm đúng. Đừng kết bằng mục khác.
 ```
 
 Không viết vào brief, adapter tự nối (`appendWorkerContract`): dòng phạm vi, dòng chỗ để nháp
-(`{RUN_DIR}/data/`, không để ở root repo), dòng cấm dispatch, dòng `Status`,
+(`{thư mục run}/data/`, không để ở root repo), dòng cấm dispatch, dòng `Status`,
 dòng "báo Claude = ghi evidence", và 2 mục evidence khi có:
 `## Thay đổi từ owner` (owner đổi mục tiêu/phạm vi trong conversation) và `## Ghi ngoài brief`
 (mọi thứ đã ghi mà brief gốc không giao, kể cả Sheet/CMS kèm URL/ID); mục trống ghi đúng "Không có". Job `--chat on` thay
@@ -111,5 +112,4 @@ dòng `Status` và dòng "báo Claude" bằng biến thể chat: chỉ ghi evide
 Brief cho `@anti`/`@codex`: dòng 1 `Owner giao trực tiếp — {task}`, sau đó nguyên văn tin owner
 (cả brief quá 2 KB thì trỏ tới `owner-msg-{seq}.md`).
 
-Cách viết từng mục, và ví dụ outcome vs kê bước:
-`.claude/skills/seo-crew/references/dispatch-playbook.md`.
+Cách viết từng mục, và ví dụ outcome vs kê bước: `dispatch-playbook.md`.

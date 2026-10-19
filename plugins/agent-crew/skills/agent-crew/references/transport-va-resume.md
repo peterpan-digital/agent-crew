@@ -2,7 +2,7 @@
 
 Đọc khi: job `app` (Anti hay Codex), job `--resume`, cần lệnh Monitor cho job dài, hoặc
 job app vừa báo fail ngay sau dispatch. Lõi `SKILL.md` Bước 3 và Bước 6 có bản tóm tắt;
-file này là luật đầy đủ. Nhật ký đo nằm ở `mwg-agent-crew/docs/transport-measurements.md`.
+file này là luật đầy đủ. Nhật ký đo nằm ở `docs/transport-measurements.md` của plugin.
 
 ## Vì sao `app` là ngoại lệ
 
@@ -22,7 +22,7 @@ không chết oan nữa, và số lần hỏi lại ghi vào manifest ở `settl
 khoan nhượng không miễn phí, mỗi lần hỏi lại là một vòng gọi process.
 
 Điều đáng nhớ hơn: **worker vẫn làm xong việc** trong cả hai job "chết" đó — evidence đầy
-đủ, `Status: DONE`. `crew-reconcile.mjs` sửa cả hai về `done`. Nên job app báo fail ngay
+đủ, `Status: DONE`. `crew reconcile` sửa cả hai về `done`. Nên job app báo fail ngay
 sau khi dispatch thì **đọc đĩa trước, đừng retry ngay**: retry sẽ chạy lại việc đã xong.
 
 ## Codex: adapter, không subagent
@@ -46,12 +46,8 @@ dữ liệu, đã chọn hướng, đã tra tham số. Mở conversation mới b
 conversation đang có. `anti-run.mjs` giờ dùng nó khi được truyền `--resume`:
 
 ```bash
-MWG_CREW_ROLE=worker node mwg-agent-crew/scripts/anti-run.mjs \
-  --mode app --resume <conversationId> --title "Generate ảnh - {bài}" \
-  --prompt-file "$RUN_DIR/brief-anti-4.md" \
-  --evidence "$RUN_DIR/worker-anti-4.md" \
-  --timeout 30m --workspace "$PWD" \
-  --manifest "$PWD/$RUN_DIR/manifest.json" --job 4
+crew run anti --manifest "$MP" --job 4 --resume <conversationId> --title "Generate ảnh - {bài}" \
+  --prompt-file {brief job 4} --timeout 30m
 ```
 
 Bốn điều cần biết trước khi dùng:
@@ -72,7 +68,7 @@ Bốn điều cần biết trước khi dùng:
   dễ nhớ hơn bốn, và đổi bậc model giữa chừng là lý do để mở phiên mới chứ không phải dùng lại
   phiên cũ. Lưu ý rule "`--model` (anti) là bắt buộc": nó **không** áp cho job resume.
 - **Evidence path vẫn phải mới**, đúng rule "hai job không bao giờ nhận cùng evidence path" —
-  resume là một **job mới** (seq mới, `addJob` mới) tiếp tục một **conversation cũ**, không phải
+  resume là một **job mới** (seq mới, `crew add-job` mới) tiếp tục một **conversation cũ**, không phải
   sửa lại job cũ. Job cũ giữ nguyên verdict (`blocked` ở ca COST_GATE) làm bằng chứng cho quyết
   định dừng đúng lúc; job resume ghi bằng chứng cho phần làm tiếp.
 
@@ -89,7 +85,7 @@ headless dùng `agy --conversation <id>`. Lệnh giống job Anti headless thư�
 Adapter **tự kiểm phiên có được nạp thật không**, vì `agy --conversation <id-sai>` chỉ
 warning ở stderr rồi **exit 0 và mở conversation mới** — đo 22/09. Nó so id agy trả về
 với id đã xin: lệch, hoặc agy không trả id nào, thì job bị `runtimeVerdict` và cổng
-`crew-collect` bắt phải `--ack-runtime`. Manifest ghi `resumedFrom` + `resumeMismatch`.
+`crew collect` bắt phải `--ack-runtime`. Manifest ghi `resumedFrom` + `resumeMismatch`.
 
 ## Resume cho Codex (headless và app)
 
@@ -114,7 +110,7 @@ nhắc đúng chuỗi job 1 vừa ghi.
   hoặc resume bằng headless.
 
 Cả 4 bề mặt đều ghi `resumedFrom` vào manifest, và đều so lại id sau khi chạy —
-lệch thì `resumeMismatch` + cổng `crew-collect` bắt `--ack-runtime`.
+lệch thì `resumeMismatch` + cổng `crew collect` bắt `--ack-runtime`.
 
 ## Resume cho Codex app — guard tiền-kiểm (thêm 2026-09-23)
 
@@ -174,7 +170,7 @@ thiếu, vì nó được tin.**
 
 Tiêu chí cũ hơn nữa dựa vào việc user có thích theo dõi trong app hay không — đó không
 phải rule, vì không có cách nào kiểm. Kết quả: 34 job lịch sử chia 10 app / 24 headless
-mà không truy được vì sao job nào đi đường nào. `addJob` giờ đòi `role` và ghi cả `role`
+mà không truy được vì sao job nào đi đường nào. `crew add-job` giờ đòi `role` và ghi cả `role`
 lẫn `transport` vào manifest: `role` là **lý do**, `transport` là **hệ quả**. Chính vì
 tách ra mà lần đổi mặc định này không làm run cũ thành vô nghĩa — run cũ vẫn đọc được
 quyết định của nó dựa trên gì.
@@ -199,7 +195,7 @@ hiệu hoàn thành, step chỉ là dự phòng. Sau khi sửa, cùng job đó c
 
 Hệ quả khi dùng app mode:
 
-- Luôn chạy `crew-reconcile.mjs` sau một run có job app. Job app có thể hoàn thành sau
+- Luôn chạy `crew reconcile` sau một run có job app. Job app có thể hoàn thành sau
   khi adapter đã bỏ cuộc; evidence trên đĩa mới là sự thật.
 - Job app từng dừng hẳn sau 1 tool call mà không ghi gì (conversation 6 step, không có
   error, không có permission blob). Evidence gate bắt được. Đừng giao việc bắt buộc phải
@@ -218,7 +214,7 @@ phải cái app hiển thị**. Vẫn nên để **dòng đầu mỗi brief là 
 thread song song trông y như nhau.
 
 Companion nằm ngoài repo. Máy nào không có bản marketplace thì đặt
-`MWG_CODEX_COMPANION` trỏ tới đường tuyệt đối. Không tìm thấy thì adapter **báo lỗi**,
+`CREW_CODEX_COMPANION` (tên cũ `MWG_CODEX_COMPANION` vẫn nhận) trỏ tới đường tuyệt đối. Không tìm thấy thì adapter **báo lỗi**,
 không âm thầm rơi về headless.
 
 Hệ quả vận hành, khác nhau rõ giữa hai runtime:
@@ -238,7 +234,7 @@ ngồi xem được.
 Job dự kiến trên 5 phút: arm thêm một `Monitor` đọc stream của job.
 
 ```bash
-tail -f tasks/{task}/data/crew-logs/crew-{run_id}/worker-codex-2.codex-stream.jsonl \
+tail -f "$(crew paths "$MP" --job 2 | awk -F'\t' '$1=="logs"{print $2}')/worker-codex-2.codex-stream.jsonl" \
   | grep -E --line-buffered '"type":"(turn\.completed|turn\.failed|crew\.note)"'
 ```
 

@@ -732,8 +732,8 @@ function report(r) {
     }
     if (asking.some((g) => g.hold)) {
       console.log("  Ghi đúng câu user gõ, không diễn đạt lại:");
-      console.log('    crew-hold.mjs <manifest> answer <id> --words "<câu user gõ>" --outcome drop|resume');
-      console.log("  resume xong thì nối job làm tiếp: crew-hold.mjs <manifest> cover <id> --by <seq>");
+      console.log('    crew hold <manifest> answer <id> --words "<câu user gõ>" --outcome drop|resume');
+      console.log("  resume xong thì nối job làm tiếp: crew hold <manifest> cover <id> --by <seq>");
     }
     if (r.holdsDeferred) console.log("  Hold chưa được tạo cho job nào chưa có: run còn job đang chạy — sẽ tạo khi run hết job chạy.");
   }
@@ -992,7 +992,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const manifestPath = opts.positional[0];
     if (!manifestPath || opts.positional.length > 1) {
       console.error(
-        "usage: crew-collect.mjs <manifest.json> [--abandon <seq>] [--grace <ms>] [--dry-run]\n" +
+        "usage: crew collect <manifest.json> [--abandon <seq>] [--grace <ms>] [--dry-run]\n" +
         "                            [--not-ours <path>]... [--ack-runtime <seq>[@sha]]...\n" +
         "                            [--replaced <seq hỏng>=<seq làm thay>]... --reason \"<vì sao>\"\n" +
         "                            [--report <reportDir của layout>/{yymmdd-hhmm}-{type}-{slug}.md]\n" +

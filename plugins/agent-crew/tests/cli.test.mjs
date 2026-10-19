@@ -77,10 +77,25 @@ const gitRepo = (prefix) => {
   t.check("run: thiếu --evidence → lấy từ sổ", ex[ex.indexOf("--evidence") + 1], join(ws, ".crew", "runs", "261019-1200", "worker-anti-1.md"));
   t.check("run: thiếu --workspace → lấy từ sổ", ex[ex.indexOf("--workspace") + 1], ws);
   t.check("run: thiếu --mode → lấy transport trong sổ", ex[ex.indexOf("--mode") + 1], "headless");
+  t.check("run: --model truyền tay không bị nhân đôi", ex.filter((a) => a === "--model").length, 1);
+  const auto = expandRunArgs(["--manifest", mp, "--job", "1"], { cwd: ws });
+  t.check("run: thiếu --model → lấy model trong sổ", auto[auto.indexOf("--model") + 1], "gemini-3.8-flash-medium");
+  const cx = expandRunArgs(["--manifest", mp, "--job", "2"], { cwd: ws });
+  t.check("run codex: thiếu --effort → lấy effort trong sổ", cx[cx.indexOf("--effort") + 1], "medium");
+  t.check("run: có --resume → không thêm --model (guard chặn cặp đó)", expandRunArgs(["--manifest", mp, "--job", "1", "--resume", "abc"], { cwd: ws }).includes("--model"), false);
   const kept = expandRunArgs(["--manifest", mp, "--job", "1", "--evidence", "x.md", "--mode", "app"], { cwd: ws });
   t.check("run: cờ truyền tay không bị đè", [kept[kept.indexOf("--evidence") + 1], kept[kept.indexOf("--mode") + 1], kept.filter((a) => a === "--evidence").length].join("|"), "x.md|app|1");
   t.check("run: không --manifest/--job → không đụng", JSON.stringify(expandRunArgs(["--model", "m"], { cwd: ws })), '["--model","m"]');
   t.check("run: job không có trong sổ → không đụng", expandRunArgs(["--manifest", mp, "--job", "9"], { cwd: ws }).length, 4);
+
+  // amend: nới phạm vi giữa chừng phải kèm lời owner; control plane vẫn bị chặn.
+  t.check("amend --allow thiếu --note → exit 2", crew(["amend", mp, "--job", "2", "--allow", "lib/"], { cwd: ws }).code, 2);
+  const am = crew(["amend", mp, "--job", "2", "--allow", "lib/", "--note", "owner ok trong chat"], { cwd: ws });
+  t.check("amend: gộp prefix mới vào cái đã khai", am.out, "2\tsrc/,docs/,lib/");
+  t.check("amend: ghi lời owner vào note của job", (readManifest(mp).jobs[1].notes ?? []).some((n) => n.includes("owner ok trong chat") && n.includes("lib/")), true);
+  t.check("amend vào control plane → exit 1", crew(["amend", mp, "--job", "2", "--allow", ".claude/", "--note", "x"], { cwd: ws }).code, 1);
+  t.check("amend dưới vai worker → exit 1", crew(["amend", mp, "--job", "2", "--note", "x"], { cwd: ws, env: { ...process.env, CREW_ROLE: "worker" } }).code, 1);
+  t.check("amend chỉ --note: không đổi phạm vi", crew(["amend", mp, "--job", "2", "--note", "review vòng 1 chưa đạt"], { cwd: ws }).out, "2\tsrc/,docs/,lib/");
 
   const p1 = crew(["paths", mp, "--job", "1"], { cwd: ws });
   const rows = Object.fromEntries(p1.out.split("\n").map((l) => l.split("\t")));

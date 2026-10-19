@@ -15,7 +15,7 @@ import { loadCrewConfig } from "./lib/crew-config.mjs";
 import { layoutOf, loadLayout, logDirRel } from "./lib/crew-layout.mjs";
 import { WORKER_ROLE_ENV } from "./lib/crew-role.mjs";
 
-// Ceilings come from mwg-agent-crew/cost-gate.md; a runaway agent burns quota.
+// Ceilings come from skills/agent-crew/references/cost-gate.md; a runaway agent burns quota.
 export const DEFAULT_TIMEOUT = "15m";
 export const MAX_TIMEOUT_MS = 30 * 60_000;
 
@@ -448,7 +448,7 @@ export const CHAT_LINE = "Đây là phiên chat với owner. Trả lời owner b
 
 
 /**
- * The three lines `seo-crew` Bước 5 requires in every brief, appended by the
+ * The three lines `agent-crew` Bước 5 requires in every brief, appended by the
  * adapter instead of trusted to the person writing the brief.
  *
  * Why here rather than in the prose: run `crew-260909-1450` lost all three jobs,

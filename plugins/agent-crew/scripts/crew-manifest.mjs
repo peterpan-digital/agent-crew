@@ -129,7 +129,7 @@ export function readManifest(manifestPath) {
   if (!Number.isInteger(parsed.version) || parsed.version > MANIFEST_VERSION) {
     throw new ManifestError(
       `manifest version ${parsed.version} is newer than this script understands (max ${MANIFEST_VERSION})\n` +
-      `  → update mwg-agent-crew/scripts/ instead of editing the manifest`,
+      `  → update the crew plugin instead of editing the manifest`,
     );
   }
   // Below 1 is not "an older manifest", it is a malformed one. Version 0 used
@@ -201,7 +201,7 @@ export function updateManifest(manifestPath, mutate) {
 export const MAX_DEPTH = 1;
 
 /**
- * Run-shape ceilings from mwg-agent-crew/cost-gate.md. They were written in
+ * Run-shape ceilings from skills/agent-crew/references/cost-gate.md. They were written in
  * SKILL.md and nowhere else, so nothing stopped a dispatcher from adding a
  * seventh job or firing a fourth adapter -- and the dispatcher is the one
  * process no guard was watching.

@@ -14,7 +14,7 @@
  * Every credential below is fabricated to match a published key SHAPE. None is
  * real, and none came from this workspace.
  *
- * Run: node mwg-agent-crew/tests/session-export.test.mjs
+ * Run: node plugins/agent-crew/tests/session-export.test.mjs
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, statSync, renameSync, existsSync, chmodSync } from "node:fs";

@@ -13,7 +13,7 @@
  * process spawned nothing, and it left nothing behind. A refusal that prints a
  * complaint and then runs the job anyway is the bug, not the fix.
  *
- * Run: node mwg-agent-crew/tests/resume-gate.test.mjs
+ * Run: node plugins/agent-crew/tests/resume-gate.test.mjs
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";

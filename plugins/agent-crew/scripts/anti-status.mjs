@@ -106,7 +106,7 @@ export { AntiStatusError, TERMINAL_STEP_STATUS };
 if (import.meta.url === `file://${process.argv[1]}`) {
   const conversationId = process.argv[2];
   if (!conversationId) {
-    console.error("usage: anti-status.mjs <conversation-id> [workspace]");
+    console.error("usage: crew anti-status <conversation-id> [workspace]");
     process.exit(2);
   }
   try {

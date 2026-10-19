@@ -63,6 +63,7 @@ export async function doctor(argv, { cwd }) {
   const say = (label, text) => lines.push(`  ${label.padEnd(12)} ${text}`);
 
   const major = Number(process.versions.node.split(".")[0]);
+  say("plugin", PLUGIN_ROOT);
   say("node", `${process.versions.node} (${stableNode()})`);
   if (major < 20) problems.push(`Node ${process.versions.node} quá cũ — cần 20+`);
 

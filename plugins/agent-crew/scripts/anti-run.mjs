@@ -54,6 +54,7 @@ import {
   stripUnsafeEnv,
   validateEvidencePath,
 } from "./crew-guards.mjs";
+import { WORKER_ROLE_ENV } from "./lib/crew-role.mjs";
 
 const POLL_INTERVAL_MS = 5_000;
 const APP_MODELS = new Set(["flash_lite", "flash", "pro", "inherit"]);
@@ -95,7 +96,9 @@ function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMo
     timeout: parseDuration(timeout) + 30_000, // let agy hit its own timeout first
     // Was inheriting the parent env whole. Same strip as every other worker
     // path -- this one runs unsandboxed and with --dangerously-skip-permissions.
-    env: stripUnsafeEnv(process.env),
+    // The worker role is set here, not by a `CREW_ROLE=worker` prefix the
+    // dispatcher has to remember: a forgotten prefix let the worker dispatch.
+    env: stripUnsafeEnv({ ...process.env, ...WORKER_ROLE_ENV }),
     maxBuffer: 64 * 1024 * 1024,
   });
   const endedAt = new Date().toISOString();
@@ -225,7 +228,7 @@ const REAL_DEPS = {
     // Antigravity runs unsandboxed, so it is the path where a worker setting
     // KEYRING_BACKEND=file can actually destroy the credential store. See
     // STRIPPED_ENV.
-    env: stripUnsafeEnv({ ...process.env, ...env }),
+    env: stripUnsafeEnv({ ...process.env, ...WORKER_ROLE_ENV, ...env }),
     maxBuffer: 16 * 1024 * 1024,
   }),
   status: antiStatus,

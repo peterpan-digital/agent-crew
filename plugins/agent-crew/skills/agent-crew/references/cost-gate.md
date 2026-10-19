@@ -7,19 +7,26 @@ Hai loại chi phí, hai cơ chế khác nhau.
 Worker gặp một trong các đường dưới đây thì **dừng**, trả `Status: BLOCKED` với
 `Concerns/Blockers: COST_GATE — {tên API}`. Claude hỏi user, được đồng ý mới dispatch lại.
 
-`ĐIỀN VÀO` bảng này. Cột trái là API tính tiền theo lượt gọi; cột phải là skill hoặc
-workflow nào dẫn tới nó — worker cần biết **đường vào**, vì nó gặp cái tên skill trước
-khi gặp cái tên API.
+Danh sách khai ở `costGate` trong `crew.config.json` của repo, không ở đây:
 
-| API tốn tiền | Đường vào |
-| --- | --- |
-| *(ví dụ)* API dữ liệu trả phí | tên skill gọi nó |
-| *(ví dụ)* LLM chạy theo lô | tên skill gọi nó |
-| *(ví dụ)* API sinh ảnh / sinh text | tên skill gọi nó |
+```json
+{
+  "costGate": [
+    "API dữ liệu trả phí",
+    { "api": "LLM chạy theo lô", "via": "tên skill gọi nó" }
+  ]
+}
+```
 
-Miễn gate (free quota, cứ chạy): các nguồn đọc miễn phí của bạn và crawl web thường.
+`api` là tên worker phải ghi sau `COST_GATE — ` (collect đọc nó để tạo hold, nên không
+chứa `, ; . ( :`). `via` là skill hoặc workflow dẫn tới API — worker cần biết **đường
+vào**, vì nó gặp cái tên skill trước khi gặp cái tên API. Adapter chèn cả danh sách vào
+brief; routing gate im lặng với prompt nhắc tới bất kỳ tên nào trong đó, và từ chối
+config có trigger khớp tên đó.
 
-Bảng trống không có nghĩa là mở cổng. Không chắc một đường có tốn tiền hay không thì
+Miễn gate (free quota, cứ chạy): các nguồn đọc miễn phí và crawl web thường.
+
+Danh sách trống không có nghĩa là mở cổng. Không chắc một đường có tốn tiền hay không thì
 coi như **có** và hỏi — đoán sai theo hướng này chỉ mất một lượt hỏi, đoán sai theo
 hướng kia thì mất tiền.
 
