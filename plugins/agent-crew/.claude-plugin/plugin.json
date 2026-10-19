@@ -1,7 +1,7 @@
 {
   "name": "agent-crew",
   "description": "Giao việc song song cho Antigravity và Codex từ Claude Code ở mọi repo, rồi nghiệm thu bằng bằng chứng trên đĩa thay vì tin lời worker tự khai. Luật riêng của repo đọc từ CLAUDE.md và crew.config.json.",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "author": {
     "name": "peterpan-digital"
   },
