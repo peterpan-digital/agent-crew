@@ -1,0 +1,6 @@
+# a crew run created while working inside this repo
+.crew/
+crew.config.json
+
+node_modules/
+.DS_Store

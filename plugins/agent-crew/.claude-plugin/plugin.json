@@ -1,0 +1,11 @@
+{
+  "name": "agent-crew",
+  "description": "Giao việc song song cho Antigravity và Codex từ Claude Code qua hai transport (headless mặc định, app khi cần người nhìn), rồi nghiệm thu bằng bằng chứng trên đĩa thay vì tin lời worker tự khai.",
+  "version": "1.1.0",
+  "author": {
+    "name": "peterpan-digital"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/peterpan-digital/agent-crew",
+  "repository": "https://github.com/peterpan-digital/agent-crew"
+}

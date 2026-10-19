@@ -4,7 +4,7 @@
  * fails. Each test file is its own process, so a hang or a crash in one cannot
  * take the others' results with it.
  *
- * Run: node mwg-agent-crew/tests/run.mjs
+ * Run: node plugins/agent-crew/tests/run.mjs
  */
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";

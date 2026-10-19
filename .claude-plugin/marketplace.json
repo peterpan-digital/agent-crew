@@ -1,0 +1,13 @@
+{
+  "name": "agent-crew-marketplace",
+  "description": "Dispatch and verify parallel agent jobs from Claude Code.",
+  "owner": {
+    "name": "peterpan-digital"
+  },
+  "plugins": [
+    {
+      "name": "agent-crew",
+      "source": "./plugins/agent-crew"
+    }
+  ]
+}
