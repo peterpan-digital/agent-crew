@@ -48,6 +48,18 @@ const ctx = { evidenceAbs: EV, workspace: WS };
 }
 
 {
+  // Đo 20/10: job có --allow sum.mjs nhận dòng "chỉ ghi evidence" rồi từ chối tạo
+  // đúng file được giao. Đường được cấp phải nằm ngay trong dòng phạm vi ghi.
+  const out = appendWorkerContract("brief", { ...ctx, mayModify: ["sum.mjs", "src/parser/"] });
+  const line = out.split("\n").find((l) => l.startsWith("Chỉ được ghi đúng file:")) ?? "";
+  t.check("allowed paths ride on the write-scope line", line.includes("`sum.mjs`") && line.includes("`src/parser/`"), true);
+  t.check("...still naming the evidence", line.includes(REL), true);
+  t.check("...and only one write-scope line exists", out.split("Chỉ được ghi đúng file:").length - 1, 1);
+  t.check("no allowed paths keeps the plain line",
+    appendWorkerContract("brief", { ...ctx, mayModify: [] }), appendWorkerContract("brief", ctx));
+}
+
+{
   // Cosmetic only: an evidence path with no run dir must not throw.
   const flat = appendWorkerContract("brief", { evidenceAbs: join(WS, "w.md"), workspace: WS });
   t.check("a path with no run dir still gets the lines",

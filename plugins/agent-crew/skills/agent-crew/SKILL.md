@@ -364,7 +364,7 @@ crew collect "$MP" --ack-runtime 2 --reason "đọc evidence rồi, agy báo ERR
 | Exit | Nghĩa | Làm gì |
 | --- | --- | --- |
 | 0 | mọi job đạt, không vi phạm phạm vi | được viết report tổng |
-| 1 | còn job `FAIL` / `STALE` / `NO_STATUS` / `BLOCKED` / `NEEDS_HUMAN` / `DEFERRED` / `RUNNING`, **hoặc** có job runtime lệch evidence / evidence đổi sau khi xong chưa ai đọc | **chưa được report** — xử theo bảng verdict trước; ca runtime lệch hay evidence đổi xem `--ack-runtime` ở trên; ca `BLOCKED` vì `COST_GATE` xem mục `crew hold` bên dưới |
+| 1 | còn job `FAIL` / `STALE` / `NO_STATUS` / `BLOCKED` / `NEEDS_HUMAN` / `DEFERRED` / `RUNNING`, **hoặc** có job runtime lệch evidence / evidence đổi sau khi xong chưa ai đọc | **chưa được report** — xử theo bảng verdict trước; ca runtime lệch hay evidence đổi xem `--ack-runtime` ở trên; ca `BLOCKED` vì `COST_GATE` xem mục `crew hold` bên dưới; `BLOCKED` khác thì làm lại bằng job mới rồi `--replaced` như `FAIL` |
 | 2 | trùng evidence, ghi ngoài phạm vi, ghi vào file được bảo vệ, kho credential bị đổi, hoặc holds bị sửa trong lúc job chạy | **chưa được report** — đọc danh sách file, sửa nguyên nhân |
 | 3 | **cả 1 và 2** — không phải "nặng hơn 2" | **chưa được report** — xử cả hai; sửa một bên vẫn ra exit khác 0 |
 

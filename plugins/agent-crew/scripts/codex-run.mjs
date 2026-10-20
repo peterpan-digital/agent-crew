@@ -33,7 +33,7 @@ import { isWorkerRole } from "./lib/crew-role.mjs";
 // Static, unlike the `await import` calls further down: a signal handler runs
 // with no chance to await, so the one write it needs has to be resolved before
 // the signal ever arrives.
-import { updateJob as updateJobSync, holdsTamperPatch } from "./crew-manifest.mjs";
+import { readManifest, updateJob as updateJobSync, holdsTamperPatch } from "./crew-manifest.mjs";
 import {
   DEFAULT_TIMEOUT,
   GuardError,
@@ -481,9 +481,17 @@ function prepareRun(options) {
     evidenceAbs,
     workspace,
     unsandboxed: sandboxMode !== "workspace-write",
+    mayModify: jobFilesMayModify(options),
   });
 
   return { workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode, resumeId };
+}
+
+/** Đường `--allow` của job trong sổ; chạy không có sổ thì không có. */
+function jobFilesMayModify(options) {
+  if (!options.manifest || !options.job) return [];
+  const job = readManifest(options.manifest).jobs.find((j) => j.seq === Number(options.job));
+  return job?.filesMayModify ?? [];
 }
 
 /**

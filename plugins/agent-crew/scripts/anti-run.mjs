@@ -448,6 +448,7 @@ export async function antiRun(options, deps = {}) {
     workspace,
     unsandboxed: true,
     chat,
+    mayModify: options.filesMayModify ?? [],
   });
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
   parseDuration(timeout); // validate before spending anything

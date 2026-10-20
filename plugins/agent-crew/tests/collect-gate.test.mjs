@@ -109,6 +109,18 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   t.check("...and counted in scope", r.scope.inScope.some((x) => x.path.startsWith("shared-workspace/")), "true");
 }
 
+// --- a single file can be declared by name, not only a directory ---------
+{
+  const { ws, manifestPath } = newRun({
+    jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, filesMayModify: ["sum.mjs"] }],
+  });
+  writeFile(join(ws, "sum.mjs"), "console.log(1)\n");
+  writeFile(join(ws, "sum.mjs.bak"), "x\n");
+  const r = collectRun(manifestPath, { workspace: ws });
+  t.check("a file declared by name is in scope", r.scope.inScope.some((x) => x.path === "sum.mjs"), true);
+  t.check("...but a sibling sharing its prefix is not", r.scope.outOfScope.some((x) => x.path === "sum.mjs.bak"), true);
+}
+
 // --- a write before any job started belongs to whoever was there first ----
 {
   const { ws, manifestPath } = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE }] });
@@ -1493,6 +1505,22 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   });
   t.check("a STALE job is pointed at --abandon instead",
     refused(() => collectRun(stale.manifestPath, { workspace: stale.ws, replaced: ["1=2"], reason: "x" }))?.includes("--abandon"), true);
+
+  // Đo 20/10: job BLOCKED vì lỗi công cụ (không có dòng COST_GATE) không có câu owner
+  // nào để chờ — làm lại được như FAIL. BLOCKED vì COST_GATE vẫn chỉ đi qua hold.
+  const blockedRun = (body) => newRun({
+    jobs: [
+      { worker: "antigravity", evidence: join(RUN_REL, "w1.md"), body, status: "blocked" },
+      { worker: "antigravity", evidence: join(RUN_REL, "w2.md"), body: DONE, status: "done" },
+    ],
+  });
+  const plain = blockedRun("không tạo được file\n\nStatus: BLOCKED\nConcerns/Blockers: hợp đồng chỉ cho ghi evidence\n");
+  const plainDone = collectRun(plain.manifestPath, { workspace: plain.ws, replaced: ["1=2"], reason: "job 2 làm lại đủ" });
+  t.check("a BLOCKED job without COST_GATE can be replaced", plainDone.rows[0].verdict, "REPLACED");
+  t.check("...and the run closes", plainDone.exitCode, 0);
+  const gatedRun = blockedRun("dừng\n\nStatus: BLOCKED\nConcerns/Blockers: COST_GATE — Ahrefs\n");
+  t.check("a COST_GATE BLOCKED job still goes through the hold",
+    refused(() => collectRun(gatedRun.manifestPath, { workspace: gatedRun.ws, replaced: ["1=2"], reason: "x" }))?.includes("crew-hold"), true);
 
   const live = newRun({
     jobs: [

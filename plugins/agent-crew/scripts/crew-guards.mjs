@@ -489,7 +489,7 @@ export function costGateLine(workspace) {
   return `Cổng chi phí: KHÔNG tự gọi ${names}. Cần tới thì dừng trước khi gọi, ghi \`Concerns/Blockers: COST_GATE — {tên API}\` và \`Status: BLOCKED\`.`;
 }
 
-export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed = false, chat = false }) {
+export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed = false, chat = false, mayModify = [] }) {
   const evidenceRel = evidenceAbs.startsWith(workspace + sep)
     ? evidenceAbs.slice(workspace.length + 1)
     : evidenceAbs;
@@ -500,7 +500,12 @@ export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed
     runId
       ? `Bạn là worker trong crew run ${runId}. Không được dispatch worker khác.`
       : "Bạn là worker trong một crew run. Không được dispatch worker khác.",
-    `Chỉ được ghi đúng file: ${evidenceRel} (và file nháp bạn tự sinh trong thư mục của run).`,
+    // Đường `--allow` của job phải nằm trong cùng dòng: đo 20/10, một job Codex có
+    // `--allow sum.mjs` đọc dòng "chỉ ghi evidence" ở cuối prompt rồi từ chối tạo đúng
+    // file nó được giao, trả BLOCKED. Hai luật ghi lệch nhau thì worker chọn luật chặt.
+    mayModify.length
+      ? `Chỉ được ghi đúng file: ${evidenceRel}, cộng các đường được cấp cho job này: ${mayModify.map((p) => `\`${p}\``).join(", ")} (và file nháp bạn tự sinh trong thư mục của run).`
+      : `Chỉ được ghi đúng file: ${evidenceRel} (và file nháp bạn tự sinh trong thư mục của run).`,
     ...(evidenceRel.includes("/") ? [scratchLine(evidenceRel)] : []),
     ...(chat ? [CHAT_LINE] : [STATUS_LINE, REPORT_LINE]),
     OWNER_CHANGE_LINE,

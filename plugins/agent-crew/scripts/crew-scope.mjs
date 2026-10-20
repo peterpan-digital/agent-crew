@@ -223,6 +223,15 @@ function normalizePrefix(p) {
 }
 
 /**
+ * `path` nằm dưới một tiền tố đã chuẩn hoá, hoặc CHÍNH LÀ file đó. Đo 20/10: job khai
+ * `--allow sum.mjs` bị chấm SCOPE_VIOLATION vì `sum.mjs` thành `sum.mjs/` và không đường
+ * file nào bắt đầu bằng nó — khai đích danh một file là vô tác dụng.
+ */
+function underPrefix(path, prefix) {
+  return path.startsWith(prefix) || path === prefix.slice(0, -1);
+}
+
+/**
  * One interval per job. A job with no `startedAt` never ran, so nothing can be
  * charged to it; a cancelled job is the same case after the fact.
  */
@@ -336,6 +345,13 @@ function watchedPaths(workspace, manifest) {
   // they needed was the right classification, not discovery -- see
   // isProtectedPath. Walking them would add thousands of paths for nothing.
   for (const prefix of declaredPrefixes(manifest)) {
+    const asFile = prefix.slice(0, -1);
+    try {
+      if (statSync(join(workspace, asFile)).isFile()) {
+        add(asFile);
+        continue;
+      }
+    } catch { /* chưa có, hoặc là thư mục: đi tiếp */ }
     const root = join(workspace, prefix);
     let entries;
     try {
@@ -486,7 +502,7 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
     };
 
     const protectedHit = isProtectedPath(path, layout);
-    if (!protectedHit && allowedFor(manifest, seqs).some((p) => path.startsWith(p))) {
+    if (!protectedHit && allowedFor(manifest, seqs).some((p) => underPrefix(path, p))) {
       result.inScope.push(entry);
       continue;
     }

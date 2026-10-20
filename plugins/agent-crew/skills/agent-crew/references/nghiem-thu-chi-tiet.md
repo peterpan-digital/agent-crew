@@ -23,7 +23,7 @@ Verdict cần đọc kỹ:
 | `DEFERRED` | owner hoãn quyết định tới một ngày | **vẫn chặn**; tới ngày thì hỏi lại |
 | `REPLACED` | job `FAIL` có job sau cùng worker làm lại và `PASS`, người đọc đã ghi `--replaced {hỏng}={thay} --reason` | không chặn; report ghi câu lý do. Job thay hết `PASS` thì đỏ lại |
 | `FAIL` | adapter ghi `failed`, hoặc evidence rỗng/thiếu | đọc `failure`; permission thì sửa brief, lý do khác retry tối đa 1 lần. Retry `PASS` thì `--replaced` (dưới bảng) |
-| `BLOCKED` | evidence phán `BLOCKED` | có dòng `COST_GATE` thì xử bằng `crew hold`; không thì đọc evidence, xử nguyên nhân rồi chạy lại |
+| `BLOCKED` | evidence phán `BLOCKED` | có dòng `COST_GATE` thì xử bằng `crew hold`; không thì đọc evidence, xử nguyên nhân, chạy job mới làm lại rồi `--replaced` như job `FAIL` |
 | `NEEDS_HUMAN` | evidence phán `NEEDS_CONTEXT` | đọc evidence, bổ sung thứ worker thiếu vào brief rồi chạy lại |
 | `CANCELLED` | job đã bị bỏ (`--abandon`) | không chặn; report đếm riêng |
 
@@ -51,8 +51,9 @@ Bản ghi nằm ở `replacedJobs` trong manifest, ghim lần chạy của hai j
 thay lúc khai; tính lại mỗi lần collect. Job thay hết `PASS`, chạy lại, hoặc evidence bị ghi
 lại thì job hỏng đỏ lại — đọc bản mới rồi khai lại. Luật ghi chung với `--ack-runtime` và
 `--not-ours`, xem "Ba sổ của người đọc" bên dưới. `--abandon` và `--replaced` chạy hai lệnh
-riêng. Job `BLOCKED` không đi đường này (đi qua `crew hold`), job
-`STALE` cũng không (`--abandon`).
+riêng. Job `BLOCKED` **không** có dòng `COST_GATE` (chặn vì lỗi công cụ, thiếu file…)
+đi đường này như job `FAIL`; job `BLOCKED` vì `COST_GATE` thì không (đi qua `crew hold`, vì
+đó là câu của owner), job `STALE` cũng không (`--abandon`).
 
 **File của session khác lọt vào `SCOPE_VIOLATION` thì bác có dấu vết, đừng nới ngưỡng:**
 

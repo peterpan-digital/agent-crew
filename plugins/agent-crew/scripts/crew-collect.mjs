@@ -342,11 +342,22 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
     const path = job && resolveEvidence(job, w);
     return path ? evidenceDigest(path) : null;
   };
+  // Cho --replaced: BLOCKED có dòng COST_GATE giữ nguyên (đi qua hold), BLOCKED khác
+  // thành BLOCKED_NO_GATE — thay được như FAIL.
+  const forReplace = (m, w, verdictFn) => (seq) => {
+    const v = verdictFn(seq);
+    if (v !== "BLOCKED") return v;
+    const job = m.jobs.find((j) => j.seq === seq);
+    const path = job && resolveEvidence(job, w);
+    let text = "";
+    try { text = path ? readFileSync(path, "utf8") : ""; } catch { /* không đọc được: coi như có gate */ return v; }
+    return extractCostGateApi(text) ? v : "BLOCKED_NO_GATE";
+  };
   if (replaced.length) {
     const pre = readManifest(abs);
     const w = workspace ?? pre.workspace;
     const preJudged = new Map(pre.jobs.map((j) => [j.seq, judgeOne(j, w, now, pre.version).verdict]));
-    buildReplacements(pre, replaced, reason, (seq) => preJudged.get(seq), digestFor(pre, w), new Date(now));
+    buildReplacements(pre, replaced, reason, forReplace(pre, w, (seq) => preJudged.get(seq)), digestFor(pre, w), new Date(now));
   }
   // Cùng luật với --replaced: sổ của người đọc không ghi khi run còn job sống, vì worker
   // ghi được manifest và adapter chỉ bắt được dòng giả nếu giữa claim và thoát không có
@@ -407,11 +418,11 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   const verdictOf = (seq) => judged.get(seq);
   let replacements = manifest.replacedJobs ?? [];
   if (replaced.length) {
-    const fresh = buildReplacements(manifest, replaced, reason, verdictOf, digestFor(manifest, ws), new Date(now));
+    const fresh = buildReplacements(manifest, replaced, reason, forReplace(manifest, ws, verdictOf), digestFor(manifest, ws), new Date(now));
     if (!dryRun) {
       updateManifest(abs, (m) => {
         // Kiểm lại trong lock: giữa lần đọc và lần ghi có thể có job được claim.
-        buildReplacements(m, replaced, reason, verdictOf, digestFor(m, ws), new Date(now));
+        buildReplacements(m, replaced, reason, forReplace(m, ws, verdictOf), digestFor(m, ws), new Date(now));
         m.replacedJobs = mergeReplacements(m.replacedJobs, fresh);
         return m;
       });
@@ -425,7 +436,7 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   // và nó cũng là bản duy nhất report in ra.
   const lastBySeq = new Map(replacements.map((e) => [e.seq, e]));
   for (const entry of lastBySeq.values()) {
-    const v = replacedVerdict(manifest, entry, verdictOf, digestFor(manifest, ws));
+    const v = replacedVerdict(manifest, entry, forReplace(manifest, ws, verdictOf), digestFor(manifest, ws));
     if (!v) continue;
     const row = rows.find((r) => r.seq === entry.seq);
     if (!row) continue;
@@ -618,7 +629,7 @@ function why(entry) {
 }
 
 function report(r) {
-  console.log(`run ${r.runId} — task ${r.task}`);
+  console.log(`run ${r.runId}${r.task ? ` — task ${r.task}` : ""}`);
   for (const p of r.reconciled.patched) console.log(`  reconcile: job ${p.seq} ${p.from} → ${p.to} theo evidence`);
   if (r.dryRun) console.log("  (--dry-run: không ghi gì vào manifest)");
 
@@ -899,7 +910,7 @@ export function writeRunReport(r, manifest, { path, workspace, now = new Date() 
   const holdLines = renderHoldLines(manifest.holds);
   const replacedLines = r.rows.filter((x) => x.replacedBy)
     .map((x) => `- Job ${x.seq} hỏng, job ${x.replacedBy.by} làm thay: "${x.replacedBy.reason}"`);
-  const body = `# Nghiệm thu run ${r.runId} — task ${r.task}
+  const body = `# Nghiệm thu run ${r.runId}${r.task ? ` — task ${r.task}` : ""}
 
 Ngày ${now.toISOString().slice(0, 10)}. Cổng \`crew-collect\` trả exit 0.
 

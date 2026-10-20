@@ -30,6 +30,11 @@
  * job Y làm thay" mà không nhớ đã khai thì coi là sự cố.
  *   - Một job thay chỉ dùng được một lần, tính cả `coveredBy` của hold.
  *
+ * Job `BLOCKED` mà evidence KHÔNG có dòng `COST_GATE` cũng thay được (verdict truyền vào
+ * là `BLOCKED_NO_GATE`, do collect phân loại). Đo 20/10: job Codex chặn vì hợp đồng
+ * adapter mâu thuẫn với `--allow` — lỗi công cụ, không có câu owner nào để chờ, mà hold
+ * chỉ mở cho cost gate. Job `BLOCKED` có `COST_GATE` vẫn chỉ đi qua hold.
+ *
  * Job hỏng vẫn nằm trong sổ với verdict REPLACED (không biến mất như CANCELLED), và
  * mọi điều kiện được tính lại ở mỗi lần collect.
  *
@@ -87,6 +92,9 @@ export function replaceProblem(m, seq, by) {
  * Từ chối khi run còn job pending/running: job thay có thể đang bị chính worker
  * sửa evidence, và câu "đã đọc" phải nói về bản cuối.
  */
+/** Verdict gốc thay được: FAIL, hoặc BLOCKED không phải cost gate. */
+const REPLACEABLE = new Set(["FAIL", "BLOCKED_NO_GATE"]);
+
 export function buildReplacements(m, specs, reason, verdictOf, digestOf, now = new Date()) {
   if (typeof reason !== "string" || !reason.trim()) {
     throw new Error(
@@ -101,11 +109,11 @@ export function buildReplacements(m, specs, reason, verdictOf, digestOf, now = n
   for (const spec of specs) {
     const { seq, by } = parseReplaceSpec(spec);
     const v = verdictOf(seq);
-    if (v !== "FAIL") {
+    if (!REPLACEABLE.has(v)) {
       const hint = v === "STALE" ? " — job treo không evidence thì bỏ bằng --abandon"
-        : v === "BLOCKED" ? " — job BLOCKED đi qua hold (crew-hold answer/cover), vì đó là câu của owner"
+        : v === "BLOCKED" ? " — job BLOCKED vì COST_GATE đi qua hold (crew-hold answer/cover), vì đó là câu của owner"
         : "";
-      throw new Error(`--replaced ${seq}=${by}: job ${seq} đang là ${v ?? "không rõ"}, chỉ job FAIL mới thay được${hint}`);
+      throw new Error(`--replaced ${seq}=${by}: job ${seq} đang là ${v ?? "không rõ"}, chỉ job FAIL hoặc BLOCKED không do cost gate mới thay được${hint}`);
     }
     if (verdictOf(by) !== "PASS") throw new Error(`--replaced ${seq}=${by}: job ${by} đang là ${verdictOf(by) ?? "không rõ"}, job làm thay phải PASS`);
     const problem = replaceProblem(m, seq, by);
@@ -143,18 +151,20 @@ export function mergeReplacements(existing, fresh) {
  * (job gốc giờ không FAIL nữa, ví dụ evidence đã xuất hiện) để dòng giữ nguyên.
  */
 export function replacedVerdict(m, entry, verdictOf, digestOf) {
-  if (verdictOf(entry.seq) !== "FAIL") return null;
+  const orig = verdictOf(entry.seq);
+  if (!REPLACEABLE.has(orig)) return null;
+  const bad = orig === "FAIL" ? "FAIL" : "BLOCKED";
   const problem = replaceProblem(m, entry.seq, entry.by);
-  if (problem) return { verdict: "FAIL", detail: `job làm thay không còn hợp lệ: ${problem}` };
+  if (problem) return { verdict: bad, detail: `job làm thay không còn hợp lệ: ${problem}` };
   const failed = m.jobs.find((j) => j.seq === entry.seq);
   const sub = m.jobs.find((j) => j.seq === entry.by);
   if ((failed.startedAt ?? null) !== (entry.seqAttempt ?? null) || (sub.startedAt ?? null) !== (entry.byAttempt ?? null)) {
-    return { verdict: "FAIL", detail: `job ${entry.seq} hoặc ${entry.by} đã chạy lại sau lần khai --replaced, khai lại sau khi đọc` };
+    return { verdict: bad, detail: `job ${entry.seq} hoặc ${entry.by} đã chạy lại sau lần khai --replaced, khai lại sau khi đọc` };
   }
   if (!entry.bySha || digestOf(entry.by) !== entry.bySha) {
-    return { verdict: "FAIL", detail: `evidence job ${entry.by} khác bản đã đọc lúc khai --replaced, đọc lại rồi khai lại` };
+    return { verdict: bad, detail: `evidence job ${entry.by} khác bản đã đọc lúc khai --replaced, đọc lại rồi khai lại` };
   }
   const v = verdictOf(entry.by);
-  if (v !== "PASS") return { verdict: "FAIL", detail: `job làm thay ${entry.by} giờ là ${v ?? "không rõ"}, không còn PASS` };
+  if (v !== "PASS") return { verdict: bad, detail: `job làm thay ${entry.by} giờ là ${v ?? "không rõ"}, không còn PASS` };
   return { verdict: "REPLACED", detail: `job ${entry.by} làm thay — "${cleanReason(entry.reason)}"` };
 }
