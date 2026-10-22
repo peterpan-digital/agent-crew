@@ -1,13 +1,17 @@
 /**
  * Hàng chờ quyết định của một run: `holds[]` trong manifest.
  *
- * Một hold là một câu hỏi chờ owner. Hai loại:
+ * Một hold là một câu hỏi chờ owner. Ba loại:
  *
  *   cost_gate  collect tự tạo khi job BLOCKED vì COST_GATE. Là thứ duy nhất có
  *              thể đổi verdict, vì nó thay cho việc "nhớ hỏi user" bằng một dòng
  *              dữ liệu mà gate đọc được.
  *   decision   dispatcher tạo bằng CLI cho việc cần owner chốt mà không phải
  *              cổng chi phí. KHÔNG BAO GIỜ đổi verdict; chỉ hiện ra cho người đọc.
+ *   failed_job dispatcher tạo bằng CLI (`add --failed`) cho job FAIL mà việc đã
+ *              xong theo đường khác (worker khác, run khác, lần thử thứ ba...),
+ *              nơi `--replaced` không đi được. Chỉ nhận `drop`, và chỉ lời owner
+ *              ghi nguyên văn mới đổi FAIL thành WAIVED.
  *
  * Mọi thứ ở đây là hàm thuần trên object manifest (không đọc/ghi file, không lock),
  * để `crew-manifest` (lớp dưới cùng) import được mà không kéo cả gate theo.
@@ -224,12 +228,66 @@ function holdById(m, id) {
   return hold;
 }
 
+/**
+ * Hold `failed_job`: owner bỏ một job FAIL mà việc đã xong theo đường khác.
+ *
+ * Đo 22/10: 3 run kẹt đỏ mãi vì việc của job hỏng được làm ở chỗ `--replaced` không
+ * với tới — Claude làm thay job Codex, run khác làm thay, hai lần thử hỏng trước một
+ * lần PASS. `--abandon` cố ý không nhận job FAIL, và cái lý của nó vẫn đúng: một lỗi đã
+ * ghi không được xoá cho hết đỏ bằng một cờ. Đường này khác ở chỗ cần câu của owner,
+ * ghi nguyên văn, in vào report — giống `drop` của cost gate.
+ *
+ * Người gọi phải kiểm job đang FAIL (verdict tính ở collect, không ở đây). Khoá theo
+ * `attempt`: job được chạy lại cùng seq thì câu bỏ cũ không áp cho lần chạy mới.
+ */
+export function addFailedJobHold(m, { seq }, now = new Date()) {
+  assertHoldsWritable(m);
+  const job = jobOf(m, seq);
+  const attempt = job.startedAt ?? null;
+  if (failedHoldFor(m, job)) throw new HoldError(`job ${seq} đã có hold failed_job cho lần chạy này`);
+  m.holds = m.holds ?? [];
+  const hold = {
+    id: nextId(m.holds),
+    seq,
+    attempt,
+    kind: "failed_job",
+    question: `Job ${seq} FAIL — owner bỏ job này vì việc đã xong theo đường khác?`,
+    options: [],
+    status: "open",
+    createdAt: now.toISOString(),
+    createdBy: "dispatcher",
+  };
+  m.holds.push(hold);
+  return hold;
+}
+
+/** Hold `failed_job` của đúng lần chạy hiện tại của job. */
+export function failedHoldFor(m, job) {
+  const attempt = job.startedAt ?? null;
+  return (m.holds ?? []).find((h) =>
+    h.kind === "failed_job" && h.seq === job.seq && isLiveHold(h) && h.attempt === attempt) ?? null;
+}
+
+/**
+ * Hold `failed_job` đổi verdict job FAIL thành gì, hoặc null nếu giữ FAIL.
+ * Chỉ `answered drop` qua chat mới thành WAIVED: lời dispatcher tự ghi (`--via` khác
+ * chat) không bỏ được một lỗi đã ghi.
+ */
+export function failedHoldVerdict(hold) {
+  if (hold.status !== "answered" || hold.answer?.outcome !== "drop") return null;
+  if ((hold.answer?.via ?? "chat") !== "chat") return null;
+  return { verdict: "WAIVED", detail: `${hold.id} owner bỏ job FAIL — owner nói: "${hold.answer.words}"` };
+}
+
 /** Ghi nguyên văn câu owner gõ. Một hold chỉ trả lời một lần. */
 export function answerHold(m, id, { words, outcome, via = "chat" }, now = new Date()) {
   assertHoldsWritable(m);
   const hold = holdById(m, id);
   if (hold.status === "answered") throw new HoldError(`hold ${id} đã được trả lời`);
   if (!OUTCOMES.has(outcome)) throw new HoldError(`--outcome phải là drop hoặc resume, nhận ${JSON.stringify(outcome ?? null)}`);
+  if (hold.kind === "failed_job" && outcome !== "drop") {
+    throw new HoldError(`hold ${id} là failed_job, chỉ nhận --outcome drop — job làm lại thì nối bằng crew collect --replaced`);
+  }
   const v = String(via ?? "chat").toLowerCase();
   if (!/^[a-z0-9_-]{1,20}$/.test(v)) throw new HoldError("--via chỉ gồm chữ thường, số, _ và -, tối đa 20 ký tự");
   hold.status = "answered";

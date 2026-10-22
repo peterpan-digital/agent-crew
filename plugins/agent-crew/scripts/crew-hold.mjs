@@ -4,6 +4,7 @@
  *
  *   crew hold <manifest> list
  *   crew hold <manifest> add --seq N --question "..." [--option "..."]...
+ *   crew hold <manifest> add --seq N --failed      (job FAIL owner muốn bỏ)
  *   crew hold <manifest> answer <id> --words "<câu owner gõ>" --outcome drop|resume [--via chat]
  *   crew hold <manifest> defer <id> --until YYYY-MM-DD --words "..."
  *   crew hold <manifest> cover <id> --by <seq>
@@ -17,11 +18,13 @@
  * Exit: 0 = xong | 2 = sai cú pháp hoặc bị từ chối.
  */
 import { readManifest, updateManifest } from "./crew-manifest.mjs";
-import { addDecisionHold, answerHold, coverHold, deferHold, HoldError } from "./lib/holds.mjs";
+import { addDecisionHold, addFailedJobHold, answerHold, coverHold, deferHold, HoldError } from "./lib/holds.mjs";
+import { verdictOfJob } from "./crew-collect.mjs";
 import { isWorkerRole } from "./lib/crew-role.mjs";
 
 const WITH_VALUE = new Set(["--seq", "--question", "--words", "--outcome", "--via", "--until", "--by"]);
 const REPEATABLE = new Set(["--option"]);
+const BOOLEAN = new Set(["--failed"]);
 const COMMANDS = new Set(["list", "add", "answer", "defer", "cover"]);
 
 function parseArgs(argv) {
@@ -34,6 +37,8 @@ function parseArgs(argv) {
       if (REPEATABLE.has(a)) opts.lists.set(a, [...(opts.lists.get(a) ?? []), v]);
       else opts.values.set(a, v);
       i += 1;
+    } else if (BOOLEAN.has(a)) {
+      opts.values.set(a, true);
     } else if (a.startsWith("--")) {
       throw new HoldError(`cờ lạ: ${a}`);
     } else opts.positional.push(a);
@@ -51,6 +56,7 @@ function intFlag(opts, name) {
 const USAGE =
   "usage: crew hold <manifest.json> list\n" +
   "       crew hold <manifest.json> add --seq N --question \"...\" [--option \"...\"]...\n" +
+  "       crew hold <manifest.json> add --seq N --failed\n" +
   "       crew hold <manifest.json> answer <id> --words \"<câu owner gõ>\" --outcome drop|resume [--via chat]\n" +
   "       crew hold <manifest.json> defer <id> --until YYYY-MM-DD --words \"...\"\n" +
   "       crew hold <manifest.json> cover <id> --by <seq>\n" +
@@ -81,9 +87,19 @@ function main(argv) {
   if (cmd === "list") return list(manifestPath);
 
   const now = new Date();
+  // Verdict tính ngoài lock (đọc evidence), rồi addFailedJobHold kiểm lại job sống trong lock.
+  if (cmd === "add" && opts.values.get("--failed")) {
+    if (opts.values.has("--question") || opts.lists.has("--option")) throw new HoldError("--failed không nhận --question/--option: câu hỏi là mẫu cố định");
+    const seq = intFlag(opts, "--seq");
+    const v = verdictOfJob(manifestPath, seq, now.getTime());
+    if (v !== "FAIL") throw new HoldError(`job ${seq} đang là ${v ?? "không rõ"}, --failed chỉ nhận job FAIL`);
+  }
   let done;
   updateManifest(manifestPath, (m) => {
-    if (cmd === "add") {
+    if (cmd === "add" && opts.values.get("--failed")) {
+      const h = addFailedJobHold(m, { seq: intFlag(opts, "--seq") }, now);
+      done = `đã tạo hold ${h.id} (failed_job) cho job ${h.seq}\n  → ghi lời owner: answer ${h.id} --words "<câu owner gõ>" --outcome drop`;
+    } else if (cmd === "add") {
       const h = addDecisionHold(m, {
         seq: intFlag(opts, "--seq"), question: opts.values.get("--question"), options: opts.lists.get("--option") ?? [],
       }, now);

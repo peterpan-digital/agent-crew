@@ -334,6 +334,53 @@ t.check("API: cắt ở 40 ký tự", extractCostGateApi(`COST_GATE — ${"a".re
   t.check("list chạy được", hold(manifestPath, ["list"]).out.includes("h3"), true);
 }
 
+// ------------- failed_job: job FAIL mà việc xong theo đường khác, owner bỏ → WAIVED
+// Hình dạng run thật crew-261012-1033: job Codex FAIL không evidence, việc do người khác làm.
+function failedShape() {
+  return newRun([
+    { worker: "antigravity", status: "done", body: DONE },
+    { worker: "codex", status: "failed" },
+  ]);
+}
+{
+  const { manifestPath } = failedShape();
+  t.check("failed_job: chưa xử → exit 1", collect(manifestPath).exit, 1);
+  t.check("add --failed trên job PASS bị từ chối", hold(manifestPath, ["add", "--seq", "1", "--failed"]).exit, 2);
+  t.check("add --failed kèm --question bị từ chối", hold(manifestPath, ["add", "--seq", "2", "--failed", "--question", "q"]).exit, 2);
+  t.check("add --failed job FAIL", hold(manifestPath, ["add", "--seq", "2", "--failed"]).exit, 0);
+  const h = holdsOf(manifestPath).at(-1);
+  t.check("...kind failed_job, open, attempt = startedAt", `${h.kind}:${h.status}:${h.attempt === readManifest(manifestPath).jobs[1].startedAt}`, "failed_job:open:true");
+  t.check("add --failed lần hai bị từ chối", hold(manifestPath, ["add", "--seq", "2", "--failed"]).exit, 2);
+  const open = collect(manifestPath);
+  t.check("hold mở: vẫn FAIL, exit 1", open.exit, 1);
+  t.check("...dòng FAIL nhắc hold chờ lời owner", open.out.includes(`${h.id} chờ lời owner`), true);
+  t.check("answer --outcome resume bị từ chối", hold(manifestPath, ["answer", h.id, "--words", "chạy lại", "--outcome", "resume"]).exit, 2);
+  t.check("answer drop", hold(manifestPath, ["answer", h.id, "--words", "Việc đã làm xong theo đường khác, bỏ job này.", "--outcome", "drop"]).exit, 0);
+  const r = collect(manifestPath);
+  t.check("drop: exit 0", r.exit, 0);
+  t.check("...verdict WAIVED kèm lời owner", /WAIVED/.test(r.out) && r.out.includes("Việc đã làm xong theo đường khác"), true);
+  // Chạy lại cùng seq: câu bỏ là của lần chạy cũ.
+  updateJob(manifestPath, 2, { startedAt: new Date(Date.now() - 60_000).toISOString() });
+  t.check("chạy lại cùng seq: hold cũ hết tác dụng, exit 1", collect(manifestPath).exit, 1);
+}
+{
+  const { manifestPath } = failedShape();
+  hold(manifestPath, ["add", "--seq", "2", "--failed"]);
+  hold(manifestPath, ["answer", "h1", "--words", "dispatcher bỏ", "--outcome", "drop", "--via", "dispatcher"]);
+  t.check("drop qua --via dispatcher không bỏ được job FAIL", collect(manifestPath).exit, 1);
+}
+{
+  // Job hỏng đã có job khác làm thay (--replaced) thì REPLACED thắng, hold không đè.
+  const { manifestPath } = newRun([
+    { worker: "codex", status: "failed" },
+    { worker: "codex", status: "done", body: DONE },
+  ]);
+  hold(manifestPath, ["add", "--seq", "1", "--failed"]);
+  hold(manifestPath, ["answer", "h1", "--words", "bỏ", "--outcome", "drop"]);
+  const r = collect(manifestPath, ["--replaced", "1=2", "--reason", "job 2 làm đủ"]);
+  t.check("--replaced + hold drop: REPLACED, exit 0", `${r.exit}:${/\| 1 \| codex \| REPLACED/.test(r.out)}`, "0:true");
+}
+
 // --------------------------------------------- dấu nghiệm thu, --dry-run, version
 {
   const { ws, manifestPath } = newRun([{ status: "done", conversationId: "c", body: DONE }]);

@@ -18,7 +18,7 @@ Verdict cần đọc kỹ:
 | `SCOPE_VIOLATION` | có file bị ghi ngoài thư mục của run (layout có task: thư mục task) trong lúc job chạy | nếu là chỗ ghi hợp lệ thì khai `--allow` lúc `crew add-job`; nếu không thì worker đã đi quá phạm vi |
 | ghi vào file bảo vệ | worker chạm file MCP config / credential / thư mục skill, hoặc `protectedPaths` của repo | **không có đường hợp lệ hoá** — điều tra, đừng khai để cho qua |
 | `NGHI VẤN PHẠM VI` | file lọt vào khoảng của job chết không kịp ghi giờ kết thúc | không chặn, nhưng đọc qua — khoảng đó là suy đoán |
-| `WAIVED` | job `BLOCKED` vì `COST_GATE`, owner chọn bỏ việc (`crew hold answer --outcome drop`) | tính như đạt; report ghi câu owner nói |
+| `WAIVED` | job `BLOCKED` vì `COST_GATE` owner chọn bỏ việc, hoặc job `FAIL` owner bỏ vì việc đã xong theo đường khác (hold `failed_job`); cả hai qua `crew hold answer --outcome drop` | tính như đạt; report ghi câu owner nói |
 | `COVERED` | job `BLOCKED` vì `COST_GATE`, owner cho chạy tiếp và job cover đã `PASS` | tính như đạt; liếc evidence job cover nếu là Anti app (xem mục hold) |
 | `DEFERRED` | owner hoãn quyết định tới một ngày | **vẫn chặn**; tới ngày thì hỏi lại |
 | `REPLACED` | job `FAIL` có job sau cùng worker làm lại và `PASS`, người đọc đã ghi `--replaced {hỏng}={thay} --reason` | không chặn; report ghi câu lý do. Job thay hết `PASS` thì đỏ lại |
@@ -54,6 +54,13 @@ lại thì job hỏng đỏ lại — đọc bản mới rồi khai lại. Luậ
 riêng. Job `BLOCKED` **không** có dòng `COST_GATE` (chặn vì lỗi công cụ, thiếu file…)
 đi đường này như job `FAIL`; job `BLOCKED` vì `COST_GATE` thì không (đi qua `crew hold`, vì
 đó là câu của owner), job `STALE` cũng không (`--abandon`).
+
+Việc của job `FAIL` xong ở chỗ `--replaced` không với tới — Claude hay worker khác làm thay,
+run khác làm thay, hoặc job thay đã thay một job hỏng khác (hai lần thử hỏng trước một lần
+`PASS`) — thì không có job nào để nối. Đường duy nhất là **lời owner**, như `drop` của cost
+gate: `crew hold "$MP" add --seq N --failed`, hỏi owner, rồi `answer <id> --words "<câu owner
+gõ>" --outcome drop`. Hold khoá theo lần chạy; chỉ `--via chat` mới bỏ được; `resume` bị từ
+chối (làm lại thì `--replaced`). Job đã có `--replaced` hợp lệ thì `REPLACED` thắng.
 
 **File của session khác lọt vào `SCOPE_VIOLATION` thì bác có dấu vết, đừng nới ngưỡng:**
 
@@ -209,12 +216,13 @@ Trước 03/10, job dừng ở `COST_GATE` để run đỏ mãi: `--abandon` ch�
 không có đường exit 0 nào ngoài viết report tay. Giờ quyết định của owner được ghi thành
 dữ liệu trong manifest (`holds[]`), và gate đọc nó.
 
-### Hai loại hold
+### Ba loại hold
 
 | `kind` | Ai tạo | Làm gate đỏ? |
 | --- | --- | --- |
 | `cost_gate` | `crew collect`, tự động, cho job `BLOCKED` có dòng `COST_GATE` | Có, tới khi được `WAIVED` hoặc `COVERED` |
 | `decision` | dispatcher, bằng `crew hold add` | Không. Chỉ hiện ở mục "QUYẾT ĐỊNH ĐANG CHỜ" của report và đầu phiên |
+| `failed_job` | dispatcher, bằng `crew hold add --seq N --failed` (chỉ job `FAIL`) | Job vẫn `FAIL` tới khi owner `drop` qua chat → `WAIVED` (thêm 22/10) |
 
 Collect chỉ tạo hold khi run **không còn job chạy** và không ở `--dry-run`. Còn job chạy
 thì nó in "sẽ tạo khi run hết job chạy" và để đó.

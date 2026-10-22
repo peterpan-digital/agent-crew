@@ -87,7 +87,7 @@ Vì sao, và ngoại lệ dòng `COST_GATE` được in ra: `references/nghiem-t
 | `crew amend <manifest> --job N ...` | Nới phạm vi giữa chừng (`--allow` + `--note` lời owner), hoặc ghi chú vào job |
 | `crew run anti\|codex --manifest M --job N ...` | Bắn job; evidence/workspace/mode/model lấy từ sổ |
 | `crew collect <manifest>` | Cổng nghiệm thu; exit code là phán quyết |
-| `crew hold <manifest> ...` | Hàng chờ owner quyết (cost gate) |
+| `crew hold <manifest> ...` | Hàng chờ owner quyết (cost gate, bỏ job FAIL) |
 | `crew reconcile <manifest>` | Vá sổ từ evidence trên đĩa |
 | `crew session run-for\|latest` | Tìm run/conversation cũ để làm tiếp |
 | `crew digest` | Bảng crew còn dở của repo |
@@ -393,6 +393,11 @@ từ evidence, không lấy câu của phiên trước.
 | bỏ việc | `answer --outcome drop` | `WAIVED` |
 | chạy tiếp | `answer --outcome resume` → `add-job` + bắn job resume cùng worker → đợi xong → `cover <id> --by <seq>` | `COVERED` khi job cover `PASS` |
 | để sau | `defer <id> --until YYYY-MM-DD --words "..."` (≤ 14 ngày) | `DEFERRED`, **vẫn chặn** |
+
+Job `FAIL` mà việc đã xong theo đường khác (worker khác hay run khác làm thay, hoặc hai lần
+thử hỏng trước một lần `PASS`), tức chỗ `--replaced` không đi được: hỏi owner, rồi
+`add --seq N --failed` và `answer <id> --words "<câu owner gõ>" --outcome drop` → `WAIVED`.
+Chỉ nhận `drop` qua chat; job chạy lại cùng seq thì câu bỏ cũ hết tác dụng.
 
 `answer` chỉ ghi được một lần, và lệnh ghi bị từ chối khi run còn job pending/running: nên
 `answer` **trước** khi `add-job` job resume. Còn `list` và `add --seq N --question "..."`

@@ -21,7 +21,7 @@ import { layoutOf, reportDirRel, usesTask } from "./lib/crew-layout.mjs";
 import { evidenceDigest, readWorkerStatus, CREDENTIAL_STORE_DIR } from "./crew-guards.mjs";
 import { reconcileRun, resolveEvidence } from "./crew-reconcile.mjs";
 import { collectWriteScope, headMovement } from "./crew-scope.mjs";
-import { costGateKind, ensureCostGateHold, quotaApiName, extractCostGateApi, holdFor, holdVerdict, liveJobs } from "./lib/holds.mjs";
+import { costGateKind, ensureCostGateHold, failedHoldFor, failedHoldVerdict, quotaApiName, extractCostGateApi, holdFor, holdVerdict, liveJobs } from "./lib/holds.mjs";
 import { buildReplacements, cleanReason, mergeReplacements, parseReplaceSpec, replacedVerdict } from "./lib/replaced-jobs.mjs";
 import { assertReaderLedgersWritable } from "./lib/reader-ledgers.mjs";
 
@@ -445,6 +445,18 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
     if (v.verdict === "REPLACED") row.replacedBy = { by: entry.by, reason: cleanReason(entry.reason) };
   }
 
+  // Job FAIL owner đã bỏ bằng hold failed_job. Chạy sau --replaced: dòng nào job thay
+  // đã gỡ thì không còn FAIL, và hold chỉ áp cho dòng vẫn FAIL theo verdict gốc.
+  for (const row of rows) {
+    if (row.verdict !== "FAIL" || judged.get(row.seq) !== "FAIL") continue;
+    const hold = failedHoldFor(manifest, jobOf(row.seq));
+    if (!hold) continue;
+    row.holdId = hold.id;
+    const v = failedHoldVerdict(hold);
+    if (v) { row.verdict = v.verdict; row.detail = v.detail; }
+    else row.detail = `${row.detail} — ${hold.id} chờ lời owner (answer ${hold.id} --outcome drop)`;
+  }
+
   const blocking = rows.some((r) => BLOCKING.has(r.verdict));
   // A runtime that recorded failure over evidence that passed used to be a WARN
   // on a run the gate still called clean, while the adapter itself had exited 3
@@ -603,6 +615,13 @@ function recordDismissals(abs, paths, reason) {
  * could be cancelled and vanish from the count, turning exit 1 into exit 0.
  * A recorded failure has to be dealt with, not cleared.
  */
+/** Verdict gốc của một job (trước hold/--replaced), cho CLI kiểm điều kiện trước khi ghi. */
+export function verdictOfJob(manifestPath, seq, now = Date.now()) {
+  const manifest = readManifest(resolve(manifestPath));
+  const job = manifest.jobs.find((j) => j.seq === seq);
+  return job ? judgeOne(job, manifest.workspace, now, manifest.version).verdict : null;
+}
+
 export function abandonJob(manifestPath, seq, { now = Date.now() } = {}) {
   const abs = resolve(manifestPath);
   const manifest = readManifest(abs);
