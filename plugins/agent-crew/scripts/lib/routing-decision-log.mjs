@@ -101,22 +101,44 @@ function isUserPrompt(e) {
   return !/^(This session is being continued from a previous conversation|\[Request interrupted)/.test(stripReminders(text));
 }
 
-/** Dòng `Định tuyến: …` đầu tiên Claude viết từ prompt cuối tới hết transcript, hoặc null. */
-export function lastTurnDecision(transcriptPath) {
+/** Lượt ít lượt gọi tool hơn ngần này mà không có dòng quyết định → câu hỏi/trao đổi, không tính là quên. */
+export const NO_TASK_MAX_TOOL_CALLS = 3;
+
+/**
+ * Lượt vừa xong: dòng `Định tuyến: …` đầu tiên Claude viết từ prompt cuối (hoặc
+ * null) và số lượt gọi tool. Gate bắn ở mọi prompt đủ dài, kể cả câu hỏi; Claude
+ * đúng khi không ghi dòng cho câu hỏi, nên "không có dòng" chỉ là quên khi lượt
+ * đó thật sự làm việc (đo 11/11: 6/6 `missing` sau 2.6.0 là câu hỏi).
+ */
+export function lastTurnSummary(transcriptPath) {
   try {
     const entries = tailLines(transcriptPath).map((l) => { try { return JSON.parse(l); } catch { return null; } });
     let i = entries.length - 1;
     while (i >= 0 && !isUserPrompt(entries[i])) i -= 1;
+    let line = null;
+    let toolCalls = 0;
     for (const e of entries.slice(i + 1)) {
       if (e?.type !== "assistant") continue;
       for (const b of e.message?.content ?? []) {
-        if (b?.type !== "text" || typeof b.text !== "string") continue;
+        if (b?.type === "tool_use") toolCalls += 1;
+        if (line || b?.type !== "text" || typeof b.text !== "string") continue;
         const at = b.text.indexOf(DECISION_LABEL);
-        if (at >= 0) return b.text.slice(at + DECISION_LABEL.length).split("\n")[0].replace(/[`*]/g, "").trim();
+        if (at >= 0) line = b.text.slice(at + DECISION_LABEL.length).split("\n")[0].replace(/[`*]/g, "").trim();
       }
     }
-    return null;
+    return { line, toolCalls };
   } catch {
-    return null;
+    return { line: null, toolCalls: 0 };
   }
+}
+
+/** Dòng `Định tuyến: …` đầu tiên Claude viết từ prompt cuối tới hết transcript, hoặc null. */
+export function lastTurnDecision(transcriptPath) {
+  return lastTurnSummary(transcriptPath).line;
+}
+
+/** Tuyến ghi log cho một lượt: có dòng thì theo dòng; không có thì `missing`, trừ lượt gần như không làm gì. */
+export function turnRoutes({ line, toolCalls }) {
+  if (line) return routesOf(line);
+  return toolCalls < NO_TASK_MAX_TOOL_CALLS ? ["no-task"] : ["missing"];
 }

@@ -15,6 +15,12 @@
  */
 export const EMPTY_FRACTION = 0.01;
 export const LOW_FRACTION = 0.1;
+/**
+ * Ngưỡng "thấp" cho job lớn (`--chain`, effort high/xhigh). Đo 11/11: lúc bắn
+ * Codex còn trên 10% nên cổng im, rồi một job effort high (8,1 triệu token vào)
+ * cộng job kế tiếp ăn hết cửa sổ 5h giữa chừng.
+ */
+export const BIG_JOB_LOW_FRACTION = 0.3;
 /** Exit của `crew run` khi từ chối vì quota cạn. Sổ không đổi, job vẫn `pending`. */
 export const QUOTA_EXIT = 5;
 
@@ -53,13 +59,13 @@ export function relevantGroups(quota, model) {
 /** Phần còn lại hiệu lực của một cửa sổ: qua giờ hồi rồi thì đầy. */
 const effective = (b, now) => (b.resetsAt && b.resetsAt <= now ? 1 : b.remaining);
 
-function groupState(g, now) {
+function groupState(g, now, low = LOW_FRACTION) {
   const rem = g.buckets.map((b) => effective(b, now));
   const min = rem.length ? Math.min(...rem) : 1;
   const empty = g.blocked || min < EMPTY_FRACTION;
   if (empty && g.overflow) return "overflow";
   if (empty) return "empty";
-  return min < LOW_FRACTION ? "low" : "ok";
+  return min < low ? "low" : "ok";
 }
 
 /** Một dòng cho một nhóm: "Gemini Models: tuần còn 49% (hồi 11:14) · 5h còn 99% (hồi 05:30)". */
@@ -77,13 +83,13 @@ export function describeGroup(g, now = new Date()) {
  * { level: "ok"|"low"|"empty"|"unknown", lines, message }.
  * `message` là câu cho stderr của `crew run` (null khi không có gì đáng nói).
  */
-export function quotaVerdict(quota, { model, now = new Date() } = {}) {
+export function quotaVerdict(quota, { model, now = new Date(), bigJob = false } = {}) {
   const name = NAMES[quota.worker] ?? quota.worker;
   if (!quota.ok) {
     return { level: "unknown", lines: [], message: `crew run: không đọc được quota ${name} (${quota.error}) — vẫn bắn` };
   }
   const { groups, known } = relevantGroups(quota, model);
-  const states = groups.map((g) => groupState(g, now));
+  const states = groups.map((g) => groupState(g, now, bigJob ? BIG_JOB_LOW_FRACTION : LOW_FRACTION));
   const lines = groups.map((g) => describeGroup(g, now));
   const scope = known ? "" : ` (không rõ model${model ? ` ${model}` : ""} tiêu nhóm nào — xét mọi nhóm)`;
   // Không biết nhóm thì chỉ chặn khi mọi nhóm đều cạn.
@@ -103,5 +109,8 @@ export function quotaVerdict(quota, { model, now = new Date() } = {}) {
   const warn = states.some((s) => s === "low" || s === "overflow" || s === "empty");
   if (!warn) return { level: "ok", lines, message: null };
   const overflow = states.includes("overflow") ? "\n  Hạn mức đã cạn nhưng tài khoản có credits: job sẽ tiêu credits." : "";
-  return { level: "low", lines, message: `crew run: quota ${name} thấp${scope} — vẫn bắn:\n  ${lines.join("\n  ")}${overflow}` };
+  const big = bigJob && states.includes("low")
+    ? `\n  Job lớn (chain/effort cao) dễ ăn hết phần còn lại giữa chừng: cân nhắc chẻ nhỏ, hạ effort hoặc giao worker khác.`
+    : "";
+  return { level: "low", lines, message: `crew run: quota ${name} thấp${scope} — vẫn bắn:\n  ${lines.join("\n  ")}${overflow}${big}` };
 }

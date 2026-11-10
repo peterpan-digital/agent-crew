@@ -69,5 +69,14 @@ case "$FAKE_MODE" in
     fi
     echo "error: print timeout" >&2
     exit 3 ;;
+  slow_with_child)
+    # A worker that is still busy and has spawned a command of its own: the
+    # grandchild writes FAKE_LATE_FILE after FAKE_LATE_SEC unless it is killed.
+    # Stopping the adapter must take both down -- an orphan that writes into the
+    # run dir later is what overwrote a fresh run on 11/11.
+    ( sleep "${FAKE_LATE_SEC:-4}"; echo late > "$FAKE_LATE_FILE" ) &
+    echo $$ > "${FAKE_PID_FILE:-/dev/null}"
+    sleep 60
+    exit 0 ;;
   *) echo "fake-agy: unknown FAKE_MODE '$FAKE_MODE'" >&2; exit 99 ;;
 esac

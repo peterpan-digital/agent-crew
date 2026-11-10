@@ -25,7 +25,7 @@
  * cost two finished jobs on 2026-08-24, recorded as failed on an agy ERROR
  * while their evidence was complete.
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { resolveAntiEnv } from "./anti-env.mjs";
@@ -77,7 +77,53 @@ function resumeMismatchDetail(asked, got) {
     + " — phiên cũ không được nạp, worker đã làm lại từ đầu";
 }
 
-/** argv + spawn của `agy` headless; lượt cứu handoff dùng lại đúng đường này. */
+/**
+ * `agy` headless đang chạy (pid trưởng nhóm tiến trình), để handler SIGTERM/SIGINT
+ * giết được nó. Null khi không có lượt nào chạy.
+ *
+ * Vì sao (11/11, Digital Project): dispatcher `pkill` hai adapter Anti headless
+ * để giao lại job. Adapter đợi agy bằng spawnSync, event loop bị chặn nên signal
+ * giết adapter mà không tới tay ai; `agy -p` mồ côi chạy thêm ~20 phút, ghi đè
+ * file của run mới, và reconcile đọc evidence của nó rồi ghi job đã huỷ là `done`.
+ */
+let liveAgy = null;
+const AGY_STOP_GRACE_MS = 3000;
+
+/** Gửi signal cho cả nhóm tiến trình của agy (agy và mọi lệnh nó sinh ra). */
+function signalGroup(pid, sig) {
+  try {
+    process.kill(-pid, sig);
+    return true;
+  } catch {
+    return false; // nhóm đã chết
+  }
+}
+
+/**
+ * Dừng agy đang chạy: SIGTERM cả nhóm, chờ tối đa AGY_STOP_GRACE_MS, còn sống thì
+ * SIGKILL. Đồng bộ có chủ ý: gọi từ handler signal ngay trước khi thoát.
+ * Trả true khi có agy để dừng.
+ */
+export function stopLiveAgy({ graceMs = AGY_STOP_GRACE_MS } = {}) {
+  const pid = liveAgy;
+  if (!pid) return false;
+  signalGroup(pid, "SIGTERM");
+  const until = Date.now() + graceMs;
+  const tick = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < until && signalGroup(pid, 0)) Atomics.wait(tick, 0, 0, 100);
+  if (signalGroup(pid, 0)) signalGroup(pid, "SIGKILL");
+  liveAgy = null;
+  return true;
+}
+
+/**
+ * argv + spawn của `agy` headless; lượt cứu handoff dùng lại đúng đường này.
+ *
+ * Bất đồng bộ và `detached` (nhóm tiến trình riêng): event loop rảnh nên signal
+ * tới được handler, và handler giết được cả nhóm — kể cả lệnh agy sinh ra. Trả
+ * cùng hình với spawnSync ({ status, signal, stdout, stderr, error }) để phần
+ * đọc kết quả không đổi.
+ */
 function spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId }) {
   const args = [
     "-p", promptText,
@@ -93,16 +139,56 @@ function spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId }) 
   // takes "the most recent conversation" -- with max_parallel at 3 that is a
   // race, and losing it means feeding a follow-up into another job's session.
   if (resumeId) args.push("--conversation", resumeId);
-  return spawnSync("agy", args, {
-    cwd: workspace,
-    encoding: "utf8",
-    timeout: parseDuration(timeout) + 30_000, // let agy hit its own timeout first
-    // Was inheriting the parent env whole. Same strip as every other worker
-    // path -- this one runs unsandboxed and with --dangerously-skip-permissions.
-    // The worker role is set here, not by a `CREW_ROLE=worker` prefix the
-    // dispatcher has to remember: a forgotten prefix let the worker dispatch.
-    env: stripUnsafeEnv({ ...process.env, ...WORKER_ROLE_ENV }),
-    maxBuffer: 64 * 1024 * 1024,
+  const maxBuffer = 64 * 1024 * 1024;
+  return new Promise((resolveRun) => {
+    let child;
+    try {
+      child = spawn("agy", args, {
+        cwd: workspace,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        // Was inheriting the parent env whole. Same strip as every other worker
+        // path -- this one runs unsandboxed and with --dangerously-skip-permissions.
+        // The worker role is set here, not by a `CREW_ROLE=worker` prefix the
+        // dispatcher has to remember: a forgotten prefix let the worker dispatch.
+        env: stripUnsafeEnv({ ...process.env, ...WORKER_ROLE_ENV }),
+      });
+    } catch (err) {
+      resolveRun({ status: null, signal: null, stdout: "", stderr: "", error: err });
+      return;
+    }
+    let stdout = "";
+    let stderr = "";
+    let error = null;
+    let done = false;
+    const finish = (status, signal) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (liveAgy === child.pid) liveAgy = null;
+      resolveRun({ status, signal, stdout, stderr, error });
+    };
+    const kill = (why) => {
+      if (!error) error = Object.assign(new Error(`spawn agy ${why}`), { code: why });
+      signalGroup(child.pid, "SIGTERM");
+      setTimeout(() => signalGroup(child.pid, "SIGKILL"), AGY_STOP_GRACE_MS).unref();
+    };
+    liveAgy = child.pid;
+    // Để agy chạm --print-timeout của nó trước; quá thêm 30s mới tự cắt.
+    const timer = setTimeout(() => kill("ETIMEDOUT"), parseDuration(timeout) + 30_000);
+    child.stdout.on("data", (c) => {
+      stdout += c;
+      if (stdout.length > maxBuffer) kill("ENOBUFS");
+    });
+    child.stderr.on("data", (c) => {
+      stderr += c;
+      if (stderr.length > maxBuffer) kill("ENOBUFS");
+    });
+    child.on("error", (err) => {
+      error = err;
+      finish(null, null);
+    });
+    child.on("close", (code, signal) => finish(code, signal));
   });
 }
 
@@ -121,9 +207,9 @@ function lastJson(stdout) {
  * gửi tiếp đúng conversation đó một lượt ngắn để worker ghi handoff. Không truyền
  * `--model`: phiên giữ model của nó.
  */
-function rescueHeadless({ workspace, evidenceAbs, conversationId, agyMode, hardMs }) {
+async function rescueHeadless({ workspace, evidenceAbs, conversationId, agyMode, hardMs }) {
   const started = Date.now();
-  const proc = spawnAgy({
+  const proc = await spawnAgy({
     promptText: handoffRescuePrompt(evidenceAbs.startsWith(workspace) ? evidenceAbs.slice(workspace.length + 1) : evidenceAbs),
     workspace,
     timeout: `${Math.max(1, Math.round(hardMs / 1000))}s`,
@@ -141,9 +227,9 @@ function rescueHeadless({ workspace, evidenceAbs, conversationId, agyMode, hardM
   };
 }
 
-function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMode, resumeId }) {
+async function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMode, resumeId }) {
   const started = new Date();
-  const proc = spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId });
+  const proc = await spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId });
   let endedAt = new Date().toISOString();
 
   if (proc.error) {
@@ -225,7 +311,7 @@ function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMo
   // returned is not the session this job was meant to be.
   let handoffRescue = null;
   if (parsed?.finished_reason === "print_timeout" && returnedId && !resumeMismatch && !evidenceHasStatus(evidenceAbs)) {
-    handoffRescue = rescueHeadless({
+    handoffRescue = await rescueHeadless({
       workspace, evidenceAbs, conversationId: returnedId, agyMode,
       hardMs: Math.min(HANDOFF_RESCUE_MS, parseDuration(timeout)),
     });
@@ -696,8 +782,11 @@ export function makeWatchSink({ manifestPath = null, seq = null, sidecarPath }) 
  * Tách ra và nhận hàm thoát để test gọi thẳng. Chỉ ghi khi job vẫn đang `running`:
  * một job đã kết thúc rồi không được đổi thành failed vì signal đến chậm.
  */
-export function makeStopHandler({ manifestPath, seq, dispatchedAt, credentialPatch, holdsPatch, exit = process.exit }) {
+export function makeStopHandler({ manifestPath, seq, dispatchedAt, credentialPatch, holdsPatch, exit = process.exit, stopWorker = null, failure = null }) {
   return (name) => {
+    // Headless: giết agy TRƯỚC khi ghi sổ, để không còn tiến trình nào ghi tiếp
+    // vào thư mục run sau khi job đã được ghi là dừng.
+    const stopped = stopWorker ? stopWorker() : false;
     try {
       const job = readManifest(manifestPath).jobs.find((j) => j.seq === seq);
       if (job?.status === "running") {
@@ -705,7 +794,7 @@ export function makeStopHandler({ manifestPath, seq, dispatchedAt, credentialPat
           status: "failed",
           startedAt: dispatchedAt,
           endedAt: new Date().toISOString(),
-          failure: `adapter nhận ${name} — dispatcher dừng sau cảnh báo`,
+          failure: failure ? failure(name) : `adapter nhận ${name} — dispatcher dừng sau cảnh báo`,
           ...credentialPatch(),
           ...holdsPatch(),
         });
@@ -713,7 +802,9 @@ export function makeStopHandler({ manifestPath, seq, dispatchedAt, credentialPat
     } catch (err) {
       console.error(`anti-run: could not record the stop in the manifest: ${err.message}`);
     }
-    console.error(`anti-run: ${name} — job đã dừng theo yêu cầu, conversation vẫn có thể còn chạy trong app`);
+    console.error(stopWorker
+      ? `anti-run: ${name} — job đã dừng theo yêu cầu${stopped ? ", đã giết agy cùng mọi lệnh nó sinh ra" : ""}`
+      : `anti-run: ${name} — job đã dừng theo yêu cầu, conversation vẫn có thể còn chạy trong app`);
     exit(1);
   };
 }
@@ -738,9 +829,9 @@ export async function main(argv, { deps = {} } = {}) {
   // so a guard that only covered the sandboxed runtime would cover the safer
   // one -- the reasoning STRIPPED_ENV already spells out in crew-guards.mjs.
   //
-  // Job app có đường thoát thứ ba, bằng signal (xem `stopHandler` bên dưới); job
-  // headless thì chưa: nó đợi trong spawnSync, chặn event loop nên signal không
-  // được giao tới handler nào, và đăng ký handler ở đó chỉ làm SIGTERM mất tác dụng.
+  // Cả job app lẫn job headless có đường thoát thứ ba, bằng signal (xem
+  // `makeStopHandler`). Headless từng đợi agy trong spawnSync nên signal không tới
+  // handler nào; giờ agy chạy bất đồng bộ và handler giết cả nhóm tiến trình.
   const credentialsBefore = snapshotCredentialStore();
   /**
    * The credential finding, as a patch fragment to spread into updateJob.
@@ -820,9 +911,25 @@ export async function main(argv, { deps = {} } = {}) {
       }
     }
 
-    // Chỉ job app: vòng poll của nó bất đồng bộ nên signal đến được. Đăng ký ngay
-    // sau claim, gỡ khi antiRun trả về (xem finally bên dưới).
+    // Headless: agy chạy bất đồng bộ trong nhóm tiến trình riêng, nên signal tới
+    // được đây; handler giết cả nhóm rồi ghi `failed`. Không có handler thì
+    // SIGTERM chỉ giết adapter, agy mồ côi chạy tiếp và ghi vào thư mục run.
     let runOpts = opts;
+    if (claimed && (opts.mode ?? "headless") === "headless") {
+      const seq = Number(opts.job);
+      const stop = makeStopHandler({
+        manifestPath: opts.manifest, seq, dispatchedAt,
+        credentialPatch, holdsPatch: () => holdsTamperPatch(opts.manifest, seq),
+        stopWorker: () => stopLiveAgy(),
+        failure: (name) => `adapter nhận ${name} — dispatcher dừng job, đã giết agy`,
+      });
+      onTerm = () => stop("SIGTERM");
+      onInt = () => stop("SIGINT");
+      process.on("SIGTERM", onTerm);
+      process.on("SIGINT", onInt);
+    }
+    // Job app: vòng poll của nó bất đồng bộ nên signal đến được. Đăng ký ngay
+    // sau claim, gỡ khi antiRun trả về (xem finally bên dưới).
     if (claimed && (opts.mode ?? "headless") === "app") {
       const seq = Number(opts.job);
       const stop = makeStopHandler({

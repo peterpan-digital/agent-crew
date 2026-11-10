@@ -59,6 +59,7 @@ import {
 } from "./crew-guards.mjs";
 import { evidenceHasStatus, runHandoffRescue } from "./codex-handoff-rescue.mjs";
 import { LIVENESS_RECHECK_MS, createLivenessProbe } from "./lib/codex-liveness.mjs";
+import { codexExitDetail, collectCodexError } from "./lib/codex-failure.mjs";
 import { loadCrewConfig } from "./lib/crew-config.mjs";
 import { assertAccount, listWorkspaceProfiles, resolveWorkspaceProfile, tokenEmail } from "./lib/workspace-cli-profile.mjs";
 // Dời sang crew-guards để anti-run dùng chung; giữ export ở đây cho test và nơi gọi cũ.
@@ -588,6 +589,7 @@ export async function codexRun(options) {
     let threadId = null;            // the session id, for a later `exec resume`
     let nextHeartbeat = 25;
     let stderrTail = [];
+    let streamError = null;         // lỗi Codex tự báo trong stream (turn.failed/error)
     let killedFor = null;
     let idleTimer = null;
     let drainTimer = null;
@@ -683,7 +685,7 @@ export async function codexRun(options) {
         : resumeMismatch ? `job xin tiếp thread ${resumeId} nhưng codex chạy ở thread ${threadId}`
           + " — phiên cũ không được nạp"
         : killedFor ? `codex killed: ${killedFor}`
-        : `codex exited ${code}${signal ? ` on ${signal}` : ""}${stderrTail.length ? `: ${stderrTail.join(" | ")}` : ""}`;
+        : codexExitDetail({ code, signal, streamError, stderrTail, threadId });
 
       // Whatever the runtime did, the evidence gets the first word: a job killed
       // for going quiet may still have written a complete report before it went
@@ -784,6 +786,7 @@ export async function codexRun(options) {
       for (const line of parts) {
         collectFileChange(line, touched);
         usage = codexTurnUsage(line, usage);
+        streamError = collectCodexError(line, streamError);
         const next = collectThreadId(line, threadId);
         // Reported the moment it is known, not at the end: the job most worth
         // resuming is the one that died mid-flight, and its result object never

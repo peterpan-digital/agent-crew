@@ -43,6 +43,13 @@ case "$FAKE_MODE" in
     cat > /dev/null
     printf '{"type":"thread.started","thread_id":"01a04169-2763-79d1-9037-6dc85981fad1"}\n'
     exec sleep 60 ;;
+  out_of_credits)  # Codex hết credit giữa job (đo 11/11): lý do thật nằm ở turn.failed,
+                  # stderr chỉ có log lỗi token của một MCP server không liên quan
+    cat > /dev/null
+    printf '{"type":"thread.started","thread_id":"01a04169-2763-79d1-9037-6dc85981fad1"}\n'
+    printf 'ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(invalid_token)\n' >&2
+    printf '{"type":"turn.failed","error":{"message":"Your workspace is out of credits. Add credits to continue."}}\n'
+    exit 1 ;;
   stderr_only)  # never emits a stdout event: the watchdog must still fire
     while :; do printf 'still working...\n' >&2; sleep 1; done ;;
   blocked)

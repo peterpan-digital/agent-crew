@@ -24,7 +24,7 @@ import { CONFIG_NAME } from "../lib/crew-layout.mjs";
 import { isWorkerRole } from "../lib/crew-role.mjs";
 import { classify, promptKind, render } from "../lib/routing-gate.mjs";
 import { endTurn, startTurn } from "../lib/turn-nudge.mjs";
-import { lastTurnDecision, markPending, routesOf, takePending } from "../lib/routing-decision-log.mjs";
+import { lastTurnSummary, markPending, takePending, turnRoutes } from "../lib/routing-decision-log.mjs";
 import { workspaceRoot } from "./run-commands.mjs";
 import { upgradePinnedShim } from "./crew-shim.mjs";
 
@@ -143,9 +143,9 @@ function logTurnDecision(payload, start) {
   if (!logPath) return;
   const gate = takePending(logPath, payload.session_id);
   if (!gate) return;
-  const line = typeof payload.transcript_path === "string" ? lastTurnDecision(payload.transcript_path) : null;
+  const turn = typeof payload.transcript_path === "string" ? lastTurnSummary(payload.transcript_path) : { line: null, toolCalls: 0 };
   try {
-    appendFileSync(logPath, `${JSON.stringify({ ts: new Date().toISOString(), branch: gitBranch(ws), decision: "turn", gate, routes: routesOf(line) })}\n`, { mode: 0o600 });
+    appendFileSync(logPath, `${JSON.stringify({ ts: new Date().toISOString(), branch: gitBranch(ws), decision: "turn", gate, routes: turnRoutes(turn), toolCalls: turn.toolCalls })}\n`, { mode: 0o600 });
   } catch { /* log hỏng không được ảnh hưởng lượt của người dùng */ }
 }
 

@@ -127,9 +127,8 @@ do crew viết theo mẫu cố định — không chép chữ worker). Trạng t
   trước; muốn nới thì `crew amend <MP> --job N --allow ... --note ...` giữa 2 lát.
 - **Thread bị tách** (`resumeMismatch`) → dừng exit 3, không nối tiếp vào thread lạ.
 - **Signal.** Lát bắn bằng `spawn` async; SIGTERM vào chuỗi chuyển xuống lát đang chạy,
-  ghi `chainStoppedFor: "sigterm"`, exit 1. Ngoại lệ: lát **Anti headless** đợi `agy` trong
-  `spawnSync` nên không có handler — chết theo mặc định; thu dọn bằng `crew reconcile` /
-  slot hết hạn như mọi job Anti headless.
+  ghi `chainStoppedFor: "sigterm"`, exit 1. Lát **Anti headless** cũng dừng sạch từ 11/11:
+  adapter giết cả nhóm tiến trình của `agy` rồi ghi `failed`.
 - **Monitor.** Sidecar `chain-<N>.jsonl` (đường ở dòng `chain` của `crew paths`) có một
   dòng `{"type":"crew.chain","slice","seq","status","conversationId","elapsedSec","usage"}`
   mỗi lát, thêm `"stop"` khi chuỗi dừng hoặc tới checkpoint. `usage` của Codex là **tổng dồn
@@ -258,10 +257,11 @@ Vì sao không lấy mtime làm tín hiệu chính: mọi thứ trong hệ crew 
 (manifest đổi mỗi lần có job đổi trạng thái, log dispatch, evidence của job **khác**),
 nên đồng hồ im không bao giờ tới ngưỡng.
 
-Vì sao chỉ có ở app mode: headless đợi `agy` trong `spawnSync`, không có vòng poll nào
-để đo, và nó chặn event loop nên signal không tới được handler nào. Adapter cố ý **không**
-đăng ký handler cho job headless: đăng ký ở đó chỉ làm SIGTERM mất tác dụng cho tới khi
-`agy` trả về. Gõ `--quiet-*` ở headless là lỗi.
+Vì sao báo im chỉ có ở app mode: headless không có vòng poll nào để đo. Gõ `--quiet-*` ở
+headless là lỗi. Dừng tay thì headless có từ 11/11: `agy` chạy bất đồng bộ trong nhóm tiến
+trình riêng, SIGTERM/SIGINT vào adapter giết cả nhóm (agy và mọi lệnh nó sinh ra) rồi ghi
+`failed` ("dispatcher dừng job, đã giết agy"). Trước đó adapter đợi trong `spawnSync`, signal
+chỉ giết adapter, và một `agy` mồ côi đã ghi đè file của run giao lại 20 phút sau.
 
 Số đo nền trên app thật (04/10, `flash`; run đo hạ ngưỡng còn `--quiet-warn 1m --quiet-alert 3m`):
 

@@ -43,8 +43,10 @@ thì crew tự nối lát kế trên cùng thread; exit 4 = checkpoint mỗi 2 l
 lại đúng lệnh. Codex chỉ chạy headless (từ 2.0.4); transport `app` chỉ còn cho Antigravity.
 
 `crew run` tự đọc quota của đúng worker, đúng nhóm model của job trước khi gọi adapter: nhóm đó
-cạn (dưới 1%, hoặc CLI tự báo chạm trần) → exit 5, không bắn, sổ không đổi; dưới 10% hoặc
-không đọc được → cảnh báo rồi vẫn bắn. Tắt bằng `--quota-check off` (một lệnh) hoặc
+cạn (dưới 1%, hoặc CLI tự báo chạm trần) → exit 5, không bắn, sổ không đổi; dưới 10% (job
+lớn — `--chain` hay effort high/xhigh — dưới 30%) hoặc không đọc được → cảnh báo rồi vẫn bắn.
+Hết quota **giữa** job thì Codex tự báo trong stream; `codex-run` ghi lý do "hết quota/credit
+Codex giữa job" kèm lệnh `--resume <thread>` thay vì đuôi stderr. Tắt bằng `--quota-check off` (một lệnh) hoặc
 `CREW_QUOTA_CHECK=off`.
 
 `crew --help` liệt kê mọi lệnh. Lệnh nào đã có script thì chạy đúng script đó ở tiến
@@ -253,8 +255,9 @@ quyết định của dispatcher, nằm trong brief để audit.
 | Script | Việc |
 | --- | --- |
 | `scripts/anti-env.mjs` | Discover runtime của app Antigravity 2.0 (pid, gRPC address, projectId). Không hardcode giá trị nào; app restart thì tự discover lại. |
-| `scripts/anti-run.mjs` | Chạy 1 job Antigravity. `--mode headless` (agy, nhanh, có token usage) hoặc `--mode app` (hiện conversation trong app để xem trực tiếp). Ở app mode: ghi `conversationId` ngay khi có, ghi sự kiện `anti.watch` vào sidecar khi conversation im quá `--quiet-warn`/`--quiet-alert` (mặc định 5m/10m, không tự giết job), sự kiện `idle` khi conversation đã `done` hơn 2 phút mà chưa có evidence (trừ phiên chat), `--chat on` mở phiên chat có giám sát cho owner, và bắt SIGTERM để ghi `failed` có kiểm credential. |
+| `scripts/anti-run.mjs` | Chạy 1 job Antigravity. `--mode headless` (agy, nhanh, có token usage) hoặc `--mode app` (hiện conversation trong app để xem trực tiếp). Ở app mode: ghi `conversationId` ngay khi có, ghi sự kiện `anti.watch` vào sidecar khi conversation im quá `--quiet-warn`/`--quiet-alert` (mặc định 5m/10m, không tự giết job), sự kiện `idle` khi conversation đã `done` hơn 2 phút mà chưa có evidence (trừ phiên chat), `--chat on` mở phiên chat có giám sát cho owner, và bắt SIGTERM để ghi `failed` có kiểm credential. | Headless chạy `agy` bất đồng bộ trong nhóm tiến trình riêng: SIGTERM/SIGINT vào adapter giết cả nhóm rồi ghi `failed`.
 | `scripts/codex-run.mjs` | Chạy 1 job Codex. `--mode headless` (mặc định) qua `codex exec --json`, watchdog: job không phát event trong `--idle-timeout` (mặc định 2m) thì hỏi `scripts/lib/codex-liveness.mjs` trước khi giết — còn dùng CPU, còn nhận byte mạng, hay giữ kết nối chờ model (tối đa 10 phút im) thì để chạy tiếp; im trên mọi mặt mới giết (ca pid chết mà state vẫn đọc là running). `--mode app` **bị từ chối từ 2.0.4** (Codex chỉ headless; làm tiếp thread bằng `--resume <conversationId>`), code transport app đã xoá ở 2.1.3. Manifest cũ có job Codex `transport: "app"` (kèm `companionJobId`, `settleRetries`…) vẫn được collect/reconcile đọc. Log ghi vào `logDir` của layout (mặc định `.crew/logs/{run}/`, nên gitignore) vì nó mang nội dung file worker đọc; đường dẫn nằm trong manifest và `crew paths`. |
+| `scripts/lib/codex-failure.mjs` | Lý do một lượt Codex thoát lỗi: ưu tiên lỗi Codex tự báo trong stream (`turn.failed`, `error`) hơn đuôi stderr; lỗi hết quota/credit thì ghi thẳng và chỉ `crew quota` + `--resume <thread>`. |
 | `scripts/codex-companion-path.mjs` | Tìm `codex-companion.mjs` của plugin Codex (ngoài repo). Env override `MWG_CODEX_COMPANION` là **quyết định cuối** — trỏ sai thì báo lỗi, không dò tiếp sang bản khác. |
 | `scripts/anti-status.mjs` | Đọc tiến độ 1 conversation. Luôn read-only: copy `.db`+`-wal`+`-shm` sang temp rồi query bản copy. |
 | `scripts/crew-guards.mjs` | Guard dùng chung cho mọi worker: evidence gate, duration ceiling, đọc brief. |
@@ -334,7 +337,8 @@ biết nó chạy đến lúc nào. Khoảng của nó bị chặn trần ở `s
 đánh dấu `bounded: false`; file lọt vào đó chỉ ra `NGHI VẤN PHẠM VI`, không exit 2.
 Bản đầu đánh fail thẳng, và hậu quả là gate **không thể qua được** đúng trên những
 run nó sinh ra để canh — dạy dispatcher bỏ qua gate trong đúng một ngày. Cùng lý do
-đó, `reconcile` điền `endedAt` bù thì ghi kèm `endedAtInferred: true`: giờ kết thúc
+đó, `reconcile` điền `endedAt` bù thì ghi kèm `endedAtInferred: true` và lấy lúc evidence
+được ghi lần cuối (không phải lúc reconcile chạy: 11/11 một job 15 phút bị ghi 71 phút): giờ kết thúc
 bù là sổ sách, không phải quan sát, và một giờ kết thúc bịa ở "now" từng cho job
 chết một tiếng trước cái cửa sổ chạy tới hiện tại.
 
@@ -633,6 +637,8 @@ nội dung manifest — nên một runner spawn được process và so được
 | `tests/judge-verdict.test.mjs` | 9 ca của bảng phán quyết `judgeJob()`: đủ tổ hợp evidence có/rỗng/thiếu × runtime ok/fail × có/không dòng `Status:`. |
 | `tests/collect-gate.test.mjs` | Cổng nghiệm thu trên các run dựng sẵn để sai đúng 1 kiểu: trùng evidence sau khi resolve, ghi ngoài phạm vi, ghi vào file được bảo vệ, ghi vào prefix bị gitignore đã khai, biên prefix, khoảng suy đoán, xoá file, `--abandon` job đã fail, `--dry-run` phủ `--abandon`, `--grace` không phải số, chạy từ cwd khác, echo template brief, provenance evidence, WARN bền qua 2 lần collect, cost gate chỉ nằm trong evidence. |
 | `tests/codex-lifecycle.test.mjs` | Vòng đời `codex-run.mjs` qua `codex` giả: grandchild giữ stdout, brief 200KB vào child không đọc stdin, watchdog trước stderr rác, retry đè sidecar cũ, log dir sai quyền, `BLOCKED` phải exit 3, và manifest phải ghi được ca bị giết. |
+| `tests/anti-headless-stop.test.mjs` | SIGTERM vào adapter Anti headless giết cả agy lẫn lệnh nó sinh ra (file ghi muộn không xuất hiện), sổ ghi `failed`, exit 1. Chạy trên code cũ thì 5/7 check đỏ. |
+| `tests/codex-failure-quota-and-reconcile-time.test.mjs` | Lý do lỗi Codex lấy từ `turn.failed` trong stream (không phải log MCP ở stderr), hết credit thì chỉ `crew quota` + `--resume`; cổng quota cảnh báo job lớn từ 30%; reconcile lấy giờ kết thúc theo mtime evidence. |
 | `tests/codex-liveness.test.mjs` | Watchdog im ≠ chết: đọc ps/nettop, CPU cây Codex (zsh đã exec thành lệnh con), byte mạng tăng, trần chờ model 10 phút; codex giả im 8s mà tốn CPU thì không bị giết, im mà không làm gì thì bị giết kèm lý do. |
 | `tests/turn-nudge-and-split-rule.test.mjs` | Gate bắt tách việc thành phần; nguồn prompt (người gõ, cha giao con, peer, tin tự chèn); tuyến chỉ đọc phần trước lý do; mốc đầu lượt bỏ qua task-notification / tóm tắt sau nén; bộ đếm nhắc ở 40 tool call / file thứ 3 / 100, thôi nhắc khi đã giao; hook thật trả `additionalContext`. |
 | `tests/agent-state.test.mjs` | Hai luật ngược chiều và cả hai phải giữ: hook **không được chặn phiên** (mọi ca hỏng đều exit 0) nhưng cũng **không được ghi khi chưa che được**. Thêm: ba phiên ghi cùng lúc ra ba file không mất cái nào, trần 4 KB, file cũ bị đánh dấu, và đoạn text cuối là câu dẫn cụt thì không được chọn làm tóm tắt. |

@@ -50,6 +50,20 @@ export function runModel(argv, { cwd }) {
   }
 }
 
+/** Job lớn: chuỗi lát (cờ --chain, hoặc sổ ghi job đang chạy chuỗi), hoặc effort high/xhigh. */
+export function isBigJob(argv, { cwd }) {
+  if (argv.includes("--chain")) return true;
+  // Lát của --chain tới đây không mang cờ --chain; sổ ghi `chainStartedAt` cho job đó.
+  let job = null;
+  const mp = flagValue(argv, "manifest");
+  const seq = flagValue(argv, "job");
+  try {
+    if (mp && seq) job = readManifest(resolve(cwd, mp)).jobs.find((j) => String(j.seq) === String(seq)) ?? null;
+  } catch { /* không đọc được sổ: coi như job thường */ }
+  if (job?.chainStartedAt) return true;
+  return /^(high|xhigh)$/.test(String(flagValue(argv, "effort") ?? job?.effort ?? ""));
+}
+
 /**
  * Cổng của `crew run`. Trả `{ argv, refuse }`: argv đã bỏ `--quota-check`,
  * `refuse` là exit code khi phải dừng (null = bắn tiếp).
@@ -67,7 +81,7 @@ export async function quotaGate(workerArg, argv, { cwd, env = process.env, reade
   const worker = WORKERS[workerArg];
   if (!worker) return { argv: rest, refuse: null };
   const quota = await readers[worker]();
-  const v = quotaVerdict(quota, { model: runModel(rest, { cwd }), now });
+  const v = quotaVerdict(quota, { model: runModel(rest, { cwd }), now, bigJob: isBigJob(rest, { cwd }) });
   if (v.message) process.stderr.write(`${v.message}\n`);
   return { argv: rest, refuse: v.level === "empty" ? QUOTA_EXIT : null };
 }
