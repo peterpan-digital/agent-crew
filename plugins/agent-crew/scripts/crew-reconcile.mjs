@@ -17,7 +17,7 @@
  * be running. Deciding that it failed is the dispatcher's call, not this
  * script's, because only the dispatcher knows whether the runtime is still up.
  */
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { readManifest, updateJob, appendNote } from "./crew-manifest.mjs";
@@ -58,6 +58,20 @@ const TERMINAL_PASS = new Set(["done", "done_with_concerns", "done_verified_manu
 export function resolveEvidence(job, workspace) {
   const declared = resolve(workspace, job.evidence);
   return existsSync(declared) ? declared : null;
+}
+
+/**
+ * Giờ kết thúc suy ra cho job có evidence mà adapter chưa kịp ghi giờ: lúc evidence
+ * được ghi lần cuối, không phải "bây giờ". Đo 11/11: reconcile chạy muộn ~55 phút
+ * nên job Anti 15 phút bị ghi 71 phút. Không đọc được mtime, hoặc mtime trước giờ
+ * bắt đầu (đồng hồ lệch, file chép lại) thì mới lấy bây giờ như trước.
+ */
+function evidenceWrittenAt(path, startedAt) {
+  try {
+    const at = statSync(path).mtime;
+    if (!startedAt || at.getTime() >= Date.parse(startedAt)) return at.toISOString();
+  } catch { /* không đọc được: rơi xuống "bây giờ" */ }
+  return new Date().toISOString();
 }
 
 /**
@@ -216,7 +230,7 @@ export function reconcileRun(manifestPath, { dryRun = false, cancelOrphans = fal
         // Ở đây reconcile chính là người chấm, nên nó ghim bản đã chấm. Thiếu dòng này,
         // một worker app còn sống sau timeout ghi tiếp evidence mà gate không thấy.
         evidenceSha256: evidenceDigest(candidate),
-        endedAt: job.endedAt ?? new Date().toISOString(),
+        endedAt: job.endedAt ?? evidenceWrittenAt(candidate, job.startedAt),
         // A filled-in end time is bookkeeping, not an observation, and it must
         // say so: the write-scope check derives each job's interval from it, and
         // an invented end at "now" gave a job that died an hour ago a window

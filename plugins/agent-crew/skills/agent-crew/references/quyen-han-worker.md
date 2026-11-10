@@ -244,6 +244,8 @@ spawn** và so lại trên mọi đường thoát. Lệch là ghi `credentialTam
 
 Codex có 3 đường thoát (signal handler, `catch`, thành công) và cả 3 đều chụp lại —
 job chết giữa chừng mới là job đáng nghi nhất. Anti app cũng có 3 từ 03/10 (thêm handler
-SIGTERM/SIGINT). **Anti headless vẫn chỉ có 2**: nó đợi `agy` trong `spawnSync` nên signal
-không tới được handler nào; adapter Anti headless bị kill thì không ghi được gì, kể cả phần
-credential.
+SIGTERM/SIGINT). Anti headless có đủ 3 từ 11/11: trước đó nó đợi `agy` trong `spawnSync`,
+signal không tới handler nào, và `agy` mồ côi chạy tiếp ~20 phút rồi ghi đè file của run mới.
+Giờ `agy` chạy bất đồng bộ trong nhóm tiến trình riêng; SIGTERM/SIGINT vào adapter giết cả
+nhóm (agy và lệnh nó sinh ra), rồi ghi `failed` kèm kiểm credential. SIGKILL vào adapter thì
+vẫn không ghi được gì — dừng bằng SIGTERM.

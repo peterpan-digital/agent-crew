@@ -6,7 +6,7 @@ when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, 
 category: agent-ops
 keywords: [crew, dispatch, multi-agent, song-song, codex, antigravity, worker]
 metadata:
-  version: "2.6.0"
+  version: "2.7.0"
 ---
 
 # agent-crew
@@ -385,7 +385,9 @@ dòng "Ngủ quên" ở `references/transport-va-resume.md` **trước** khi nh�
 rộng giết luôn shell bọc):
 `pkill -TERM -f '(^|/)node .*anti-run\.mjs.*/worker-anti-{seq}\.md'` — thêm tên thư mục run
 vào pattern khi có hơn một run đang chạy. Job thành `failed`, adapter exit 1, claim lại
-được ngay; conversation trong app có thể vẫn chạy.
+được ngay; conversation trong app có thể vẫn chạy. Job **headless** dùng đúng lệnh đó: adapter
+giết luôn `agy` và mọi lệnh nó sinh ra trước khi ghi `failed` — đừng `pkill agy` tay, và đừng
+SIGKILL adapter (SIGKILL không cho nó dọn).
 
 Lệnh dài hơn 5 phút: truyền cả `--quiet-warn`, `--quiet-alert` lớn hơn lệnh đó.
 

@@ -74,7 +74,7 @@ t.check("không có dòng → missing", routesOf(null).join(), "missing");
     { type: "user", message: { content: "câu cũ" } },
     { type: "assistant", message: { content: [{ type: "text", text: "Định tuyến: giao Anti — lượt CŨ" }] } },
     { type: "user", message: { content: "làm cái dashboard BÍ_MẬT cho team sale" } },
-    { type: "assistant", message: { content: [{ type: "tool_use", name: "Read" }] } },
+    { type: "assistant", message: { content: [{ type: "tool_use", name: "Read" }, { type: "tool_use", name: "Edit" }, { type: "tool_use", name: "Bash" }] } },
     { type: "user", message: { content: [{ type: "tool_result", content: "Định tuyến: giao Anti — trong file" }] } },
     { type: "assistant", message: { content: [{ type: "text", text: assistantText }] } },
   ].map((e) => JSON.stringify(e)).join("\n"));
@@ -96,6 +96,14 @@ t.check("không có dòng → missing", routesOf(null).join(), "missing");
   write("Xong rồi, đây là dashboard.");
   hook("stop", AGG, { session_id: "sess-b", transcript_path: transcript });
   t.check("Claude quên ghi dòng → missing (không lấy dòng của lượt cũ / tool result)", logOf(AGG).at(-1).routes.join(), "missing");
+
+  prompt(AGG, "giải thích giúp tao cái gate này chạy sao nhé", "sess-q");
+  writeFileSync(transcript, [
+    { type: "user", message: { content: "giải thích giúp tao cái gate này chạy sao nhé" } },
+    { type: "assistant", message: { content: [{ type: "text", text: "Gate chạy thế này…" }] } },
+  ].map((e) => JSON.stringify(e)).join("\n"));
+  hook("stop", AGG, { session_id: "sess-q", transcript_path: transcript });
+  t.check("câu hỏi (không gọi tool, không có dòng) → no-task, không tính là quên", `${logOf(AGG).at(-1).routes.join()}/${logOf(AGG).at(-1).toolCalls}`, "no-task/0");
 
   const quiet = logOf(AGG).length;
   prompt(AGG, "ok merge luôn", "sess-c");
