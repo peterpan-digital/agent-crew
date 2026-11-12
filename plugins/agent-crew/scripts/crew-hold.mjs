@@ -77,6 +77,8 @@ function list(manifestPath) {
 }
 
 function main(argv) {
+  // Đo 11/11: dispatcher gõ `crew hold --help` để xem cú pháp, nhận "cờ lạ" rồi phải gõ lại.
+  if (argv.includes("--help") || argv.includes("-h")) return console.log(USAGE);
   const opts = parseArgs(argv);
   const [manifestPath, cmd, id, ...extra] = opts.positional;
   if (!manifestPath || !COMMANDS.has(cmd)) throw new HoldError(USAGE);

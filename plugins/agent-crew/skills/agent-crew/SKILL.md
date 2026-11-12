@@ -6,7 +6,7 @@ when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, 
 category: agent-ops
 keywords: [crew, dispatch, multi-agent, song-song, codex, antigravity, worker]
 metadata:
-  version: "2.7.0"
+  version: "2.7.1"
 ---
 
 # agent-crew
@@ -120,7 +120,7 @@ Chi tiết cách phân rã: `references/dispatch-playbook.md`.
 Hook của plugin có thể đã chèn khối "Định tuyến crew" vào đầu lượt. Đó là **gợi ý**, không
 phải lệnh: đọc yêu cầu thật rồi tự quyết theo bảng trên. Repo aggressive chèn khối này ở
 **mọi** prompt là việc (không chỉ khi khớp từ khoá) và bắt câu đầu trả lời ghi đúng một dòng
-`Định tuyến: Codex: <phần> · Anti: <phần> · tự làm: <phần> — <lý do>` (bỏ phần không có) hoặc
+`Định tuyến: Codex: <phần> · Anti: <phần> · session <tên>: <phần> · tự làm: <phần> — <lý do>` (bỏ phần không có) hoặc
 `Định tuyến: tự làm hết — <vì sao không tách được>`; câu hỏi hay xác nhận thì bỏ dòng này.
 Lượt tự làm phình tới 40 lượt gọi tool hoặc 3 file đã sửa thì hook nhắc giữa lượt (tối đa hai
 lần, lần hai ở 100): cân nhắc giao phần **còn lại**, hoặc ghi `Định tuyến: vẫn tự làm — <lý do>`. Hook Stop đọc dòng đó ghi tuyến vào `.crew/logs/routing-gate.jsonl`

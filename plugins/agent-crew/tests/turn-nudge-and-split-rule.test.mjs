@@ -40,6 +40,11 @@ t.check("...kể cả lý do sau dấu chấm", routesOf("tự làm. Codex khôn
 t.check("dạng tách phần: Codex + tự làm → codex", routesOf("Codex: script dựng ảnh · tự làm: chọn ý — cần nhìn ảnh").join(), "codex");
 t.check("dạng tách phần: Codex + Anti", routesOf("Codex: parser · Anti: tra 3 thư viện · tự làm: duyệt — lý do").join(), "codex,anti");
 t.check("tự làm hết", routesOf("tự làm hết — 2 file, việc nhỏ").join(), "self");
+// Đo 11/11: dispatcher giao cho session đang chạy theo tên ("session kit …") bị log thành self.
+t.check("dạng tách phần: session có tên + tự làm → session", routesOf("session kit sửa cổng mũi tên · session 365 dựng lại ảnh · tự làm: kiểm nguyên nhân. Lý do: mỗi việc có session riêng").join(), "session");
+t.check("dạng tách phần: phiên <tên>: … → session", routesOf("phiên Bill: dựng lại · tự làm: duyệt — lý do").join(), "session");
+t.check("giao … session template (không có dấu ·) → session", routesOf("tự quyết 3 câu kit hỏi, rồi giao kit và 4 session template dựng lại. Phần phán đoán do tao giữ").join(), "session");
+t.check("tự làm nhắc tới session trong phần việc → vẫn self", routesOf("tự làm: kiểm session cũ — lý do").join(), "self");
 
 // --- mốc đầu lượt trong transcript -------------------------------------------------------
 {

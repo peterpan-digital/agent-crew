@@ -63,7 +63,13 @@ export function routesOf(line) {
   const routes = [];
   if (/codex/i.test(head)) routes.push("codex");
   if (/\banti\b|antigravity/i.test(head)) routes.push("anti");
-  if (/session\s*con|phiên\s*con|sub-?session/i.test(head)) routes.push("session");
+  // Session đang chạy được gọi theo tên ("session kit: …", "phiên Bill …", "giao kit
+  // và 4 session template"), không chỉ "session con". Đo 11/11: dispatcher chia 3 việc
+  // cho 3 session có tên, log ghi self. Chỉ tính khi "session" mở đầu một phần hoặc đi
+  // sau "giao", để "tự làm: kiểm session cũ" vẫn là self.
+  const namedSession = head.split("·").some((p) => /^\s*(session|phiên)\s+\S/i.test(p))
+    || /\bgiao\b[^·]*?(?:\bsession|phiên)\b/i.test(head);
+  if (namedSession || /session\s*con|phiên\s*con|sub-?session/i.test(head)) routes.push("session");
   if (!routes.length && /tự\s*làm|tu\s*lam/i.test(head)) routes.push("self");
   return routes.length ? routes : ["other"];
 }
