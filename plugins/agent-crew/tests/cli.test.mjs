@@ -42,6 +42,28 @@ const gitRepo = (prefix) => {
   t.check("...và khác 0", via.code !== 0, true);
 }
 
+// ---- `crew <lệnh> --help`: mọi lệnh đều in cách dùng, exit 0 ----
+{
+  // Đo 12/11: chỉ `hold` chịu --help (vá 11/11); các lệnh khác trả "cờ lạ --help"
+  // exit 2, còn `probe`/`anti-env` bỏ qua cờ rồi chạy việc thật. Session phải gõ
+  // lại mới biết cú pháp, nên cửa vào xử --help chung trước khi giao xuống.
+  for (const cmd of ["new-run", "add-job", "amend", "paths", "digest", "doctor", "quota", "init", "install",
+                     "collect", "reconcile", "session", "probe", "anti-env", "anti-status", "export-session",
+                     "state-read", "state-write", "hold"]) {
+    for (const flag of ["--help", "-h"]) {
+      const r = crew([cmd, flag]);
+      t.check(`${cmd} ${flag} → exit 0`, r.code, 0);
+      t.check(`...in cách dùng có "${cmd}"`, `${r.out}\n${r.err}`.includes(cmd), true);
+    }
+  }
+  const run = crew(["run", "anti", "--help"]);
+  t.check("run anti --help → exit 0", run.code, 0);
+  t.check("...nhắc --chain", run.out.includes("--chain"), true);
+  t.check("run --help (chưa có worker) → exit 0", crew(["run", "--help"]).code, 0);
+  // Không nuốt --help nằm ở vị trí giá trị của cờ khác: chỉ cờ đứng ngay sau lệnh mới là hỏi cú pháp.
+  t.check("add-job --title --help → không tính là hỏi cú pháp", crew(["add-job", "--title", "--help"]).code !== 0, true);
+}
+
 // ---- add-job --tier / --bump-from: một chữ ra model còn sống ----
 {
   // `agy models` lấy từ fake trên PATH: mặc định là list thật đo 06/11.

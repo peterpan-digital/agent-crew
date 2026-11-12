@@ -21,7 +21,7 @@ const SCRIPTS = join(ROOT, "scripts");
 /** Lệnh chạy thẳng một script có sẵn. */
 const SCRIPT_COMMANDS = {
   collect: { file: "crew-collect.mjs", help: "nghiệm thu run: <manifest> [--dry-run] [--report <file>] ..." },
-  hold: { file: "crew-hold.mjs", help: "hàng chờ quyết định: <manifest> list|add|answer|defer|cover ..." },
+  hold: { file: "crew-hold.mjs", help: "hàng chờ quyết định: <manifest> list|add|answer|defer|cover ...", ownHelp: true },
   reconcile: { file: "crew-reconcile.mjs", help: "vá sổ từ evidence trên đĩa: <manifest> [--cancel-orphans]" },
   session: { file: "crew-session.mjs", help: "run-for | latest --worker anti|codex [--task <task>]" },
   probe: { file: "crew-runtime-probe.mjs", help: "đọc runtime Codex mà run đang ngồi lên" },
@@ -49,16 +49,40 @@ const CLI_COMMANDS = {
   hook: { load: () => import("../scripts/cli/hook.mjs"), fn: "hook", help: "cho hook plugin: session-start | stop | prompt (payload qua stdin, luôn exit 0)" },
 };
 
+/** `run` không nằm trong bảng nào ở trên: hai dòng của nó viết riêng, dùng cho cả `crew --help` lẫn `crew run --help`. */
+const RUN_ROWS = [
+  ["run anti|codex ...", "bắn một job; có --manifest --job thì evidence/workspace/mode/model lấy từ sổ; quota cạn → exit 5, không bắn [--quota-check off]"],
+  ["run anti|codex ... --chain", "task dài: tự nối lát CONTINUE trên cùng thread [--budget 4h] [--max-slices 8]; exit 4 = checkpoint"],
+];
+
 function usage() {
   const rows = [
-    ["run anti|codex ...", "bắn một job; có --manifest --job thì evidence/workspace/mode/model lấy từ sổ; quota cạn → exit 5, không bắn [--quota-check off]"],
-    ["run anti|codex ... --chain", "task dài: tự nối lát CONTINUE trên cùng thread [--budget 4h] [--max-slices 8]; exit 4 = checkpoint"],
+    ...RUN_ROWS,
     ...Object.entries(CLI_COMMANDS).map(([k, v]) => [k, v.help]),
     ...Object.entries(SCRIPT_COMMANDS).map(([k, v]) => [k, v.help]),
   ];
   const w = Math.max(...rows.map(([k]) => k.length));
   return `dùng: crew <lệnh> [tham số]\n\n${rows.map(([k, h]) => `  ${k.padEnd(w)}  ${h}`).join("\n")}\n`;
 }
+
+/**
+ * Một dòng cách dùng của riêng `<lệnh>`, lấy từ chính bảng ở trên.
+ *
+ * Đo 12/11: mỗi script tự từ chối cờ lạ, nên `crew new-run --help` ra "cờ lạ
+ * --help" exit 2, còn `probe`/`anti-env` bỏ qua cờ rồi chạy việc thật — session
+ * phải gõ lại mới biết cú pháp. Cửa vào xử --help trước khi giao xuống, trừ lệnh
+ * tự in usage đầy đủ hơn (`ownHelp`).
+ */
+function commandHelp(cmd) {
+  const help = CLI_COMMANDS[cmd]?.help ?? SCRIPT_COMMANDS[cmd]?.help;
+  return help ? `dùng: crew ${cmd} ${help}\n` : null;
+}
+
+/**
+ * Chỉ cờ đứng ngay sau lệnh mới tính là hỏi cú pháp. Quét cả argv thì
+ * `crew add-job --title "--help"` cũng bị nuốt thành trang trợ giúp.
+ */
+const asksHelp = (args) => args[0] === "--help" || args[0] === "-h";
 
 /** Chạy script ở tiến trình con; trả exit code của nó. Tín hiệu dừng chuyển tiếp xuống. */
 function runScript(file, args) {
@@ -88,6 +112,10 @@ async function main(argv) {
   }
   if (cmd === "run") {
     const [worker, ...args] = rest;
+    if (asksHelp(rest) || asksHelp(args)) {
+      process.stdout.write(`${RUN_ROWS.map(([k, h]) => `dùng: crew ${k}  ${h}`).join("\n")}\n`);
+      return 0;
+    }
     const file = ADAPTERS[worker];
     if (!file) {
       process.stderr.write(`crew run: worker phải là anti|codex, nhận "${worker ?? ""}"\n`);
@@ -106,6 +134,10 @@ async function main(argv) {
     const gate = await quotaGate(worker, expanded, { cwd: process.cwd() });
     if (gate.refuse !== null) return gate.refuse;
     return runScript(file, gate.argv);
+  }
+  if ((SCRIPT_COMMANDS[cmd] || CLI_COMMANDS[cmd]) && asksHelp(rest) && !SCRIPT_COMMANDS[cmd]?.ownHelp) {
+    process.stdout.write(commandHelp(cmd));
+    return 0;
   }
   if (SCRIPT_COMMANDS[cmd]) return runScript(SCRIPT_COMMANDS[cmd].file, rest);
   if (CLI_COMMANDS[cmd]) {

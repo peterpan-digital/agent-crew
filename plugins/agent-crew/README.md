@@ -49,8 +49,10 @@ Hết quota **giữa** job thì Codex tự báo trong stream; `codex-run` ghi l�
 Codex giữa job" kèm lệnh `--resume <thread>` thay vì đuôi stderr. Tắt bằng `--quota-check off` (một lệnh) hoặc
 `CREW_QUOTA_CHECK=off`.
 
-`crew --help` liệt kê mọi lệnh. Lệnh nào đã có script thì chạy đúng script đó ở tiến
-trình con, giữ nguyên tham số và exit code; cờ lạ vẫn bị script từ chối.
+`crew --help` liệt kê mọi lệnh, `crew <lệnh> --help` (hoặc `-h`) in cách dùng của riêng
+lệnh đó rồi exit 0 — cờ phải đứng ngay sau lệnh, để `--help` nằm ở chỗ giá trị của cờ
+khác không bị nuốt. Lệnh nào đã có script thì chạy đúng script đó ở tiến trình con,
+giữ nguyên tham số và exit code; cờ lạ vẫn bị script từ chối.
 
 ## Bố cục thư mục: `crew.config.json`
 
