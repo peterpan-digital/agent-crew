@@ -189,8 +189,18 @@ function fire(prompt, { ws = WS, event = "UserPromptSubmit", env = {} } = {}) {
   const body = readFileSync(LOG, "utf8");
   const last = JSON.parse(body.trim().split("\n").pop());
   t.check("log KHÔNG chứa nội dung prompt", body.includes("BÍ_MẬT_KHÔNG_ĐƯỢC_LỌT_VÀO_LOG"), false);
-  t.check("log đúng schema", Object.keys(last).sort().join(","), "branch,decision,triggers,ts");
+  t.check("log đúng schema", Object.keys(last).sort().join(","), "branch,decision,from,triggers,ts");
   t.check("log ghi id trigger", last.triggers.includes("internal-link"), true);
+  t.check("prompt của owner ghi from=user", last.from, "user");
+
+  // Đo 11–12/11: tin chéo session ghi `consider` y như prompt owner và không có
+  // trường nguồn, nên 24h log ra 39 consider / 2 turn — tỉ lệ không đọc được.
+  // `from` tách hai nguồn ra; peer vẫn không bắt ghi dòng quyết định như cũ.
+  rmSync(LOG, { force: true });
+  fire("Another Claude session sent a message: chèn link nội bộ cho 40 bài");
+  const peer = JSON.parse(readFileSync(LOG, "utf8").trim().split("\n").pop());
+  t.check("tin chéo session ghi from=peer", peer.from, "peer");
+  t.check("...vẫn là một dòng gate bình thường", peer.decision, "suggest");
   t.check("có CREW_GATE_LOG thì không ghi vào routingLog của repo", existsSync(join(WS, ".crew/logs/routing-gate.jsonl")), false);
 
   const env = cleanEnv();
