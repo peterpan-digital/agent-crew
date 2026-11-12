@@ -447,4 +447,10 @@ t.check("MANIFEST_VERSION không nâng", MANIFEST_VERSION, 3);
   t.check("codex-run: job sạch không có holdsTamper", readManifest(manifestPath).jobs[0].holdsTamper, undefined);
 }
 
+// Đo 11/11: dispatcher gõ `crew hold --help` để xem cách dùng, nhận "cờ lạ" và exit 2.
+for (const flag of ["--help", "-h"]) {
+  const p = spawnSync("node", [HOLD, flag], { encoding: "utf8" });
+  t.check(`crew hold ${flag} → in cách dùng, exit 0`, p.status === 0 && /usage: crew hold <manifest\.json> list/.test(p.stdout), true);
+}
+
 process.exit(t.finish() ? 0 : 1);
