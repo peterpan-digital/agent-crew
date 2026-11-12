@@ -83,14 +83,22 @@ function gitBranch(ws) {
   return p.status === 0 ? p.stdout.trim() : null;
 }
 
-/** Schema chốt: thời điểm, branch git, quyết định, id trigger. KHÔNG BAO GIỜ ghi nội dung prompt. */
-function logFire(path, ws, decision, hits) {
+/**
+ * Schema chốt: thời điểm, branch git, quyết định, nguồn prompt, id trigger.
+ * KHÔNG BAO GIỜ ghi nội dung prompt.
+ *
+ * `from` là `user` (owner gõ) hay `peer` (tin chéo từ session khác). Đo 11–12/11:
+ * hai nguồn ghi lẫn nhau nên 24h log ra 39 `consider` / 2 `turn` — chỉ prompt owner
+ * mới bắt ghi dòng quyết định, nên tỉ lệ đọc như nhau là sai. Tách nguồn ra thì
+ * mẫu số đúng. Luật bắt ghi không đổi: peer vẫn không bị bắt ghi dòng quyết định.
+ */
+function logFire(path, ws, decision, hits, from) {
   try {
     mkdirSync(dirname(path), { recursive: true });
     try {
       if (statSync(path).size > LOG_MAX_BYTES) renameSync(path, `${path}.1`);
     } catch { /* chưa có file */ }
-    appendFileSync(path, `${JSON.stringify({ ts: new Date().toISOString(), branch: gitBranch(ws), decision, triggers: hits.map((h) => h.id) })}\n`, { mode: 0o600 });
+    appendFileSync(path, `${JSON.stringify({ ts: new Date().toISOString(), branch: gitBranch(ws), decision, from, triggers: hits.map((h) => h.id) })}\n`, { mode: 0o600 });
   } catch { /* log hỏng không được ảnh hưởng lượt của người dùng */ }
 }
 
@@ -123,7 +131,7 @@ function promptGate(payload, start) {
   if (branch === "none") return;
   const logPath = gateLogPath(config, ws);
   if (logPath) {
-    logFire(logPath, ws, branch, hits);
+    logFire(logPath, ws, branch, hits, kind);
     // Tin của session khác vẫn được cân nhắc nhưng không bắt dòng quyết định:
     // phần lớn là báo cáo trạng thái, bắt ghi thì log toàn `missing`.
     if ((branch === "delegate" || branch === "consider") && kind === "user") markPending(logPath, payload.session_id, branch);
