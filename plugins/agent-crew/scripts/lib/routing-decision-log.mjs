@@ -111,6 +111,13 @@ function isUserPrompt(e) {
 export const NO_TASK_MAX_TOOL_CALLS = 3;
 
 /**
+ * Tool ghi sổ của app desktop (task list, ô next-step): app bắt gọi ở gần như mọi
+ * lượt, không phải việc. Đếm vào thì lượt xác nhận 2 lệnh + wrap_up thành `missing`
+ * (đo 12/11: Digital Project, lượt owner "duyệt ok hết" ghi memory 2 lệnh → missing/3).
+ */
+const BOOKKEEPING_TOOL = /^mcp__ccd_turn__/;
+
+/**
  * Lượt vừa xong: dòng `Định tuyến: …` đầu tiên Claude viết từ prompt cuối (hoặc
  * null) và số lượt gọi tool. Gate bắn ở mọi prompt đủ dài, kể cả câu hỏi; Claude
  * đúng khi không ghi dòng cho câu hỏi, nên "không có dòng" chỉ là quên khi lượt
@@ -126,7 +133,7 @@ export function lastTurnSummary(transcriptPath) {
     for (const e of entries.slice(i + 1)) {
       if (e?.type !== "assistant") continue;
       for (const b of e.message?.content ?? []) {
-        if (b?.type === "tool_use") toolCalls += 1;
+        if (b?.type === "tool_use" && !BOOKKEEPING_TOOL.test(b.name ?? "")) toolCalls += 1;
         if (line || b?.type !== "text" || typeof b.text !== "string") continue;
         const at = b.text.indexOf(DECISION_LABEL);
         if (at >= 0) line = b.text.slice(at + DECISION_LABEL.length).split("\n")[0].replace(/[`*]/g, "").trim();
