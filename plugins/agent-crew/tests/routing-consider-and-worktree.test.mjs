@@ -105,6 +105,18 @@ t.check("không có dòng → missing", routesOf(null).join(), "missing");
   hook("stop", AGG, { session_id: "sess-q", transcript_path: transcript });
   t.check("câu hỏi (không gọi tool, không có dòng) → no-task, không tính là quên", `${logOf(AGG).at(-1).routes.join()}/${logOf(AGG).at(-1).toolCalls}`, "no-task/0");
 
+  // Owner duyệt xong, Claude chỉ ghi memory 2 lệnh rồi gọi tool ghi sổ của app
+  // (wrap_up / update_plan) — không phải việc, không được đẩy lượt sang `missing`.
+  prompt(AGG, "ok mấy template còn lại duyệt ok hết rồi nhé", "sess-ack");
+  writeFileSync(transcript, [
+    { type: "user", message: { content: "ok mấy template còn lại duyệt ok hết rồi nhé" } },
+    { type: "assistant", message: { content: [{ type: "tool_use", name: "mcp__ccd_turn__update_plan" }, { type: "tool_use", name: "Write" }] } },
+    { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash" }, { type: "tool_use", name: "mcp__ccd_turn__wrap_up" }] } },
+    { type: "assistant", message: { content: [{ type: "text", text: "Đã ghi lại, cả 4 template chốt." }] } },
+  ].map((e) => JSON.stringify(e)).join("\n"));
+  hook("stop", AGG, { session_id: "sess-ack", transcript_path: transcript });
+  t.check("tool ghi sổ của app không tính vào số lượt gọi → no-task", `${logOf(AGG).at(-1).routes.join()}/${logOf(AGG).at(-1).toolCalls}`, "no-task/2");
+
   const quiet = logOf(AGG).length;
   prompt(AGG, "ok merge luôn", "sess-c");
   hook("stop", AGG, { session_id: "sess-c", transcript_path: transcript });
