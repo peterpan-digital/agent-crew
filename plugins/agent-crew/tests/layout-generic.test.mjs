@@ -145,4 +145,32 @@ function bareRepo(prefix) {
   t.check("...và manifest không bị chép thêm layout khi chỉ đọc", "layout" in JSON.parse(readFileSync(join(ws, runRel, "manifest.json"), "utf8")), false);
 }
 
+// ---- hai session chạy hai run cùng lúc trong một workspace ----
+{
+  // Đo 13/11/2026 ở một repo dùng layout `.crew/runs/{run}`: 5 run mở cùng
+  // lúc, collect của 4 run báo SCOPE_VIOLATION cho manifest/brief/evidence của
+  // run bên cạnh (dispatcher của run đó ghi, không runtime nào khai), nên exit 2
+  // dù không worker nào ghi sai chỗ.
+  const ws = bareRepo("generic-neighbour-");
+  const mineRel = ".crew/runs/261113-2343";
+  const theirsRel = ".crew/runs/261113-2350";
+  const { manifestPath } = createRun({ runDir: join(ws, mineRel), runId: "261113-2343", workspace: ws });
+  const j = addJob(manifestPath, { worker: "codex", role: "assist", title: "x", evidence: `${mineRel}/worker-codex-1.md` });
+  updateJob(manifestPath, j.seq, { status: "running", startedAt: new Date(Date.now() - 60_000).toISOString() });
+  const other = createRun({ runDir: join(ws, theirsRel), runId: "261113-2350", workspace: ws });
+  addJob(other.manifestPath, { worker: "antigravity", role: "assist", title: "y", evidence: `${theirsRel}/worker-anti-1.md` });
+  writeFile(join(ws, theirsRel, "brief-anti-1.md"), "brief\n");
+  writeFile(join(ws, theirsRel, "worker-anti-1.md"), DONE);
+  writeFile(join(ws, mineRel, "worker-codex-1.md"), DONE);
+  updateJob(manifestPath, j.seq, { status: "done", endedAt: new Date().toISOString(), exitCode: 0 });
+  const r = collectRun(manifestPath, { workspace: ws });
+  t.check("file trong thư mục run khác không bị tính vi phạm", r.scope.outOfScope.map((e) => e.path).join(","), "");
+  t.check("...mà báo là của run đó", r.scope.ownedElsewhere.some((e) => e.path === `${theirsRel}/brief-anti-1.md` && /261113-2350/.test(e.owner)), true);
+  t.check("...nên run qua", r.exitCode, 0);
+
+  writeFile(join(ws, "src", "app.js"), "x\n");
+  const r2 = collectRun(manifestPath, { workspace: ws, graceMs: 24 * 3600_000 });
+  t.check("file ngoài mọi thư mục run vẫn bị tính", r2.scope.outOfScope.some((e) => e.path === "src/app.js"), true);
+}
+
 process.exit(t.finish() ? 0 : 1);

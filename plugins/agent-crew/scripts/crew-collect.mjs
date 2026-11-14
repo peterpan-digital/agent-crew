@@ -730,7 +730,7 @@ function report(r) {
     }
   }
   if (r.scope.ownedElsewhere.length) {
-    console.log("\nCỦA RUN KHÁC (không tính vào run này) — worker của run đó tự khai đã ghi:");
+    console.log("\nCỦA RUN KHÁC (không tính vào run này) — worker của run đó tự khai đã ghi, hoặc file nằm trong thư mục run đó:");
     for (const p of r.scope.ownedElsewhere) console.log(`  ${p.path} → ${p.owner}`);
   }
   if (r.scope.dismissed.length) {

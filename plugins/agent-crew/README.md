@@ -368,7 +368,7 @@ nó. Hạ `theo thời gian` xuống cảnh báo là mở cửa cho mọi vi ph�
 
 | Đường | Làm gì |
 | --- | --- |
-| Run khác sở hữu | File mà worker của một run crew khác tự khai đã ghi thì báo là của run đó, không tính vào run này. Quyết bằng **authorship**, không bằng thời gian — `MAX_PARALLEL` 3 với grace 2 phút thì cửa sổ run nào cũng chồng nhau |
+| Run khác sở hữu | File mà worker của một run crew khác tự khai đã ghi, hoặc file nằm trong thư mục của một run khác (manifest, brief, evidence do dispatcher run đó ghi), thì báo là của run đó, không tính vào run này. Quyết bằng **authorship** hoặc **chỗ nằm**, không bằng thời gian — `MAX_PARALLEL` 3 với grace 2 phút thì cửa sổ run nào cũng chồng nhau. File control plane / được bảo vệ không bao giờ được miễn theo cách này |
 | `headSha` | `createRun` ghi HEAD lúc bắt đầu; collect so lại và nêu số commit đã vào trong lúc run, kèm câu nói rõ gate **không** soi được nội dung chúng |
 | `--not-ours <path> --reason "<vì sao>"` | Bác một path cụ thể. `--reason` là bắt buộc, lý do ghi vào `manifest.dismissedPaths` và in trong report; lần chạy sau không tố lại |
 
