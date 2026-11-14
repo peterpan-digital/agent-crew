@@ -406,7 +406,8 @@ export function authoredIndex(manifest, workspace) {
 }
 
 /**
- * path -> "{runId} job {seq}" for files another crew run's worker says it wrote.
+ * path -> "{runId} job {seq}" for files another crew run's worker says it wrote,
+ * or "{runId} (thư mục run)" for files inside another run's own directory.
  *
  * Ownership across runs is decided by authorship, never by time. With
  * MAX_PARALLEL 3 and a two-minute grace, every concurrent run's windows overlap,
@@ -415,6 +416,7 @@ export function authoredIndex(manifest, workspace) {
  */
 export function foreignAuthors(manifest, workspace, { now = Date.now() } = {}) {
   const owners = new Map();
+  const homes = [];
   let read = 0;
   for (const run of listRuns(workspace, layoutOf(manifest))) {
     if (read >= CROSS_RUN_LIMIT) break;
@@ -427,6 +429,13 @@ export function foreignAuthors(manifest, workspace, { now = Date.now() } = {}) {
     const created = Date.parse(other.createdAt ?? "");
     if (!Number.isFinite(created) || now - created > CROSS_RUN_AGE_MS) continue;
     read += 1;
+    // Thư mục của run kia là chỗ dispatcher của nó ghi manifest, brief, evidence
+    // -- không runtime nào khai các file đó vào touchedFiles. Đo 13/11/2026: năm
+    // run mở cùng lúc ở layout `.crew/runs/{run}`, collect của bốn run báo
+    // SCOPE_VIOLATION cho file của run bên cạnh và exit 2. Quy theo chỗ nằm, lấy
+    // từ đường thật trên đĩa (`run.rel`), không lấy runDir do manifest tự khai.
+    // Layout có task thì thư mục run nằm trong task, vốn đã thuộc phạm vi run.
+    if (run.rel) homes.push({ prefix: normalizePrefix(run.rel), owner: `${other.runId} (thư mục run)` });
     for (const job of other.jobs ?? []) {
       for (const p of job.touchedFiles ?? []) {
         const rel = toRel(workspace, p);
@@ -436,7 +445,11 @@ export function foreignAuthors(manifest, workspace, { now = Date.now() } = {}) {
       }
     }
   }
-  return owners;
+  const own = normalizePrefix(runHome(manifest));
+  return {
+    has: (path) => owners.has(path) || homes.some((h) => underPrefix(path, h.prefix) && !underPrefix(path, own)),
+    get: (path) => owners.get(path) ?? homes.find((h) => underPrefix(path, h.prefix))?.owner,
+  };
 }
 
 export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE_MS, notOurs = [] } = {}) {
