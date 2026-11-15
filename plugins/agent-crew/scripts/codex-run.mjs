@@ -343,6 +343,22 @@ function collectFileChange(line, into) {
 }
 
 /**
+ * Công cụ MCP Codex gọi trong job, dạng `server.tool`. Server MCP do tiến trình
+ * Codex mở, nằm NGOÀI permission profile (profile chỉ khoá lệnh Codex chạy), nên
+ * job có gọi MCP thì collect thôi tin sandbox ghi của nó (xem crew-scope).
+ */
+function collectMcpCall(line, into) {
+  if (!line || !line.includes("mcp_tool_call")) return false;
+  let d;
+  try { d = JSON.parse(line); } catch { return false; }
+  if (d?.item?.type !== "mcp_tool_call") return false;
+  const name = `${d.item.server ?? "mcp"}.${d.item.tool ?? "?"}`;
+  if (into.has(name)) return false;
+  into.add(name);
+  return true;
+}
+
+/**
  * The session id, for resuming this job later.
  *
  * It has been on the wire since at least 27/08 -- every stored sidecar opens
@@ -471,6 +487,7 @@ function prepareRun(options) {
   const writeSandbox = planWriteSandbox({
     manifest: options.manifest ? readManifest(options.manifest) : null,
     seq: options.job ? Number(options.job) : null,
+    workspace,
     enabled: writeSandboxEnabled(workspace),
     skipReason: sandboxMode !== "workspace-write" ? `--sandbox-mode ${sandboxMode}: job chạy ngoài sandbox` : null,
     kind: "codex-permissions",
@@ -617,6 +634,7 @@ export async function codexRun(options) {
     let events = 0;
     let residual = "";              // a chunk can split a line; count whole lines only
     const touched = new Set();      // paths codex says it wrote, from file_change events
+    const mcpCalls = new Set();     // công cụ MCP đã gọi: đường ghi ngoài sandbox
     let usage = null;               // last turn.completed usage (thread total, see codexTurnUsage)
     let threadId = null;            // the session id, for a later `exec resume`
     let nextHeartbeat = 25;
@@ -834,6 +852,11 @@ export async function codexRun(options) {
       events += parts.filter(Boolean).length;
       for (const line of parts) {
         collectFileChange(line, touched);
+        // Ghi sổ ngay lúc thấy, không đợi cuối job: job chết giữa chừng vẫn phải
+        // mang dấu "đã đi đường ngoài sandbox" cho collect.
+        if (collectMcpCall(line, mcpCalls) && writeSandbox?.kind && options.manifest && options.job) {
+          try { updateJobSync(options.manifest, Number(options.job), { sandboxBypass: [...mcpCalls] }); } catch { /* collect vẫn đọc được từ stream nếu cần */ }
+        }
         usage = codexTurnUsage(line, usage);
         streamError = collectCodexError(line, streamError);
         const next = collectThreadId(line, threadId);

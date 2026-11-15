@@ -26,7 +26,7 @@
  * while their evidence was complete.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { resolveAntiEnv } from "./anti-env.mjs";
 import { antiStatus } from "./anti-status.mjs";
@@ -147,7 +147,7 @@ function spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId, sa
     try {
       // Sandbox ghi: seatbelt bọc cả tiến trình agy, kể cả lệnh nó sinh ra.
       // sandbox-exec exec thẳng sang agy (cùng pid), nên giết nhóm vẫn trúng agy.
-      child = spawn(sandboxProfile ? SEATBELT : "agy", sandboxProfile ? ["-f", sandboxProfile, "agy", ...args] : args, {
+      child = spawn(sandboxProfile ? SEATBELT : "agy", sandboxProfile ? ["-p", sandboxProfile, "agy", ...args] : args, {
         cwd: workspace,
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
@@ -670,6 +670,7 @@ export async function antiRun(options, deps = {}) {
   const writeSandbox = planWriteSandbox({
     manifest: options.manifest && options.job ? readManifest(options.manifest) : null,
     seq: options.job ? Number(options.job) : null,
+    workspace,
     enabled: writeSandboxEnabled(workspace),
     skipReason: mode !== "headless" ? `transport ${mode}: crew không bọc được tiến trình của app` : null,
     kind: "seatbelt",
@@ -701,14 +702,10 @@ export async function antiRun(options, deps = {}) {
       unsupported: { title: "--title", quietWarn: "--quiet-warn", quietAlert: "--quiet-alert", chat: "--chat" },
     });
     const resumeId = resolveResume(options, { worker: "antigravity", mode, supportsResume: true });
-    let sandboxProfile = null;
-    if (writeSandbox?.kind) {
-      const layout = jobLayout({ manifest: options.manifest, workspace });
-      const logDir = resolveLogDir(evidenceAbs, workspace, layout);
-      mkdirSync(logDir, { recursive: true });
-      sandboxProfile = join(logDir, `${basename(evidenceAbs).replace(/\.[^.]+$/, "")}.write-sandbox.sb`);
-      writeFileSync(sandboxProfile, seatbeltProfile({ workspace, ...writeSandbox }));
-    }
+    // Profile truyền thẳng bằng chuỗi (`sandbox-exec -p`), không qua file: file nằm
+    // trong thư mục log, mà ở layout có task thì đó là chỗ worker ghi được — worker
+    // sửa nó thành `(allow default)` là lượt cứu handoff chạy không sandbox.
+    const sandboxProfile = writeSandbox?.kind ? seatbeltProfile({ workspace, ...writeSandbox }) : null;
     return runHeadless({
       promptText, workspace, evidenceAbs, model: options.model, timeout,
       agyMode: options.agyMode, resumeId, sandboxProfile,

@@ -13,14 +13,14 @@
  * Run: node plugins/agent-crew/tests/write-sandbox.test.mjs
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addJob, createRun, readManifest, updateJob } from "../scripts/crew-manifest.mjs";
+import { addJob, claimRunSlot, createRun, readManifest, updateJob } from "../scripts/crew-manifest.mjs";
 import { collectWriteScope, sandboxAllows } from "../scripts/crew-scope.mjs";
 import { WRITE_LOCK_LINE } from "../scripts/crew-guards.mjs";
 import {
-  SEATBELT, codexProfileArgs, probeCodexProfile, probeSeatbelt, sandboxDenials, seatbeltProfile, writeScopeFor,
+  SEATBELT, codexProfileArgs, planWriteSandbox, probeCodexProfile, probeSeatbelt, sandboxDenials, seatbeltProfile, writeScopeFor,
 } from "../scripts/lib/write-sandbox.mjs";
 import { FIXTURE_BIN, MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
 
@@ -53,6 +53,9 @@ const env = (extra = {}) => ({ ...process.env, PATH: `${FIXTURE_BIN}:${process.e
   t.check("...ngoài vùng", sandboxAllows(sb, "plans/p.md"), false);
   t.check("...job không sandbox thì coi như ghi được mọi chỗ", sandboxAllows({ kind: null, reason: "x" }, "plans/p.md"), true);
   t.check("...readOnly trong vùng ghi bị chặn", sandboxAllows({ kind: "seatbelt", writable: ["a"], readOnly: ["a/.claude"] }, "a/.claude/x"), false);
+  t.check("...so không phân biệt hoa thường, bỏ ./ (đĩa macOS)", sandboxAllows({ kind: "seatbelt", writable: ["./SRC"] }, "src/x.js"), true);
+  t.check("workspace bắn khác workspace của sổ → không khoá, nói vì sao",
+    /khác workspace của sổ/.test(planWriteSandbox({ manifest: m, seq: 1, workspace: tmpdir(), kind: "seatbelt", probe: () => ({ ok: true }) }).reason ?? ""), true);
 }
 
 // --- tham số Codex: đường có dấu cách / ngoặc kép vẫn là TOML hợp lệ -----------------------
@@ -63,7 +66,7 @@ const env = (extra = {}) => ({ ...process.env, PATH: `${FIXTURE_BIN}:${process.e
   t.check("...đường có dấu cách và ngoặc kép được escape", fs.includes('"/x/Digital Project/a \\"b\\""="write"'), true);
   t.check("...readOnly trong vùng ghi", fs.includes('"/x/Digital Project/a \\"b\\"/.git"="read"'), true);
   t.check("...mạng mở như trước", args.at(-1).includes("enabled=true"), true);
-  t.check("probe không mở thư mục tạm", codexProfileArgs({ workspace: "/w", writable: ["w"] }, { tmp: false }).join(" ").includes(":tmpdir"), false);
+  t.check("workspace tự khai chỉ đọc (dưới /tmp không bị quyền thư mục tạm phủ)", codexProfileArgs({ workspace: "/w", writable: ["r"] }).join(" ").includes('"/w"="read"'), true);
 }
 
 // --- seatbelt thật: chặn ngoài vùng, chặn readOnly trong vùng ------------------------------
@@ -116,6 +119,10 @@ function codexJob(s, { mode = "argvdump", extra = [], e = {} } = {}) {
   const b = newRun([{ ev: "c-1.md" }]);
   codexJob(b, { mode: "briefdump", e: { FAKE_SANDBOX: "enforce" } });
   t.check("...brief nói với worker vùng ghi bị khoá", readFileSync(join(b.ws, RUN_REL, "c-1.md"), "utf8").includes(WRITE_LOCK_LINE), true);
+
+  const mcp = newRun([{ ev: "c-1.md" }]);
+  codexJob(mcp, { mode: "mcp_call", e: { FAKE_SANDBOX: "enforce" } });
+  t.check("job gọi MCP: sổ ghi sandboxBypass (MCP nằm ngoài profile)", (readManifest(mcp.manifestPath).jobs[0].sandboxBypass ?? []).join(","), "node_repl.js");
 
   const resume = newRun([{ ev: "c-1.md" }]);
   const rr = codexJob(resume, { mode: "thread", extra: ["--resume", "01a04169-2763-79d1-9037-6dc85981fad1"], e: { FAKE_SANDBOX: "enforce" } });
@@ -174,13 +181,32 @@ if (existsSync(SEATBELT)) {
   const after = collectWriteScope(readManifest(s.manifestPath), { workspace: s.ws });
   t.check("có sandbox: không còn vi phạm", after.outOfScope.length, 0);
   // Sổ do crew ghi (không phải worker) cũng nằm ngoài vùng ghi của worker: chỉ đọc với nó.
+  const env = writeFile(join(s.ws, ".env"), "X=1\n");
+  utimesSync(env, new Date(now - 20_000), new Date(now - 20_000));
+  const guard = collectWriteScope(readManifest(s.manifestPath), { workspace: s.ws });
+  t.check("file bảo vệ đổi trong lúc job sandbox chạy: vẫn bị tính, không bị loại", guard.protectedHits.some((x) => x.path === ".env"), true);
+  rmSync(env);
+  updateJob(s.manifestPath, 1, { sandboxBypass: ["node_repl.js"] });
+  const bypass = collectWriteScope(readManifest(s.manifestPath), { workspace: s.ws });
+  t.check("job đã gọi MCP: collect thôi tin sandbox, đoán theo giờ như cũ", bypass.outOfScope.some((x) => x.path === "plans/other-session.md"), true);
+  updateJob(s.manifestPath, 1, { sandboxBypass: undefined });
   t.check("...file vào mục sandboxExcluded", after.sandboxExcluded.map((x) => x.path).sort().join(","), `plans/other-session.md,${RUN_REL}/manifest.json`);
+}
+
+// --- claim lại xoá sandbox của lượt trước, trong khoá ------------------------------------
+{
+  const s = newRun([{ ev: "k-1.md" }]);
+  updateJob(s.manifestPath, 1, { status: "failed", writeSandbox: { kind: "seatbelt", writable: ["tasks/t"] }, sandboxBypass: ["x.y"], sandboxDenied: ["a"] });
+  claimRunSlot(s.manifestPath, 1, { startedAt: new Date().toISOString(), timeoutMs: 60_000 });
+  const j = readManifest(s.manifestPath).jobs[0];
+  t.check("claim lại: không còn writeSandbox/sandboxBypass/sandboxDenied của lượt trước", `${j.writeSandbox}/${j.sandboxBypass}/${j.sandboxDenied}`, "undefined/undefined/undefined");
 }
 
 // --- đọc chữ bị chặn -------------------------------------------------------------------
 {
   const d = sandboxDenials('{"aggregated_output":"touch: other/r.txt: Operation not permitted\\n"} 2) patch rejected: writing outside of the project');
   t.check("sandboxDenials: path shell + apply_patch", `${d.paths.join(",")}/${d.patch}`, "other/r.txt/true");
+  t.check("...dạng zsh (viết thường, path đứng sau)", sandboxDenials("zsh:1: operation not permitted: .crew/runs/x/manifest.json").paths.join(","), ".crew/runs/x/manifest.json");
 }
 
 process.exit(t.finish() ? 0 : 1);

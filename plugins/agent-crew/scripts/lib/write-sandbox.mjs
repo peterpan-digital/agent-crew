@@ -23,7 +23,7 @@
  * cổng đoán theo giờ, không tệ hơn.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { allowedFor, guardLists } from "../crew-scope.mjs";
@@ -68,12 +68,10 @@ const toml = (s) => JSON.stringify(s);
  * `-c` cho Codex: cả máy chỉ đọc, vùng ghi + thư mục tạm được ghi, control plane
  * trong vùng ghi lại chỉ đọc; mạng mở như `network_access=true` trước đây (job
  * GSC/GA4/crawl cần). Thay cho `--sandbox workspace-write` và cờ mạng cũ.
- * `tmp: false` chỉ dùng cho probe, vì thư mục thử nằm trong thư mục tạm.
  */
-export function codexProfileArgs({ workspace, writable, readOnly = [] }, { tmp = true } = {}) {
+export function codexProfileArgs({ workspace, writable, readOnly = [] }) {
   const ws = realWorkspace(workspace);
-  const entries = [[":root", "read"]];
-  if (tmp) entries.push([":tmpdir", "write"], [":slash_tmp", "write"]);
+  const entries = [[":root", "read"], [":tmpdir", "write"], [":slash_tmp", "write"]];
   // Workspace chỉ đọc, khai riêng: luật cụ thể hơn thắng, nên một workspace nằm dưới
   // /tmp hay $TMPDIR không bị quyền ghi thư mục tạm phủ lên (đo 15/11 với codex 0.164).
   entries.push([ws, "read"]);
@@ -135,16 +133,14 @@ function probeWith(run) {
 export function probeSeatbelt() {
   if (process.platform !== "darwin") return { ok: false, reason: `không có seatbelt trên ${process.platform}` };
   if (!existsSync(SEATBELT)) return { ok: false, reason: `không có ${SEATBELT}` };
-  return probeWith((dir, cmd) => {
-    const profile = join(dir, "probe.sb");
-    writeFileSync(profile, seatbeltProfile({ workspace: dir, writable: ["w"] }));
-    return spawnSync(SEATBELT, ["-f", profile, "/bin/sh", "-c", cmd], { encoding: "utf8", timeout: PROBE_TIMEOUT_MS });
-  });
+  return probeWith((dir, cmd) => spawnSync(SEATBELT, ["-p", seatbeltProfile({ workspace: dir, writable: ["w"] }), "/bin/sh", "-c", cmd], { encoding: "utf8", timeout: PROBE_TIMEOUT_MS }));
 }
 
 export function probeCodexProfile(cmd = "codex") {
   return probeWith((dir, sh) => spawnSync(cmd, [
-    "sandbox", ...codexProfileArgs({ workspace: dir, writable: ["w"] }, { tmp: false }), "--", "/bin/sh", "-c", sh,
+    // Đúng bộ `-c` job sẽ dùng, kể cả thư mục tạm: thư mục thử nằm trong thư mục tạm
+    // nhưng luật "workspace chỉ đọc" cụ thể hơn nên vẫn phải chặn được `o/`.
+    "sandbox", ...codexProfileArgs({ workspace: dir, writable: ["w"] }), "--", "/bin/sh", "-c", sh,
   ], { cwd: dir, encoding: "utf8", timeout: PROBE_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] }));
 }
 
@@ -157,6 +153,8 @@ export function sandboxDenials(text) {
   const s = String(text ?? "").replaceAll("\\n", "\n").replaceAll("\\\"", "\"");
   const paths = new Set();
   for (const m of s.matchAll(/([^\s:'"`]+): Operation not permitted/g)) paths.add(m[1]);
+  // zsh (shell của Codex) đảo thứ tự và viết thường: "operation not permitted: <path>" (đo 15/11).
+  for (const m of s.matchAll(/operation not permitted: ([^\s'"`]+)/g)) paths.add(m[1]);
   const patch = /writing outside of the project/.test(s);
   return { paths: [...paths].slice(0, 10), patch };
 }
@@ -167,10 +165,15 @@ export function sandboxDenials(text) {
  * (không có vùng ghi nào để khoá). Ghi vào sổ cả hai trường hợp đầu: collect chỉ
  * tin `kind`, và người đọc sổ cần biết vì sao một job KHÔNG được khoá.
  */
-export function planWriteSandbox({ manifest, seq, enabled = true, skipReason = null, kind, probe }) {
+export function planWriteSandbox({ manifest, seq, workspace, enabled = true, skipReason = null, kind, probe }) {
   if (!manifest || !seq) return null;
   if (skipReason) return { kind: null, reason: skipReason };
   if (!enabled) return { kind: null, reason: "crew.config.json khai writeSandbox: false" };
+  // Vùng ghi tính theo workspace của sổ; profile dựng theo workspace lúc bắn. Lệch
+  // nhau thì khoá sai cây: agy ghi lọt phần còn lại, Codex khoá chỗ không tồn tại.
+  if (workspace && manifest.workspace && realWorkspace(workspace) !== realWorkspace(manifest.workspace)) {
+    return { kind: null, reason: `--workspace ${workspace} khác workspace của sổ (${manifest.workspace})` };
+  }
   const tried = probe();
   if (!tried.ok) return { kind: null, reason: `tự thử chặn không đạt: ${tried.reason}` };
   return { kind, ...writeScopeFor(manifest, seq) };

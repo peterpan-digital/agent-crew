@@ -320,7 +320,8 @@ liệu thật. **Job cần một trong hai cờ, ra `401`, hoặc gate đỏ `KH
 Worker bị chặn thì stderr in `crew amend "$MP" --job N --allow <thư mục> --note "..."` rồi bắn lại
 kèm `--resume <thread>`; khai thêm chỉ khi việc thật sự cần chỗ đó. Stderr báo "chạy không có
 sandbox ghi" (tự thử không đạt, `danger-full-access`, Anti app, `writeSandbox: false`) thì job
-chạy như cũ và collect đoán phạm vi theo giờ.
+chạy như cũ và collect đoán phạm vi theo giờ. Job Codex gọi công cụ MCP cũng bị đoán theo giờ (MCP
+nằm ngoài sandbox, sổ ghi `sandboxBypass`).
 
 Cả hai adapter tự cập nhật sổ ở **cả 2 nhánh** xong và fail. Không tự sửa sổ sau đó nữa.
 

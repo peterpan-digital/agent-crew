@@ -342,6 +342,18 @@ Trước mỗi job crew tự thử chặn trong thư mục tạm (~1s, không t�
 collect đoán theo giờ như phần dưới. Worker bị chặn thì sổ ghi `sandboxDenied` và stderr in
 sẵn `crew amend <MP> --job N --allow <thư mục> --note "..."` + `--resume <thread>`.
 
+Ba chỗ collect **không** tin sandbox, vẫn tính như cũ:
+- File bảo vệ và control plane: không bao giờ bị loại theo sandbox — chỗ đắt nhất nếu có đường
+  ghi sandbox không che.
+- Job Codex có gọi công cụ MCP (sổ `sandboxBypass`): server MCP do tiến trình Codex mở, nằm ngoài
+  permission profile, nên job đó đoán theo giờ.
+- Job mà `--workspace` lúc bắn khác workspace của sổ: không khoá, sổ ghi lý do.
+
+`claimRunSlot` xoá `writeSandbox`/`sandboxBypass`/`sandboxDenied` của lượt trước trong khoá claim,
+nên lượt bắn lại ghi sổ hỏng thì sổ nói "không sandbox", không giữ lời của lượt trước. Sổ của run
+(`manifest.json`) chỉ đọc với worker. Giới hạn còn lại: ở layout có task, sổ của **run khác** cùng
+task vẫn nằm trong vùng ghi — cần một worker cố tình phá mới khai thác được.
+
 `git status` một mình không dùng được ở workspace này: repo thường xuyên mang sẵn
 hàng trăm file đang sửa dở của user, nên diff thuần sẽ tố cả những file run không
 hề chạm. Nên quy trách nhiệm bằng **mtime nằm trong khoảng từng job chạy**, không

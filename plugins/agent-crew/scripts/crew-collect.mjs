@@ -757,7 +757,10 @@ function report(r) {
   // Job chạy dưới sandbox ghi: hệ điều hành đã chặn worker ghi ra ngoài vùng, nên
   // file đổi ngoài vùng là của session khác — không cần --not-ours.
   if (r.scope.sandboxExcluded?.length) {
-    console.log(`  ${r.scope.sandboxExcluded.length} file đổi trong lúc job chạy nhưng ngoài vùng ghi của job đã sandbox (worker không ghi được tới đó) — không tính`);
+    const ex = r.scope.sandboxExcluded;
+    console.log(`  ${ex.length} file đổi trong lúc job chạy nhưng ngoài vùng ghi của job đã sandbox (worker không ghi được tới đó) — không tính:`);
+    for (const x of ex.slice(0, 10)) console.log(`    ${x.path} (job ${x.seqs.join("/")})`);
+    if (ex.length > 10) console.log(`    … và ${ex.length - 10} file nữa (đủ danh sách trong --json)`);
   }
   console.log("  Lưu ý: chỉ đọc working tree — file đã commit thì không thấy.");
   if (!r.head.known) {
