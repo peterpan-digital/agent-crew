@@ -160,15 +160,35 @@ export async function runChain(workerArg, argv, { cwd }) {
   try {
     if (!state.root.chainStartedAt) record({ chainStartedAt: new Date().toISOString() });
     record({ chainStoppedFor: undefined });
+    let firstPass = true;
     for (;;) {
       state = chainState(manifestPath, rootSeq);
       const { last, slices, elapsedMs } = state;
       const k = last.slice ?? 1;
+      // Gốc đã failed từ lượt gọi trước, trước khi lát nào chạy. Đo 15/11/2026: cổng
+      // trần 30m từ chối `--timeout 60m` trước khi spawn nhưng adapter vẫn ghi job là
+      // failed (để sổ có lý do); session gõ đúng lệnh `--chain` crew gợi ý thì chuỗi
+      // dừng câm "(failed), 0 phút" và session phải thêm job mới, chép brief. Gốc chưa
+      // có thread thì không có gì để nối hay để mất: bắn lại như `crew run` thường
+      // cho phép chạy lại job failed. Chỉ ở vòng đầu của lần gọi này, để lượt bắn lại
+      // hỏng tiếp thì dừng chứ không lặp.
+      const rootRefused = firstPass && slices.length === 1 && last.status === "failed";
+      const retryRoot = rootRefused && !last.conversationId;
+      firstPass = false;
       // Signal tới lúc không có lát nào chạy (đang kiểm handoff, đang ghi sổ).
       if (signalled) return stop(1, signalled.toLowerCase());
       if (last.status === "running") return stop(2, `lát ${k} (job ${last.seq}) đang chạy — đợi nó xong`);
+      if (rootRefused && !retryRoot) {
+        // Gốc đã chạy thật (có thread) rồi failed: bắn lại từ đầu sẽ bỏ việc đã làm,
+        // nên không tự bắn — nhưng phải nói vì sao chuỗi không chạy và đường tiếp.
+        const why = String(last.failure ?? "").split("\n").find((l) => l.trim()) ?? "không ghi lý do";
+        process.stderr.write(
+          `crew run --chain: job ${rootSeq} đã failed từ lượt trước (${why.trim()}), chuỗi không bắn lại\n`
+          + `  → chạy tiếp trên thread cũ: crew add-job rồi gọi --chain cho job mới kèm --resume ${last.conversationId}; hoặc giao lại từ đầu bằng job mới\n`,
+        );
+      }
 
-      if (last.status === "pending") {
+      if (last.status === "pending" || retryRoot) {
         const remaining = opts.budgetMs - elapsedMs;
         if (remaining < MIN_SLICE_MS) return stop(3, "hết budget");
         const timeoutSec = Math.floor(Math.min(opts.sliceMs, remaining) / 1000);

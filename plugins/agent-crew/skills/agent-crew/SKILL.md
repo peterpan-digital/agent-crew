@@ -6,7 +6,7 @@ when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, 
 category: agent-ops
 keywords: [crew, dispatch, multi-agent, song-song, codex, antigravity, worker]
 metadata:
-  version: "2.7.5"
+  version: "2.7.6"
 ---
 
 # agent-crew
@@ -342,6 +342,11 @@ thì job `failed` như cũ, `conversationId` vẫn ghi để resume tay.
 ```bash
 crew run codex --manifest "$MP" --job N --prompt-file "$BRIEF" --chain --timeout 30m --budget 4h
 ```
+
+Lỡ gõ `--timeout` trên 30m thì crew từ chối trước khi bắn (job ghi `failed`, chưa có thread) và
+in lệnh `--chain` thay thế: gọi lại lệnh đó trên **chính job N**, không cần `crew add-job` hay chép
+brief — chuỗi tự bắn lại job gốc chưa từng chạy. Job gốc đã chạy thật rồi `failed` (có
+`conversationId`) thì chuỗi không bắn lại, stderr in lý do cũ và đường `--resume`.
 
 Lát nào ra `CONTINUE` mà handoff qua kiểm cơ học (đủ 4 mục, `### Đang dở` khác lát trước,
 lát có đổi file, handoff không nhắc dispatch/quyền/control plane) thì crew tự ghi lát kế
