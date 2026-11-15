@@ -30,8 +30,11 @@ addJob(manifestPath, { worker: "antigravity", role: "owner", title: "slow", evid
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-const lateFile = join(ws, "late.txt");
-const pidFile = join(ws, "agy.pid");
+// Trong thư mục run: agy chạy dưới sandbox ghi, file ngoài vùng của job bị chặn sẵn
+// — đặt ở gốc workspace thì "file muộn không xuất hiện" đúng vì sandbox, không phải
+// vì lệnh con đã chết.
+const lateFile = join(runDir, "late.txt");
+const pidFile = join(runDir, "agy.pid");
 
 const child = spawn("node", [ANTI, "--prompt-file", brief, "--evidence", evidence, "--workspace", ws,
   "--timeout", "60s", "--manifest", manifestPath, "--job", "1"], {

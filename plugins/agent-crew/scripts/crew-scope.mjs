@@ -275,6 +275,18 @@ export function allowedFor(manifest, seqs) {
   return [...implicit, ...runLevel, ...perJob];
 }
 
+/**
+ * File `rel` có nằm trong vùng ghi mà sandbox của job đã khoá không (`job.writeSandbox`,
+ * do adapter ghi lúc bắn). Job không có sandbox thì coi như ghi được mọi chỗ — tức là
+ * cổng phải đoán như cũ.
+ */
+export function sandboxAllows(sandbox, rel) {
+  if (!sandbox?.kind || !Array.isArray(sandbox.writable)) return true;
+  const under = (p, prefix) => p === prefix || p.startsWith(`${prefix}/`);
+  if ((sandbox.readOnly ?? []).some((r) => under(rel, r))) return false;
+  return sandbox.writable.some((w) => under(rel, w));
+}
+
 /** Every prefix any job declared, for the walk that git cannot do. */
 function declaredPrefixes(manifest) {
   return [
@@ -461,8 +473,9 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
   const result = {
     intervals, inScope: [], outOfScope: [], suspect: [],
     protectedHits: [], outsideWindow: [], unattributable: [],
-    ownedElsewhere: [], dismissed: [], unusedDismissals: [],
+    ownedElsewhere: [], dismissed: [], unusedDismissals: [], sandboxExcluded: [],
   };
+  const sandboxOf = new Map(manifest.jobs.map((j) => [j.seq, j.writeSandbox]));
   const authored = authoredIndex(manifest, workspace);
   const foreign = foreignAuthors(manifest, workspace);
   const waived = new Set(notOurs.map((p) => toRel(workspace, p)).filter(Boolean));
@@ -482,9 +495,17 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
       continue;
     }
     const mine = authored.get(path);
-    const hits = intervals.filter((i) => mtime >= i.from && mtime <= i.to);
-    if (!mine && hits.length === 0) {
+    const inWindow = intervals.filter((i) => mtime >= i.from && mtime <= i.to);
+    if (!mine && inWindow.length === 0) {
       result.outsideWindow.push(path);
+      continue;
+    }
+    // Job chạy dưới sandbox ghi thì hệ điều hành đã chặn nó ghi ra ngoài vùng: file
+    // ngoài vùng không thể là của nó, khỏi đoán theo giờ. Đo 14/11/2026: ba job Anti
+    // chỉ ghi evidence mà collect bắt bác tay 26 file của session khác và log hook.
+    const hits = inWindow.filter((i) => sandboxAllows(sandboxOf.get(i.seq), path));
+    if (!mine && hits.length === 0) {
+      result.sandboxExcluded.push({ path, seqs: inWindow.map((i) => i.seq) });
       continue;
     }
 

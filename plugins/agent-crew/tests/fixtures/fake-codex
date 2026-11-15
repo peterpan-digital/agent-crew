@@ -19,6 +19,18 @@ if [ "$1" = "app-server" ]; then
   printf '{"id":2,"result":%s}\n' "$FAKE_CODEX_QUOTA"
   exit 0
 fi
+# `codex sandbox <-c …> -- <cmd>`: crew tự thử chặn trước job. FAKE_SANDBOX=enforce
+# chạy lệnh dưới seatbelt thật, chặn ghi vào thư mục `o/` của lần thử (Codex thật
+# chặn theo profile); không khai thì chạy trần — như Codex không hiểu profile —
+# để crew phải rơi về đường cũ.
+if [ "$1" = "sandbox" ]; then
+  [ -n "$FAKE_SANDBOX_ARGS" ] && printf '%s\n' "$*" > "$FAKE_SANDBOX_ARGS"
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done; shift
+  if [ "$FAKE_SANDBOX" = "enforce" ]; then
+    exec /usr/bin/sandbox-exec -p '(version 1)(allow default)(deny file-write* (regex #"/o/[^/]*$"))' "$@"
+  fi
+  exec "$@"
+fi
 EV="$FAKE_EVIDENCE"
 case "$FAKE_MODE" in
   ok)

@@ -65,7 +65,13 @@ gate: `crew hold "$MP" add --seq N --failed`, hỏi owner, rồi `answer <id> --
 gõ>" --outcome drop`. Hold khoá theo lần chạy; chỉ `--via chat` mới bỏ được; `resume` bị từ
 chối (làm lại thì `--replaced`). Job đã có `--replaced` hợp lệ thì `REPLACED` thắng.
 
-**File của session khác lọt vào `SCOPE_VIOLATION` thì bác có dấu vết, đừng nới ngưỡng:**
+**Job có sandbox ghi (`writeSandbox.kind` khác null) không bị tính file ngoài vùng của nó** —
+hệ điều hành đã chặn worker ghi tới đó, collect chỉ in số file bỏ qua. `SCOPE_VIOLATION` còn
+lại là của job không sandbox (sổ ghi lý do), hoặc file nằm trong vùng ghi của job.
+
+**File của session khác lọt vào `SCOPE_VIOLATION` thì bác có dấu vết, đừng nới ngưỡng** — từng
+path một, sau khi đọc; không dựng vòng lặp bác mọi dòng collect in ra (đo 14/11: bác 17 path
+bằng `sed` một lượt là bỏ luôn cái cổng):
 
 ```bash
 crew collect "$MP" --not-ours <path> --reason "<vì sao không phải của run này>"

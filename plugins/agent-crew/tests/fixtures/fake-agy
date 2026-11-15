@@ -39,6 +39,16 @@ case "$FAKE_MODE" in
     } > "$EV"
     printf '{"status":"SUCCESS","response":"done","conversation_id":"%s","duration_seconds":1,"num_turns":1}\n' "$CONV"
     exit 0 ;;
+  write_outside)
+    # Worker ghi bằng shell cả trong lẫn ngoài vùng của job (FAKE_INSIDE, FAKE_OUTSIDE):
+    # dưới sandbox ghi, file ngoài vùng phải bị hệ điều hành chặn.
+    touch "$FAKE_INSIDE"; touch "$FAKE_OUTSIDE"
+    {
+      printf 'ARGV=%s\n' "$*"
+      printf '\nStatus: DONE\nSummary: ok\n'
+    } > "$EV"
+    printf '{"status":"SUCCESS","response":"done","conversation_id":"%s","duration_seconds":1,"num_turns":1}\n' "$CONV"
+    exit 0 ;;
   no_conv_id)
     # A SUCCESS payload with no conversation_id: what a field rename or a
     # version bump looks like from out here. The adapter must not read the

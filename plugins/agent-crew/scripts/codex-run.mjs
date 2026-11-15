@@ -25,7 +25,7 @@
  * The prompt goes in on stdin rather than argv: a brief is a file, and argv has
  * a length limit that a long brief can reach.
  */
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { join, relative, resolve, sep } from "node:path";
 import { isWorkerRole } from "./lib/crew-role.mjs";
@@ -61,6 +61,7 @@ import { evidenceHasStatus, runHandoffRescue } from "./codex-handoff-rescue.mjs"
 import { LIVENESS_RECHECK_MS, createLivenessProbe } from "./lib/codex-liveness.mjs";
 import { codexExitDetail, collectCodexError } from "./lib/codex-failure.mjs";
 import { loadCrewConfig } from "./lib/crew-config.mjs";
+import { codexProfileArgs, denialHint, planWriteSandbox, probeCodexProfile, sandboxDenials } from "./lib/write-sandbox.mjs";
 import { assertAccount, listWorkspaceProfiles, resolveWorkspaceProfile, tokenEmail } from "./lib/workspace-cli-profile.mjs";
 // Dời sang crew-guards để anti-run dùng chung; giữ export ở đây cho test và nơi gọi cũ.
 export { resolveLogDir };
@@ -361,19 +362,22 @@ function collectThreadId(line, prev) {
   return typeof d.thread_id === "string" && d.thread_id ? d.thread_id : prev;
 }
 
-function buildArgs({ workspace, model, effort, lastMessagePath, sandboxMode = "workspace-write", resumeId = null }) {
+function buildArgs({ workspace, model, effort, lastMessagePath, sandboxMode = "workspace-write", resumeId = null, profileArgs = null }) {
   // workspace-write denies network by default, and the explicit --sandbox flag
   // outranks sandbox_mode in config.toml. Every network-bound job (GSC, GA4,
   // any crawl) returned BLOCKED with unresolvable DNS until this was set.
-  const NETWORK = ["-c", "sandbox_workspace_write.network_access=true"];
+  // Có sandbox ghi thì profile thay cả `--sandbox` lẫn cờ mạng: profile tự mở mạng,
+  // và vùng ghi hẹp hơn workspace-write (chỉ vùng của job, không cả workspace).
+  const POLICY = profileArgs ?? ["-c", "sandbox_workspace_write.network_access=true"];
   const args = [
     "exec",
     "--json",                        // JSONL events: the heartbeat this adapter watches
     "-C", workspace,
-    "--sandbox", sandboxMode,        // default: a worker writes inside the workspace, nowhere else
+    // default: a worker writes inside the workspace, nowhere else
+    ...(profileArgs ? [] : ["--sandbox", sandboxMode]),
     // Only on a fresh run. On a resume this same `-c` goes AFTER the subcommand
     // -- see below, and do not "tidy" it back up here.
-    ...(resumeId ? [] : NETWORK),
+    ...(resumeId ? [] : POLICY),
     "-o", lastMessagePath,
     "--color", "never",
   ];
@@ -405,7 +409,7 @@ function buildArgs({ workspace, model, effort, lastMessagePath, sandboxMode = "w
   //
   // `-m` and the effort `-c` below are already on the correct side of the
   // subcommand, which is why they are left where they are.
-  if (resumeId) args.push("resume", resumeId, ...NETWORK);
+  if (resumeId) args.push("resume", resumeId, ...POLICY);
   if (model) args.push("-m", model);
   if (effort) args.push("-c", `model_reasoning_effort=${effort}`);
   args.push("-");                    // read the prompt from stdin
@@ -462,6 +466,17 @@ function prepareRun(options) {
 
   assertEvidenceAbsent(evidenceAbs);
 
+  // Sandbox ghi: quyết trước khi soạn brief, vì hợp đồng trong brief nói với worker
+  // vùng ghi có bị hệ điều hành khoá hay không.
+  const writeSandbox = planWriteSandbox({
+    manifest: options.manifest ? readManifest(options.manifest) : null,
+    seq: options.job ? Number(options.job) : null,
+    enabled: writeSandboxEnabled(workspace),
+    skipReason: sandboxMode !== "workspace-write" ? `--sandbox-mode ${sandboxMode}: job chạy ngoài sandbox` : null,
+    kind: "codex-permissions",
+    probe: () => probeCodexProfile(),
+  });
+
   // The log lives in the layout's logDir (see resolveLogDir).
   const logDir = resolveLogDir(evidenceAbs, workspace, layout);
   mkdirSync(logDir, { recursive: true });
@@ -473,12 +488,18 @@ function prepareRun(options) {
     evidenceAbs,
     workspace,
     unsandboxed: sandboxMode !== "workspace-write",
+    writeLocked: Boolean(writeSandbox?.kind),
     mayModify: jobFilesMayModify(options),
     // Tính từ lúc soạn brief, tức là ngay trước khi spawn: worker đọc giờ máy.
     softDeadline: softDeadlineAt(Date.now(), timeoutMs),
   });
 
-  return { workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode, resumeId };
+  return { workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode, resumeId, writeSandbox };
+}
+
+/** `writeSandbox` của crew.config.json; config hỏng thì để mặc định (bật) — lỗi config báo ở chỗ khác. */
+function writeSandboxEnabled(workspace) {
+  try { return loadCrewConfig(workspace).writeSandbox !== false; } catch { return true; }
 }
 
 /** Đường `--allow` của job trong sổ; chạy không có sổ thì không có. */
@@ -507,8 +528,14 @@ function assertSidecarsAbsent(paths) {
 
 export async function codexRun(options) {
   const {
-    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode, resumeId,
+    workspace, evidenceAbs, promptText, timeout, timeoutMs, effort, logDir, base, sandboxMode, resumeId, writeSandbox,
   } = prepareRun(options);
+  // Vào sổ ngay, trước khi spawn: collect của một job chết giữa chừng vẫn phải biết
+  // job đó có bị khoá vùng ghi không. Lượt bắn lại ghi đè lượt trước.
+  if (writeSandbox && options.manifest && options.job) {
+    try { updateJobSync(options.manifest, Number(options.job), { writeSandbox }); } catch { /* sổ chỉ là bookkeeping ở đây */ }
+  }
+  const profileArgs = writeSandbox?.kind ? codexProfileArgs({ workspace, ...writeSandbox }) : null;
   const idleMs = options.idle ? parseDuration(options.idle) : DEFAULT_IDLE_MS;
 
   // Minted before anything is spawned. A job that cannot get a token must fail
@@ -547,8 +574,13 @@ export async function codexRun(options) {
   assertSidecarsAbsent([streamPath, lastMessagePath]);
 
   const version = codexVersion();
-  const args = buildArgs({ workspace, model: options.model, effort, lastMessagePath, sandboxMode, resumeId });
+  const args = buildArgs({ workspace, model: options.model, effort, lastMessagePath, sandboxMode, resumeId, profileArgs });
   const stream = makeStreamWriter(streamPath);
+  if (writeSandbox && !writeSandbox.kind && sandboxMode === "workspace-write") {
+    const line = `chạy không có sandbox ghi (${writeSandbox.reason}) — collect sẽ đoán phạm vi theo giờ như trước`;
+    process.stderr.write(`codex-run: ${line}\n`);
+    stream.note(line);
+  }
 
   // Announced after the stream writer exists, on purpose. The first version
   // wrote this to stderr only, and before the writer was even created -- so a
@@ -655,7 +687,7 @@ export async function codexRun(options) {
       if (timedOut && threadId && !evidenceHasStatus(evidenceAbs)) {
         handoffRescue = await runHandoffRescue({
           args: buildArgs({
-            workspace, model: options.model, effort, sandboxMode, resumeId: threadId,
+            workspace, model: options.model, effort, sandboxMode, resumeId: threadId, profileArgs,
             lastMessagePath: join(logDir, `${base}.codex-handoff-last-message.txt`),
           }),
           prompt: handoffRescuePrompt(relative(workspace, evidenceAbs).split(sep).join("/")),
@@ -687,6 +719,21 @@ export async function codexRun(options) {
         : killedFor ? `codex killed: ${killedFor}`
         : codexExitDetail({ code, signal, streamError, stderrTail, threadId });
 
+      // Worker đụng sandbox ghi: in sẵn đường tiếp. Đọc trước judgeJob vì job hỏng
+      // vì bị chặn là lúc gợi ý này cần nhất.
+      let sandboxDenied;
+      if (writeSandbox?.kind) {
+        try {
+          const d = sandboxDenials(readFileSync(streamPath, "utf8"));
+          const hint = denialHint(d, { manifestPath: options.manifest, seq: options.job, resumeId: threadId });
+          if (hint) {
+            sandboxDenied = [...d.paths, ...(d.patch ? ["apply_patch"] : [])];
+            process.stderr.write(`codex-run: ${hint}\n`);
+            stream.note(hint);
+          }
+        } catch { /* gợi ý thôi, không đọc được stream thì bỏ */ }
+      }
+
       // Whatever the runtime did, the evidence gets the first word: a job killed
       // for going quiet may still have written a complete report before it went
       // quiet.
@@ -700,6 +747,7 @@ export async function codexRun(options) {
       } catch (err) {
         // Carried so the failure path still records that a rescue was tried.
         if (handoffRescue) err.handoffRescue = handoffRescue;
+        if (sandboxDenied) err.sandboxDenied = sandboxDenied;
         rejectRun(err);
         return;
       }
@@ -713,6 +761,7 @@ export async function codexRun(options) {
         // allowed to do. Without it the manifest cannot answer the first
         // question anyone asks about an incident.
         sandboxMode,
+        sandboxDenied,
         codexVersion: version,
         startedAt: startedAt.toISOString(),
         endedAt,
@@ -1079,6 +1128,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           codexVersion: codexVersion(),
           failure: err.message,
           ...(err.handoffRescue ? { handoffRescue: err.handoffRescue } : {}),
+          ...(err.sandboxDenied ? { sandboxDenied: err.sandboxDenied } : {}),
           ...sandboxPatch(),
           ...workspacePatch(),
           ...threadPatch(),
@@ -1124,6 +1174,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         signal: result.signal,
         streamEvents: result.streamEvents,
         handoffRescue: result.handoffRescue,
+        sandboxDenied: result.sandboxDenied,
         usage: result.usage ?? null,
         // Read off the stream's file_change events. It is an authorship signal
         // for the write-scope gate, and one-way -- a file named here is this

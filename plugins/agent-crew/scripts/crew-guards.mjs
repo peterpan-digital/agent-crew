@@ -619,7 +619,10 @@ export function costGateLine(workspace) {
   return `Cổng chi phí: KHÔNG tự gọi ${names}. Cần tới thì dừng trước khi gọi, ghi \`Concerns/Blockers: COST_GATE — {tên API}\` và \`Status: BLOCKED\`.`;
 }
 
-export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed = false, chat = false, mayModify = [], softDeadline = null }) {
+export const WRITE_LOCK_LINE = "Vùng ghi ở trên được hệ điều hành khoá: ghi ra ngoài sẽ báo `Operation not permitted`."
+  + " Việc thật cần ghi chỗ khác thì đừng tìm đường vòng: dừng, ghi `Status: BLOCKED` và nêu đường cần thêm.";
+
+export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed = false, writeLocked = false, chat = false, mayModify = [], softDeadline = null }) {
   const evidenceRel = evidenceAbs.startsWith(workspace + sep)
     ? evidenceAbs.slice(workspace.length + 1)
     : evidenceAbs;
@@ -645,6 +648,10 @@ export function appendWorkerContract(text, { evidenceAbs, workspace, unsandboxed
     // Phiên chat chờ owner, không chạy theo đồng hồ của job.
     ...(softDeadline && !chat ? [handoffLine(softDeadline)] : []),
   ];
+  // Sandbox ghi đang khoá đúng các đường trên: worker bị chặn thì phải nói ra, không
+  // tìm đường vòng (ghi qua chỗ khác rồi chép lại) — đường vòng là thứ khiến cổng
+  // phạm vi phải đoán.
+  if (writeLocked) lines.push(WRITE_LOCK_LINE);
   const costLine = costGateLine(workspace);
   if (costLine) lines.push(costLine);
   // Owner chốt 22/09: gộp --workspace-cli on với --sandbox-mode danger-full-access

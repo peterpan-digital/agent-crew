@@ -69,8 +69,10 @@ Chạy nền (`run_in_background`) để Claude được báo khi adapter thoát
 - **Mỗi phiên báo Claude một lần.** Chat tiếp sau khi adapter thoát thì Claude không biết;
   evidence ghi lại thì collect gắn `EVIDENCE-ĐỔI`.
 - `idle` không bắn ở phiên chat; worker đứng chờ owner là đúng thiết kế.
-- Đừng sửa file trong repo lúc job đang chạy: gate quy theo thời gian sẽ tính vào job, phải
-  bác bằng `--not-ours --reason` sau khi đọc transcript worker. **Không bao giờ** `--not-ours`
+- Đừng sửa file trong repo lúc job đang chạy nếu job đó **không** có sandbox ghi (sổ
+  `writeSandbox.kind` null): gate quy theo thời gian sẽ tính vào job, phải bác bằng
+  `--not-ours --reason` sau khi đọc transcript worker. Job có sandbox ghi thì file ngoài vùng
+  của nó không bị tính. **Không bao giờ** `--not-ours`
   một file control plane hay file bảo vệ: đó là chỗ duy nhất bắt được worker ghi lén.
 - **Chen vào giữa job thường** (không `--chat`) không tin được: app giữ tin owner tới hết
   lượt worker, chen lúc worker chờ lệnh nền thì worker không dậy. Muốn trao đổi thì mở phiên chat.
