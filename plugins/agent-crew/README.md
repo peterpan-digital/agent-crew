@@ -123,6 +123,7 @@ thư mục không phải git trước khi bắn job nào.
 | `modelTiers` | Ghi đè bảng bậc `--tier` theo bậc: `agy` (mảng regex neo `^...$` trên tên `agy models`), `app` (`flash_lite\|flash\|pro\|inherit`), `codex` (mảng regex neo trên slug catalog Codex), `effort` (`low\|medium\|high\|xhigh\|max`). Dùng khi nhà cung cấp đổi lược đặt tên. Không khai = bảng mặc định trong `scripts/lib/model-tiers.mjs` |
 | `workspaceCliConfigDir` | Hồ sơ gws (`~/...` hoặc tuyệt đối) mà job `--workspace-cli on` mint token; cùng thư mục được đưa cho worker. Máy có nhiều hồ sơ `~/.config/gws*` thì nên khai. Job đè được bằng `crew run codex ... --workspace-profile <dir>` |
 | `workspaceCliAccount` | Email mong đợi của token. Adapter hỏi Google token thuộc ai sau khi mint; lệch hoặc không đọc được thì từ chối trước khi spawn |
+| `writeSandbox` | `true` (mặc định) / `false`. Tắt sandbox ghi cho mọi job của repo — chỉ khi job hợp lệ phải ghi rải rác mà không khai được `--allow`; khi tắt, collect đoán phạm vi theo giờ |
 | `redactConfig` | File `.json` (nên gitignore) có mục `redact` — `internalDomains`, `internalHosts`, `emailDomains` — cho bộ che của state phiên và export transcript; mọi `<mục>.origin` trong file cũng bị che. Tách file vì đây là phần riêng tư, còn `crew.config.json` thì commit. Không khai = chỉ che theo hình dạng chung |
 
 Luật viết bằng lời — mục tiêu, cách tạo/đóng task, công cụ không được tự gọi — nằm ở
@@ -278,6 +279,7 @@ quyết định của dispatcher, nằm trong brief để audit.
 | `scripts/lib/turn-nudge.mjs` · `scripts/cli/turn-nudge-hook.mjs` | Nhắc giữa lượt: bộ đếm theo session ở thư mục tạm (`CREW_TURN_DIR` đè), mở ở mỗi prompt của repo aggressive; PostToolUse đếm tool call, file đã sửa, đã giao chưa; tự làm tới 40 tool call hoặc 3 file thì chèn `additionalContext`, tối đa hai lần một lượt. |
 | `scripts/lib/handoff-check.mjs` · `scripts/lib/chain-slice-progress.mjs` | Kiểm cơ học handoff trước khi nối lát: đủ 4 mục, `### Đang dở` khác lát trước, không nhắc dispatch/quyền/control plane (thuần); và lát có đổi file ngoài evidence không (`touchedFiles`, rồi mtime trong thư mục run + `filesMayModify`). |
 | `scripts/lib/progress-watch.mjs` | Hai hàm thuần đo độ im của job Anti app: vân tay `byStatus` của conversation là tín hiệu chính, mtime file riêng của job chỉ được hoãn báo động. |
+| `scripts/lib/write-sandbox.mjs` | Sandbox ghi: vùng ghi của job (cùng `allowedFor` với collect), `-c` permission profile cho Codex, profile seatbelt cho agy, tự thử chặn trước job, đọc dòng bị chặn để gợi ý `--allow`. |
 | `scripts/crew-scope.mjs` | Quy file thay đổi trong working tree về từng job: ưu tiên `touchedFiles` runtime tự khai, còn lại theo mtime nằm trong khoảng job đó chạy. Tách khỏi collect vì đây là logic quy trách nhiệm, không phải logic phán quyết. |
 | `scripts/claude-session-export.mjs` | Xuất transcript của 1 session Claude thành markdown gầy để bàn giao sang agent khác. Gộp 3 nguồn (dòng chính, `subagents/`, `tool-results/`), bỏ `attachment`/`thinking`/`image`/tool output replay được, redact theo hình dạng giá trị, trần tuyệt đối 200 KB có assert. Rào chống injection mang nonce mỗi lần chạy. Thiếu module redact thì **abort**, không xuất file; `--out` trỏ vào path git đang theo dõi thì **từ chối**, không có cờ bỏ qua. |
 | `scripts/lib/redact-values.mjs` | Bộ dò bí mật **theo hình dạng giá trị**, vendored trong repo. Không phải bộ dò từ khoá — `secret-keywords.cjs` của hooks là bộ dò chủ đề prompt, nó vừa để lọt key đứng một mình vừa phá 5,9% text block nói về LLM token. Domain nội bộ (host `cms.`/`staging.`… của website, host công cụ tự host, domain email công ty) **không viết trong code**: đọc mục `redact` của file mà `redactConfig` trong `crew.config.json` trỏ tới (hoặc file `CREW_HARNESS_CONFIG` trỏ tới), mọi `<mục>.origin` trong đó tự được che. Thiếu config thì chỉ che theo hình dạng chung và lệnh export in cảnh báo; config hỏng thì export dừng. |
@@ -320,7 +322,37 @@ Và không bao giờ rơi ngầm sang transport khác. Không tìm được comp
 không phải lý do để chạy headless: manifest sẽ ghi `app`, không thread nào mở, và không
 ai biết bên nào nói dối.
 
-### Phạm vi ghi: runtime tự khai trước, thời gian sau
+### Phạm vi ghi: sandbox ghi trước, runtime tự khai, thời gian sau cùng
+
+**Sandbox ghi (từ 2.8.0).** Job có sổ thì worker bị **hệ điều hành** khoá vùng ghi:
+chỉ ghi được run home (layout có task: thư mục task) và các đường `--allow` của job đó,
+cộng thư mục tạm; `.git/`, control plane và file bảo vệ nằm trong vùng ghi vẫn chỉ đọc.
+Codex dùng permission profile của chính nó (thay `--sandbox workspace-write`, mạng vẫn mở);
+agy headless chạy dưới `/usr/bin/sandbox-exec`. Đo 15/11/2026: Codex chặn cả `apply_patch`
+("writing outside of the project") lẫn shell ("Operation not permitted"), giữ qua `resume`;
+agy bị chặn shell ngoài vùng. Sổ ghi `writeSandbox: {kind, writable, readOnly}`.
+
+Vì sao: ở workspace đông session, cổng đoán theo giờ (bên dưới) sai gần như mọi lần — 310
+path bị bác tay trong 9/42 run, không path nào là worker ghi sai thật. Job đã sandbox thì
+file ngoài vùng **không thể** là của nó: collect bỏ qua, in một dòng đếm, không cần `--not-ours`.
+
+Trước mỗi job crew tự thử chặn trong thư mục tạm (~1s, không tốn token). Thử không đạt,
+`--sandbox-mode danger-full-access`, Anti app, hoặc `crew.config.json` khai
+`"writeSandbox": false` → job chạy như trước, sổ ghi `{kind: null, reason}`, stderr báo, và
+collect đoán theo giờ như phần dưới. Worker bị chặn thì sổ ghi `sandboxDenied` và stderr in
+sẵn `crew amend <MP> --job N --allow <thư mục> --note "..."` + `--resume <thread>`.
+
+Ba chỗ collect **không** tin sandbox, vẫn tính như cũ:
+- File bảo vệ và control plane: không bao giờ bị loại theo sandbox — chỗ đắt nhất nếu có đường
+  ghi sandbox không che.
+- Job Codex có gọi công cụ MCP (sổ `sandboxBypass`): server MCP do tiến trình Codex mở, nằm ngoài
+  permission profile, nên job đó đoán theo giờ.
+- Job mà `--workspace` lúc bắn khác workspace của sổ: không khoá, sổ ghi lý do.
+
+`claimRunSlot` xoá `writeSandbox`/`sandboxBypass`/`sandboxDenied` của lượt trước trong khoá claim,
+nên lượt bắn lại ghi sổ hỏng thì sổ nói "không sandbox", không giữ lời của lượt trước. Sổ của run
+(`manifest.json`) chỉ đọc với worker. Giới hạn còn lại: ở layout có task, sổ của **run khác** cùng
+task vẫn nằm trong vùng ghi — cần một worker cố tình phá mới khai thác được.
 
 `git status` một mình không dùng được ở workspace này: repo thường xuyên mang sẵn
 hàng trăm file đang sửa dở của user, nên diff thuần sẽ tố cả những file run không
@@ -649,6 +681,7 @@ nội dung manifest — nên một runner spawn được process và so được
 | `tests/holds.test.mjs` | Hold từ đầu tới cuối: tạo hold cổng chi phí khi run hết job chạy, đọc tên API (kể cả dòng luật brief đứng trước dòng `Concerns`), `answer`/`defer`/`cover`, supersede khi claim lại, từ chối dưới vai worker và khi còn job chạy, và vân tay `holds` lệch qua `codex-run.mjs` thật phải ra exit 2. |
 | `tests/crew-digest.test.mjs` | Bảng đầu phiên: thứ tự hold → job kẹt → run chưa nghiệm thu, trần 15 dòng, run trước mốc không hiện vì "chưa nghiệm thu", câu hỏi bị lọc trước khi vào ngữ cảnh, manifest hỏng không làm chết hook. |
 | `tests/anti-stall.test.mjs` | Báo im của job Anti app với đồng hồ giả: ghi manifest, log dispatch hay evidence job khác không reset được đồng hồ; mtime file riêng của job chỉ hoãn; `conversationId` ghi trước vòng poll; và SIGTERM thật vào một job app giả đang đợi phải ra `failed`. |
+| `tests/write-sandbox.test.mjs` | Sandbox ghi: vùng ghi = đúng `allowedFor` của collect; seatbelt thật chặn shell/python ngoài vùng và `readOnly` trong vùng; Codex (fake, `FAKE_SANDBOX=enforce`) nhận profile thay `--sandbox`, profile đứng sau `resume`; tự thử không đạt / `danger-full-access` / `writeSandbox: false` → chạy như cũ, sổ ghi lý do; agy giả dưới seatbelt bị chặn ghi ngoài vùng, sổ ghi `sandboxDenied`; collect không tính file ngoài vùng của job đã sandbox. |
 | `tests/fixtures/fake-codex` | `codex` giả, chọn hình dạng lỗi bằng `FAKE_MODE`. `tests/fixtures/bin/codex` là symlink trỏ vào nó — phải đúng tên `codex`, không thì PATH rơi xuống CLI thật và bộ test không đo gì cả. |
 
 5 lỗi lifecycle nặng nhất của phase 1 đều nằm ở chỗ không có script nào chạm tới, và

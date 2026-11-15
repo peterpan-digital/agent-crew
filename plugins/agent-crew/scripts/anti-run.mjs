@@ -59,6 +59,8 @@ import {
   evidenceHasStatus,
 } from "./crew-guards.mjs";
 import { WORKER_ROLE_ENV } from "./lib/crew-role.mjs";
+import { loadCrewConfig } from "./lib/crew-config.mjs";
+import { SEATBELT, denialHint, planWriteSandbox, probeSeatbelt, sandboxDenials, seatbeltProfile } from "./lib/write-sandbox.mjs";
 
 const POLL_INTERVAL_MS = 5_000;
 const APP_MODELS = new Set(["flash_lite", "flash", "pro", "inherit"]);
@@ -124,7 +126,7 @@ export function stopLiveAgy({ graceMs = AGY_STOP_GRACE_MS } = {}) {
  * cùng hình với spawnSync ({ status, signal, stdout, stderr, error }) để phần
  * đọc kết quả không đổi.
  */
-function spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId }) {
+function spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId, sandboxProfile = null }) {
   const args = [
     "-p", promptText,
     "--output-format", "json",
@@ -143,7 +145,9 @@ function spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId }) 
   return new Promise((resolveRun) => {
     let child;
     try {
-      child = spawn("agy", args, {
+      // Sandbox ghi: seatbelt bọc cả tiến trình agy, kể cả lệnh nó sinh ra.
+      // sandbox-exec exec thẳng sang agy (cùng pid), nên giết nhóm vẫn trúng agy.
+      child = spawn(sandboxProfile ? SEATBELT : "agy", sandboxProfile ? ["-p", sandboxProfile, "agy", ...args] : args, {
         cwd: workspace,
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
@@ -207,7 +211,7 @@ function lastJson(stdout) {
  * gửi tiếp đúng conversation đó một lượt ngắn để worker ghi handoff. Không truyền
  * `--model`: phiên giữ model của nó.
  */
-async function rescueHeadless({ workspace, evidenceAbs, conversationId, agyMode, hardMs }) {
+async function rescueHeadless({ workspace, evidenceAbs, conversationId, agyMode, hardMs, sandboxProfile }) {
   const started = Date.now();
   const proc = await spawnAgy({
     promptText: handoffRescuePrompt(evidenceAbs.startsWith(workspace) ? evidenceAbs.slice(workspace.length + 1) : evidenceAbs),
@@ -215,6 +219,7 @@ async function rescueHeadless({ workspace, evidenceAbs, conversationId, agyMode,
     timeout: `${Math.max(1, Math.round(hardMs / 1000))}s`,
     agyMode,
     resumeId: conversationId,
+    sandboxProfile,
   });
   let ok = false;
   try { ok = existsSync(evidenceAbs) && readWorkerStatus(evidenceAbs).status === "continue"; } catch { /* unreadable = not rescued */ }
@@ -227,9 +232,9 @@ async function rescueHeadless({ workspace, evidenceAbs, conversationId, agyMode,
   };
 }
 
-async function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMode, resumeId }) {
+async function runHeadless({ promptText, workspace, evidenceAbs, model, timeout, agyMode, resumeId, sandboxProfile = null, manifestPath = null, seq = null }) {
   const started = new Date();
-  const proc = await spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId });
+  const proc = await spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId, sandboxProfile });
   let endedAt = new Date().toISOString();
 
   if (proc.error) {
@@ -314,10 +319,23 @@ async function runHeadless({ promptText, workspace, evidenceAbs, model, timeout,
     handoffRescue = await rescueHeadless({
       workspace, evidenceAbs, conversationId: returnedId, agyMode,
       hardMs: Math.min(HANDOFF_RESCUE_MS, parseDuration(timeout)),
+      sandboxProfile,
     });
     endedAt = new Date().toISOString();
     // The timeout is what CONTINUE means; a rescued job is not a runtime failure.
     if (handoffRescue.ok) runtimeDetail = null;
+  }
+
+  // Worker đụng sandbox ghi: in sẵn đường tiếp, trước judgeJob vì job hỏng do bị
+  // chặn là lúc cần gợi ý nhất.
+  let sandboxDenied;
+  if (sandboxProfile) {
+    const d = sandboxDenials(`${proc.stdout ?? ""}\n${proc.stderr ?? ""}`);
+    const hint = denialHint(d, { manifestPath, seq, resumeId: returnedId });
+    if (hint) {
+      sandboxDenied = d.paths;
+      console.error(`anti-run: ${hint}`);
+    }
   }
 
   let verdict;
@@ -332,6 +350,7 @@ async function runHeadless({ promptText, workspace, evidenceAbs, model, timeout,
     // died at its ceiling is the one most worth resuming by hand.
     if (returnedId) err.conversationId = returnedId;
     if (handoffRescue) err.handoffRescue = handoffRescue;
+    if (sandboxDenied) err.sandboxDenied = sandboxDenied;
     throw err;
   }
   const evidenceBytes = verdict.evidenceBytes;
@@ -340,6 +359,7 @@ async function runHeadless({ promptText, workspace, evidenceAbs, model, timeout,
     worker: "antigravity",
     mode: "headless",
     handoffRescue: handoffRescue ?? undefined,
+    sandboxDenied,
     conversationId: returnedId,
     resumedFrom: resumeId ?? null,
     startedAt: started.toISOString(),
@@ -644,10 +664,23 @@ export async function antiRun(options, deps = {}) {
   const chat = options.chat === "on" || options.chat === true;
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
   const timeoutMs = parseDuration(timeout); // validate before spending anything
+  const mode = options.mode ?? "headless";
+  // Sandbox ghi chỉ cho headless: job app chạy trong app Antigravity, crew không
+  // bọc được tiến trình đó. Ghi sổ ngay, trước khi bắn (xem codex-run).
+  const writeSandbox = planWriteSandbox({
+    manifest: options.manifest && options.job ? readManifest(options.manifest) : null,
+    seq: options.job ? Number(options.job) : null,
+    workspace,
+    enabled: writeSandboxEnabled(workspace),
+    skipReason: mode !== "headless" ? `transport ${mode}: crew không bọc được tiến trình của app` : null,
+    kind: "seatbelt",
+    probe: probeSeatbelt,
+  });
   const promptText = appendWorkerContract(readPrompt(options), {
     evidenceAbs,
     workspace,
     unsandboxed: true,
+    writeLocked: Boolean(writeSandbox?.kind),
     chat,
     mayModify: options.filesMayModify ?? [],
     softDeadline: softDeadlineAt(Date.now(), timeoutMs),
@@ -655,7 +688,12 @@ export async function antiRun(options, deps = {}) {
 
   assertEvidenceAbsent(evidenceAbs);
 
-  const mode = options.mode ?? "headless";
+  if (writeSandbox && options.manifest && options.job) {
+    try { updateJobSync(options.manifest, Number(options.job), { writeSandbox }); } catch { /* sổ chỉ là bookkeeping ở đây */ }
+  }
+  if (writeSandbox && !writeSandbox.kind && mode === "headless") {
+    console.error(`anti-run: chạy không có sandbox ghi (${writeSandbox.reason}) — collect sẽ đoán phạm vi theo giờ như trước`);
+  }
   if (mode === "headless") {
     assertSurfaceFlags(options, {
       worker: "antigravity", mode,
@@ -664,9 +702,14 @@ export async function antiRun(options, deps = {}) {
       unsupported: { title: "--title", quietWarn: "--quiet-warn", quietAlert: "--quiet-alert", chat: "--chat" },
     });
     const resumeId = resolveResume(options, { worker: "antigravity", mode, supportsResume: true });
+    // Profile truyền thẳng bằng chuỗi (`sandbox-exec -p`), không qua file: file nằm
+    // trong thư mục log, mà ở layout có task thì đó là chỗ worker ghi được — worker
+    // sửa nó thành `(allow default)` là lượt cứu handoff chạy không sandbox.
+    const sandboxProfile = writeSandbox?.kind ? seatbeltProfile({ workspace, ...writeSandbox }) : null;
     return runHeadless({
       promptText, workspace, evidenceAbs, model: options.model, timeout,
-      agyMode: options.agyMode, resumeId,
+      agyMode: options.agyMode, resumeId, sandboxProfile,
+      manifestPath: options.manifest ?? null, seq: options.job ? Number(options.job) : null,
     });
   }
   if (mode === "app") {
@@ -692,6 +735,11 @@ export async function antiRun(options, deps = {}) {
     }, deps);
   }
   throw new AntiRunError(`unknown mode "${mode}"`, "use --mode headless or --mode app");
+}
+
+/** `writeSandbox` của crew.config.json; config hỏng thì để mặc định (bật) — lỗi config báo ở chỗ khác. */
+function writeSandboxEnabled(workspace) {
+  try { return loadCrewConfig(workspace).writeSandbox !== false; } catch { return true; }
 }
 
 export { AntiRunError };
@@ -974,6 +1022,7 @@ export async function main(argv, { deps = {} } = {}) {
           // Số đo nền cho ngưỡng im: có từ vòng poll của job app (timeout cũng có).
           ...(err.quietMaxSec != null ? { quietMaxSec: err.quietMaxSec } : {}),
           ...(err.handoffRescue ? { handoffRescue: err.handoffRescue } : {}),
+          ...(err.sandboxDenied ? { sandboxDenied: err.sandboxDenied } : {}),
           ...(err.conversationId ? { conversationId: err.conversationId } : {}),
           ...credentialPatch(),
           // Only for a job this process claimed: an unclaimed one carries the
@@ -1011,6 +1060,7 @@ export async function main(argv, { deps = {} } = {}) {
         runtimeVerdict: result.runtimeVerdict,
         conversationId: result.conversationId,
         handoffRescue: result.handoffRescue,
+        sandboxDenied: result.sandboxDenied,
         // Which session this job continued, and whether the runtime actually
         // honoured it. Recorded even when the answer is "it did not": a job
         // that asked to resume and silently got a fresh session is the one

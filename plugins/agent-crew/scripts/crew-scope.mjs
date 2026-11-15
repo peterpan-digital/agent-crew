@@ -275,6 +275,31 @@ export function allowedFor(manifest, seqs) {
   return [...implicit, ...runLevel, ...perJob];
 }
 
+/**
+ * File `rel` có nằm trong vùng ghi mà sandbox của job đã khoá không (`job.writeSandbox`,
+ * do adapter ghi lúc bắn). Job không có sandbox thì coi như ghi được mọi chỗ — tức là
+ * cổng phải đoán như cũ.
+ */
+export function sandboxAllows(sandbox, rel) {
+  if (!sandbox?.kind || !Array.isArray(sandbox.writable)) return true;
+  // canonical: đĩa macOS không phân biệt hoa thường, và `--allow ./src/` phải khớp `src/x`.
+  const p = canonical(rel);
+  const under = (prefix) => { const c = canonical(prefix); return p === c || p.startsWith(`${c}/`); };
+  if ((sandbox.readOnly ?? []).some(under)) return false;
+  return sandbox.writable.some(under);
+}
+
+/**
+ * Sandbox của job mà collect được tin, theo seq. Job Codex có gọi công cụ MCP thì
+ * không: server MCP do tiến trình Codex mở, nằm ngoài permission profile (chỉ lệnh
+ * Codex chạy mới bị khoá), nên một lần gọi MCP là một đường ghi sandbox không che.
+ */
+function trustedSandboxes(manifest) {
+  return new Map(manifest.jobs
+    .filter((j) => j.writeSandbox?.kind && !(j.sandboxBypass ?? []).length)
+    .map((j) => [j.seq, j.writeSandbox]));
+}
+
 /** Every prefix any job declared, for the walk that git cannot do. */
 function declaredPrefixes(manifest) {
   return [
@@ -461,8 +486,9 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
   const result = {
     intervals, inScope: [], outOfScope: [], suspect: [],
     protectedHits: [], outsideWindow: [], unattributable: [],
-    ownedElsewhere: [], dismissed: [], unusedDismissals: [],
+    ownedElsewhere: [], dismissed: [], unusedDismissals: [], sandboxExcluded: [],
   };
+  const sandboxOf = trustedSandboxes(manifest);
   const authored = authoredIndex(manifest, workspace);
   const foreign = foreignAuthors(manifest, workspace);
   const waived = new Set(notOurs.map((p) => toRel(workspace, p)).filter(Boolean));
@@ -482,9 +508,20 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
       continue;
     }
     const mine = authored.get(path);
-    const hits = intervals.filter((i) => mtime >= i.from && mtime <= i.to);
-    if (!mine && hits.length === 0) {
+    const inWindow = intervals.filter((i) => mtime >= i.from && mtime <= i.to);
+    if (!mine && inWindow.length === 0) {
       result.outsideWindow.push(path);
+      continue;
+    }
+    // Job chạy dưới sandbox ghi thì hệ điều hành đã chặn nó ghi ra ngoài vùng: file
+    // ngoài vùng không thể là của nó, khỏi đoán theo giờ. Đo 14/11/2026: ba job Anti
+    // chỉ ghi evidence mà collect bắt bác tay 26 file của session khác và log hook.
+    // File bảo vệ và control plane không bao giờ được loại theo cách này: đó là chỗ
+    // đắt nhất nếu có đường ghi sandbox không che, nên vẫn đi qua cổng như cũ.
+    const guarded = isProtectedPath(path, layout) || isControlPlanePath(path, layout);
+    const hits = guarded ? inWindow : inWindow.filter((i) => sandboxAllows(sandboxOf.get(i.seq), path));
+    if (!mine && hits.length === 0) {
+      result.sandboxExcluded.push({ path, seqs: inWindow.map((i) => i.seq) });
       continue;
     }
 

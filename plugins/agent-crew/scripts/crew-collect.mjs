@@ -754,6 +754,14 @@ function report(r) {
     console.log(`\nkhông quy được cho job nào (file đã xoá hoặc không stat được), tự đọc: ${r.scope.unattributable.join(", ")}`);
   }
   console.log(`\nphạm vi ghi: ${r.scope.inScope.length} file trong phạm vi, ${r.scope.outsideWindow.length} file thay đổi ngoài khoảng job chạy (không tính)`);
+  // Job chạy dưới sandbox ghi: hệ điều hành đã chặn worker ghi ra ngoài vùng, nên
+  // file đổi ngoài vùng là của session khác — không cần --not-ours.
+  if (r.scope.sandboxExcluded?.length) {
+    const ex = r.scope.sandboxExcluded;
+    console.log(`  ${ex.length} file đổi trong lúc job chạy nhưng ngoài vùng ghi của job đã sandbox (worker không ghi được tới đó) — không tính:`);
+    for (const x of ex.slice(0, 10)) console.log(`    ${x.path} (job ${x.seqs.join("/")})`);
+    if (ex.length > 10) console.log(`    … và ${ex.length - 10} file nữa (đủ danh sách trong --json)`);
+  }
   console.log("  Lưu ý: chỉ đọc working tree — file đã commit thì không thấy.");
   if (!r.head.known) {
     console.log("  HEAD lúc tạo run không được ghi (run cũ), nên không biết có commit nào trong lúc chạy.");

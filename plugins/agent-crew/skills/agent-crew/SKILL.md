@@ -6,7 +6,7 @@ when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, 
 category: agent-ops
 keywords: [crew, dispatch, multi-agent, song-song, codex, antigravity, worker]
 metadata:
-  version: "2.7.6"
+  version: "2.8.0"
 ---
 
 # agent-crew
@@ -223,7 +223,7 @@ hai job không bao giờ trùng file.
 | `--model` | Ép tay tên model (thắng `--tier`, ghi note). Bắt buộc với job Claude. Tên lấy từ `crew doctor`, **không** từ trí nhớ: tên cũ là job chết ngay lượt đầu. Anti `app` chỉ nhận `flash_lite\|flash\|pro\|inherit` |
 | `--effort` | Ép tay mức Codex (`low\|medium\|high\|xhigh\|max\|ultra`), chỉ đè effort của `--tier`, model vẫn theo bậc |
 | `--transport app --note "..."` | Chỉ Anti, chỉ trong 3 ca ở Bước 3; thiếu `--note` là bị từ chối. Codex bị từ chối dù có `--note` |
-| `--allow <prefix>` | Job được ghi ngoài thư mục của run (lặp được). Control plane và file bảo vệ không khai được |
+| `--allow <prefix>` | Job được ghi ngoài thư mục của run (lặp được). Control plane và file bảo vệ không khai được. **Khai đủ từ đầu**: hệ điều hành khoá đúng vùng này (sandbox ghi), ghi chỗ chưa khai là worker bị chặn, không còn "để collect bắt sau" |
 
 Job Claude **không** có transport: không process nào được bắn, bạn tự làm.
 
@@ -314,6 +314,14 @@ Cả hai mặc định tắt. Anti không cần cờ nào.
 Connector có sẵn của worker: theo `CLAUDE.md` của repo — mặc định coi là cấm khi chạm dữ
 liệu thật. **Job cần một trong hai cờ, ra `401`, hoặc gate đỏ `KHO CREDENTIAL BỊ ĐỔI` →
 đọc `references/quyen-han-worker.md`.**
+
+**Sandbox ghi (tự bật, không cần cờ).** Job có sổ thì worker chỉ ghi được thư mục của run, các
+đường `--allow` và thư mục tạm — Codex qua permission profile, agy headless qua `sandbox-exec`.
+Worker bị chặn thì stderr in `crew amend "$MP" --job N --allow <thư mục> --note "..."` rồi bắn lại
+kèm `--resume <thread>`; khai thêm chỉ khi việc thật sự cần chỗ đó. Stderr báo "chạy không có
+sandbox ghi" (tự thử không đạt, `danger-full-access`, Anti app, `writeSandbox: false`) thì job
+chạy như cũ và collect đoán phạm vi theo giờ. Job Codex gọi công cụ MCP cũng bị đoán theo giờ (MCP
+nằm ngoài sandbox, sổ ghi `sandboxBypass`).
 
 Cả hai adapter tự cập nhật sổ ở **cả 2 nhánh** xong và fail. Không tự sửa sổ sau đó nữa.
 
@@ -425,7 +433,9 @@ crew collect "$MP" --ack-runtime 2 --reason "đọc evidence rồi, agy báo ERR
 
 **Gate exit khác 0 hoặc có `WARN` → đọc `references/nghiem-thu-chi-tiet.md`** (bảng verdict
 đầy đủ). Hay gặp: `PASS + WARN` đọc evidence bằng mắt; `RUNNING` chờ rồi collect lại;
-`SCOPE_VIOLATION` khai `--allow` lúc `add-job` hoặc `--not-ours <path> --reason "..."`;
+`SCOPE_VIOLATION` khai `--allow` lúc `add-job` hoặc `--not-ours <path> --reason "..."` — chỉ còn
+gặp ở job **không** có sandbox ghi (sổ `writeSandbox.kind` null), bác **từng path** sau khi đọc,
+không bác hàng loạt bằng script;
 `CONTINUE` bắn job mới `--resume <conversationId>` của job đó — job đó chạy xong thì dòng cũ
 thành `CHAINED` (không chặn) và job mới tự chịu verdict của nó. Chuỗi `--chain` cũng vậy:
 mọi lát trừ lát cuối ra `CHAINED`, verdict của chuỗi là verdict lát cuối.

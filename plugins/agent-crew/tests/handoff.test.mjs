@@ -114,7 +114,8 @@ function run(jobs) {
     const { manifestPath: mp } = createRun({ runDir: join(ws, RUN_REL, name), runId: name, task: "t", workspace: ws, depth: 0 });
     const ev = join(RUN_REL, name, `${name}.md`);
     addJob(mp, { worker: "antigravity", role: "owner", title: name, evidence: ev, model: "m" });
-    const mark = join(ws, `${name}.mark`);
+    // Trong thư mục run: agy giả chạy dưới sandbox ghi, ghi ra gốc workspace bị chặn.
+    const mark = join(ws, RUN_REL, name, `${name}.mark`);
     const p = spawnSync("node", [join(MODULE_ROOT, "scripts", "anti-run.mjs"),
       "--prompt-file", brief, "--evidence", ev, "--workspace", ws, "--timeout", "60s",
       "--model", "m", "--manifest", mp, "--job", "1"], {

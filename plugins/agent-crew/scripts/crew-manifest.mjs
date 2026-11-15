@@ -780,6 +780,12 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs, resumeId
     job.status = "running";
     job.startedAt = startedAt;
     job.timeoutMs = timeoutMs;
+    // Sandbox ghi của lượt trước không thuộc lượt này. Xoá trong khoá claim: adapter
+    // ghi bản mới sau lần tự thử, và lần ghi đó hỏng (khoá bận) thì sổ phải nói "không
+    // sandbox" (collect đoán theo giờ), không được giữ lời "đã sandbox" của lượt trước.
+    delete job.writeSandbox;
+    delete job.sandboxBypass;
+    delete job.sandboxDenied;
     // Conversation của lượt trước không thuộc lượt này: để lại thì guard ở trên coi nó
     // là đang bận suốt lượt mới, và `crew-session latest` trả nó như conversation mới
     // nhất. Id cũ vào note để vẫn resume được. Ghi `resumedFrom` trong khoá để adapter

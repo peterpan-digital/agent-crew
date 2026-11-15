@@ -133,7 +133,11 @@ export function loadCrewConfig(workspace) {
     }
     workspaceCliAccount = raw.workspaceCliAccount.trim();
   }
-  return Object.freeze({ layout, routingTriggers: Object.freeze(routingTriggers), routingLog, costGate: Object.freeze(costGate), redactConfig, modelTiers, delegate, workspaceCliConfigDir, workspaceCliAccount });
+  // Công tắc của owner cho sandbox ghi (mặc định bật). Tắt khi một repo có job hợp
+  // lệ cần ghi rải rác mà không khai được --allow; khi đó cổng collect đoán theo giờ.
+  const writeSandbox = raw.writeSandbox ?? true;
+  if (typeof writeSandbox !== "boolean") fail(`writeSandbox phải là true | false, nhận ${JSON.stringify(raw.writeSandbox)}`);
+  return Object.freeze({ layout, routingTriggers: Object.freeze(routingTriggers), routingLog, costGate: Object.freeze(costGate), redactConfig, modelTiers, delegate, workspaceCliConfigDir, workspaceCliAccount, writeSandbox });
 }
 
 /** Prompt có nhắc API tốn tiền nào không (so tên, không phân biệt hoa thường). */
