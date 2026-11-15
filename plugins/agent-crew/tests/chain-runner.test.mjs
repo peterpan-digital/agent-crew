@@ -156,6 +156,28 @@ const fakeCalls = (s) => Number(readFileSync(join(s.fake, "count"), "utf8").trim
   t.check("chuỗi 1 lát DONE → exit 0", chain(s).exit, 0);
 }
 
+// --- lệnh thay thế mà cổng trần 30m gợi ý phải chạy được trên chính job đó -----------------------
+// Đo 15/11/2026: `crew run codex --timeout 60m` bị từ chối trước khi spawn, adapter vẫn ghi
+// job là failed; session gõ đúng lệnh crew gợi ý `--chain --timeout 30m --budget 60m` thì
+// chuỗi dừng ngay "(failed), 1 lát, 0 phút", không bắn worker, không nói vì sao.
+{
+  const s = setup("ceiling", [{ body: DONE }]);
+  const plain = spawnSync(process.execPath, [CREW, "run", "codex", "--manifest", s.manifestPath, "--job", "1", "--prompt-file", s.brief, "--timeout", "60m"], { cwd: s.ws, env: env(s), encoding: "utf8" });
+  t.check("--timeout 60m bị từ chối, gợi ý --chain", plain.status !== 0 && plain.stderr.includes("--chain --timeout 30m --budget 60m"), true);
+  t.check("...không bắn worker", existsSync(join(s.fake, "count")), false);
+  const r = chain(s, ["--budget", "60m"]);
+  t.check("lệnh gợi ý chạy được trên chính job đó → exit 0", r.exit, 0);
+  t.check("...worker được bắn 1 lần", existsSync(join(s.fake, "count")) && fakeCalls(s), 1);
+  t.check("...job gốc done, không phải job mới", `${jobs(s).length}/${root(s).status}`, "1/done");
+
+  // Gốc đã kết thúc thật (đã chạy, có thread) thì chuỗi không tự bắn lại, nhưng phải nói vì sao.
+  const d = setup("dead-root", [{ body: DONE }]);
+  updateJob(d.manifestPath, 1, { status: "failed", conversationId: THREAD, failure: "hết quota/credit Codex giữa job" });
+  const rd = chain(d);
+  t.check("gốc failed đã có thread → không bắn, exit 1", `${rd.exit}/${existsSync(join(d.fake, "count"))}`, "1/false");
+  t.check("...stderr nói lý do failed cũ và đường --resume", rd.err.includes("hết quota/credit") && rd.err.includes(`--resume ${THREAD}`), true);
+}
+
 // --- trần job: lát không tính vào MAX_JOBS, trần riêng mỗi run ----------------------------------
 {
   const ws = tmpWorkspace("chain-cap-");
