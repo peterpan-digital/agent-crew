@@ -14,8 +14,15 @@ import { closeSync, existsSync, openSync, readSync, rmSync, statSync, writeFileS
 import { dirname, join } from "node:path";
 import { DECISION_LABEL, promptKind, stripReminders } from "./routing-gate.mjs";
 
-/** Transcript dài cả chục MB; lượt cuối luôn nằm ở đuôi. */
+/**
+ * Transcript dài cả trăm MB; lượt cuối nằm ở đuôi, nên đọc đuôi trước. Nhưng một
+ * lượt có thể dài hơn đuôi: mỗi ảnh chụp/đọc ảnh là kết quả tool base64 cỡ MB. Đo
+ * 15/11 (page-insights-extension): lượt so mockup dài 6.6MB, đuôi 4MB không chứa
+ * prompt lẫn dòng `Định tuyến:` → log ghi `missing`, chỉ đếm 27 tool call ở đuôi.
+ * Không thấy mốc đầu lượt thì đọc lùi gấp đôi, tới trần (Stop hook có 30 giây).
+ */
 const TAIL_BYTES = 4 * 1024 * 1024;
+const MAX_TAIL_BYTES = 64 * 1024 * 1024;
 const SID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
 /** Dấu "gate vừa bắn cho session này", nằm cạnh file log. null khi session id lạ. */
@@ -74,9 +81,10 @@ export function routesOf(line) {
   return routes.length ? routes : ["other"];
 }
 
-function tailLines(path) {
+/** `bytes` byte cuối của file, tách dòng (bỏ dòng đầu bị cắt); `whole` khi đã đọc từ đầu file. */
+function tailLines(path, bytes) {
   const { size } = statSync(path);
-  const start = Math.max(0, size - TAIL_BYTES);
+  const start = Math.max(0, size - bytes);
   const buf = Buffer.alloc(size - start);
   const fd = openSync(path, "r");
   try {
@@ -86,7 +94,7 @@ function tailLines(path) {
   }
   const lines = buf.toString("utf8").split("\n");
   if (start > 0) lines.shift(); // dòng đầu bị cắt giữa chừng
-  return lines;
+  return { lines, whole: start === 0 };
 }
 
 /**
@@ -125,9 +133,15 @@ const BOOKKEEPING_TOOL = /^mcp__ccd_turn__/;
  */
 export function lastTurnSummary(transcriptPath) {
   try {
-    const entries = tailLines(transcriptPath).map((l) => { try { return JSON.parse(l); } catch { return null; } });
-    let i = entries.length - 1;
-    while (i >= 0 && !isUserPrompt(entries[i])) i -= 1;
+    let entries;
+    let i;
+    for (let bytes = TAIL_BYTES; ; bytes *= 2) {
+      const { lines, whole } = tailLines(transcriptPath, bytes);
+      entries = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } });
+      i = entries.length - 1;
+      while (i >= 0 && !isUserPrompt(entries[i])) i -= 1;
+      if (i >= 0 || whole || bytes >= MAX_TAIL_BYTES) break;
+    }
     let line = null;
     let toolCalls = 0;
     for (const e of entries.slice(i + 1)) {

@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classify, promptKind } from "../scripts/lib/routing-gate.mjs";
-import { lastTurnDecision, routesOf } from "../scripts/lib/routing-decision-log.mjs";
+import { lastTurnDecision, lastTurnSummary, routesOf } from "../scripts/lib/routing-decision-log.mjs";
 import { NUDGE_TOOL_CALLS, NUDGE_TOOL_CALLS_AGAIN, step } from "../scripts/lib/turn-nudge.mjs";
 import { MODULE_ROOT, makeChecker } from "./helpers.mjs";
 
@@ -66,6 +66,17 @@ t.check("tự làm nhắc tới session trong phần việc → vẫn self", rou
   t.check("tin tự chèn / tóm tắt sau nén không cắt lượt: vẫn thấy dòng quyết định", lastTurnDecision(tr), "Codex: build script · tự làm: duyệt — nhiều file");
   writeFileSync(tr, [u("cũ"), a("Định tuyến: tự làm — lượt cũ"), u("Background (from the session that started this one): làm phase 2"), a("Bắt đầu.")].map((e) => JSON.stringify(e)).join("\n"));
   t.check("việc cha giao cho con là mốc mới: không lấy dòng lượt cũ", lastTurnDecision(tr), null);
+
+  // Lượt chụp/đọc ảnh: mỗi kết quả tool mang ảnh base64 cỡ MB, prompt + dòng quyết định
+  // trôi ra ngoài mấy MB đuôi transcript (đo 15/11: lượt 6.6MB, log ghi missing/27).
+  const img = (n) => ({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: `i${n}`, content: [{ type: "image", source: { data: "A".repeat(1_500_000) } }] }] } });
+  const call = (n) => ({ type: "assistant", message: { content: [{ type: "tool_use", id: `i${n}`, name: "Read", input: {} }] } });
+  const turn = [u("cũ"), a("Định tuyến: Codex — lượt cũ"), u("thiết kế lại mockup trang dữ liệu"), a("Định tuyến: tự làm hết — cần nhìn ảnh")];
+  for (let n = 0; n < 5; n += 1) turn.push(call(n), img(n));
+  writeFileSync(tr, turn.map((e) => JSON.stringify(e)).join("\n"));
+  const s = lastTurnSummary(tr);
+  t.check("lượt có ảnh dài hơn đuôi đọc mặc định: vẫn thấy dòng quyết định", s.line, "tự làm hết — cần nhìn ảnh");
+  t.check("...và đếm đủ tool call của cả lượt", s.toolCalls, 5);
 }
 
 // --- bộ đếm nhắc giữa lượt (thuần) --------------------------------------------------------
