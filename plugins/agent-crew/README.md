@@ -339,7 +339,8 @@ file ngoài vùng **không thể** là của nó: collect bỏ qua, in một dò
 Trước mỗi job crew tự thử chặn trong thư mục tạm (~1s, không tốn token). Thử không đạt,
 `--sandbox-mode danger-full-access`, Anti app, hoặc `crew.config.json` khai
 `"writeSandbox": false` → job chạy như trước, sổ ghi `{kind: null, reason}`, stderr báo, và
-collect đoán theo giờ như phần dưới. Worker bị chặn thì sổ ghi `sandboxDenied` và stderr in
+collect đoán theo giờ như phần dưới. Worker bị chặn thì sổ ghi `sandboxDenied` (chỉ chữ trông như đường file; chặn không phải chặn ghi như
+`sandbox_apply` khi lồng sandbox hay `ps` không tính) và stderr in
 sẵn `crew amend <MP> --job N --allow <thư mục> --note "..."` + `--resume <thread>`.
 
 Ba chỗ collect **không** tin sandbox, vẫn tính như cũ:

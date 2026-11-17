@@ -39,6 +39,10 @@ const handoff = ({ doing = "- bước 2", next = "- làm nốt bước 2", extra
     const r = checkHandoff({ text: handoff({ next: `- ${word}` }), changedFiles: true });
     t.check(`chữ đòi quyền/dispatch bị bắt: "${word}"`, r.ok === false && r.reason.includes("đòi quyền"), true);
   }
+  // 16/11: job Codex viết "Dispatcher review frames ở data/job4/frames" — chữ crew tự dạy
+  // worker dùng để gọi người giao việc — và chuỗi dừng sau lát 1 vì khớp chuỗi con "dispatch".
+  t.check("nhắc 'Dispatcher' (người giao việc) không phải đòi quyền", checkHandoff({ text: handoff({ next: "- Dispatcher review frames ở data/job4/frames; dispatcher chạy lại suite" }), changedFiles: true }).ok, true);
+  t.check("...nhưng 'dispatch' kèm 'dispatcher' vẫn bị bắt", checkHandoff({ text: handoff({ next: "- dispatcher nên dispatch thêm job" }), changedFiles: true }).ok, false);
   t.check("chữ đòi quyền ngoài mục Handoff không tính", checkHandoff({ text: `brief nói crew run\n${handoff()}`, changedFiles: true }).ok, true);
 }
 

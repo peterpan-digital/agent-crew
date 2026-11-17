@@ -207,6 +207,10 @@ if (existsSync(SEATBELT)) {
   const d = sandboxDenials('{"aggregated_output":"touch: other/r.txt: Operation not permitted\\n"} 2) patch rejected: writing outside of the project');
   t.check("sandboxDenials: path shell + apply_patch", `${d.paths.join(",")}/${d.patch}`, "other/r.txt/true");
   t.check("...dạng zsh (viết thường, path đứng sau)", sandboxDenials("zsh:1: operation not permitted: .crew/runs/x/manifest.json").paths.join(","), ".crew/runs/x/manifest.json");
+  // 16/11: bộ test của dự án gọi sandbox-exec lồng và kill tiến trình con — bị Codex chặn
+  // nhưng không phải chặn GHI; sổ ghi sandboxDenied ["sandbox_apply","ps"] và gợi ý `--allow`.
+  const nonWrite = sandboxDenials("sandbox-exec: sandbox_apply: Operation not permitted\nps: Operation not permitted\ntouch: r.txt: Operation not permitted");
+  t.check("...chữ không phải đường file (sandbox_apply, ps) không tính", nonWrite.paths.join(","), "r.txt");
 }
 
 process.exit(t.finish() ? 0 : 1);

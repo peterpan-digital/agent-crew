@@ -152,7 +152,10 @@ export function probeCodexProfile(cmd = "codex") {
 export function sandboxDenials(text) {
   const s = String(text ?? "").replaceAll("\\n", "\n").replaceAll("\\\"", "\"");
   const paths = new Set();
-  for (const m of s.matchAll(/([^\s:'"`]+): Operation not permitted/g)) paths.add(m[1]);
+  // Chỉ nhận chữ trông như đường file (có `/` hoặc `.`): chặn không phải chặn GHI cũng
+  // in cùng dạng — "sandbox-exec: sandbox_apply: …" khi lồng sandbox, "ps: …" khi soi
+  // tiến trình — và gợi ý `--allow` cho chúng là chỉ sai đường (đo 16/11/2026).
+  for (const m of s.matchAll(/([^\s:'"`]+): Operation not permitted/g)) if (/[./]/.test(m[1])) paths.add(m[1]);
   // zsh (shell của Codex) đảo thứ tự và viết thường: "operation not permitted: <path>" (đo 15/11).
   for (const m of s.matchAll(/operation not permitted: ([^\s'"`]+)/g)) paths.add(m[1]);
   const patch = /writing outside of the project/.test(s);

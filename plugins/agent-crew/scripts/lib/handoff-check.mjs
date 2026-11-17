@@ -66,7 +66,12 @@ export function checkHandoff({ text, prevText = null, changedFiles }) {
 
   const section = handoffSection(text);
   const lower = section.toLowerCase();
-  const hit = PRIVILEGE_WORDS.find((w) => lower.includes(w.toLowerCase()));
+  // "dispatch" so theo từ, chừa "dispatcher": worker được dạy gọi người giao việc là
+  // dispatcher ("Việc dispatcher cần tiếp"), và khớp chuỗi con đã cắt chuỗi một handoff
+  // hợp lệ sau lát 1 (16/11/2026). Còn lại so chuỗi con như cũ.
+  const hit = PRIVILEGE_WORDS.find((w) => (w === "dispatch"
+    ? /\bdispatch(?!er)/.test(lower)
+    : lower.includes(w.toLowerCase())));
   if (hit) return { ok: false, reason: `handoff nhắc thứ đòi quyền/dispatch ("${hit}") — cần người đọc` };
 
   if (prevText != null) {
