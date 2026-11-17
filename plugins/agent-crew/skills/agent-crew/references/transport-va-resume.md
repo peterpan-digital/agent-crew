@@ -119,7 +119,7 @@ do crew viết theo mẫu cố định — không chép chữ worker). Trạng t
 - **Kiểm cơ học trước mỗi lát kế** (`scripts/lib/handoff-check.mjs`, không tốn token Claude):
   đủ 4 mục handoff; `### Đang dở` khác lát trước; lát có đổi file ngoài evidence
   (`touchedFiles` của Codex, không có thì mtime trong thư mục run + `filesMayModify`);
-  handoff không nhắc `dispatch`, `crew run`, `add-job`, `--sandbox-mode`, `--workspace-cli`,
+  handoff không nhắc `dispatch` (theo từ; `dispatcher` — tên người giao việc — được phép), `crew run`, `add-job`, `--sandbox-mode`, `--workspace-cli`,
   `danger-full-access`, `CREW_ROLE`, đường control plane. Trượt → exit 3.
 - **Checkpoint mỗi 2 lát** (exit 4). Lát sau resume cùng thread nên vẫn thấy lượt trước —
   handoff bị nhiễm chỉ thị không chặn hẳn được; checkpoint là chỗ Claude đọc.
