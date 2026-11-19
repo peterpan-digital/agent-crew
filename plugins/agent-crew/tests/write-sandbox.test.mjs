@@ -211,6 +211,8 @@ if (existsSync(SEATBELT)) {
   // nhưng không phải chặn GHI; sổ ghi sandboxDenied ["sandbox_apply","ps"] và gợi ý `--allow`.
   const nonWrite = sandboxDenials("sandbox-exec: sandbox_apply: Operation not permitted\nps: Operation not permitted\ntouch: r.txt: Operation not permitted");
   t.check("...chữ không phải đường file (sandbox_apply, ps) không tính", nonWrite.paths.join(","), "r.txt");
+  // 18/11: dạng zsh lọt bộ lọc trên — sổ job ghi sandboxDenied ["ps"] từ "zsh:1: operation not permitted: ps".
+  t.check("...dạng zsh: chữ không phải đường file (ps) không tính", sandboxDenials("zsh:1: operation not permitted: ps\nzsh:1: operation not permitted: out/a.txt").paths.join(","), "out/a.txt");
 }
 
 process.exit(t.finish() ? 0 : 1);

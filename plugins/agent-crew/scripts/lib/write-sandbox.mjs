@@ -157,7 +157,8 @@ export function sandboxDenials(text) {
   // tiến trình — và gợi ý `--allow` cho chúng là chỉ sai đường (đo 16/11/2026).
   for (const m of s.matchAll(/([^\s:'"`]+): Operation not permitted/g)) if (/[./]/.test(m[1])) paths.add(m[1]);
   // zsh (shell của Codex) đảo thứ tự và viết thường: "operation not permitted: <path>" (đo 15/11).
-  for (const m of s.matchAll(/operation not permitted: ([^\s'"`]+)/g)) paths.add(m[1]);
+  // Cùng bộ lọc chữ-trông-như-đường-file: "zsh:1: operation not permitted: ps" đã lọt vào sổ (18/11).
+  for (const m of s.matchAll(/operation not permitted: ([^\s'"`]+)/g)) if (/[./]/.test(m[1])) paths.add(m[1]);
   const patch = /writing outside of the project/.test(s);
   return { paths: [...paths].slice(0, 10), patch };
 }

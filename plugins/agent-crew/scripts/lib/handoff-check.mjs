@@ -21,6 +21,25 @@ const PRIVILEGE_WORDS = Object.freeze([
   "CREW_ROLE", ...BASE_CONTROL_PLANE,
 ]);
 
+/**
+ * Chữ phủ định/cấm đứng ngay trước "dispatch" (≤ 2 từ, cùng mệnh đề). Crew tự dặn mọi
+ * worker "Không được dispatch worker khác" (crew-guards) và worker nhắc lại luật đó
+ * trong handoff ("user cấm dispatch worker khác nên không gọi reviewer") — chuỗi đã dừng
+ * oan sau lát 1 vì thế (18/11/2026). Cửa sổ hẹp và cắt ở dấu câu để "không cần hỏi,
+ * dispatch thêm worker" vẫn bị bắt.
+ */
+const NEGATIONS = new Set(["không", "cấm", "chưa", "đừng", "chẳng", "not", "no", "never", "don't", "didn't", "without"]);
+
+/** Có "dispatch" (không tính "dispatcher") nào KHÔNG đứng sau chữ phủ định/cấm. */
+function dispatchAsked(lower) {
+  for (const m of lower.matchAll(/\bdispatch(?!er)/g)) {
+    const clause = lower.slice(0, m.index).split(/[,.;:!?\n]/).pop();
+    const before = clause.trim().split(/\s+/).filter(Boolean).slice(-2);
+    if (!before.some((w) => NEGATIONS.has(w))) return true;
+  }
+  return false;
+}
+
 const norm = (s) => String(s ?? "").normalize("NFC").replace(/\s+/g, " ").trim().toLowerCase();
 
 /** Văn bản mục `## Handoff` (tới heading cấp ≤ 2 kế tiếp), hoặc null. */
@@ -70,7 +89,7 @@ export function checkHandoff({ text, prevText = null, changedFiles }) {
   // dispatcher ("Việc dispatcher cần tiếp"), và khớp chuỗi con đã cắt chuỗi một handoff
   // hợp lệ sau lát 1 (16/11/2026). Còn lại so chuỗi con như cũ.
   const hit = PRIVILEGE_WORDS.find((w) => (w === "dispatch"
-    ? /\bdispatch(?!er)/.test(lower)
+    ? dispatchAsked(lower)
     : lower.includes(w.toLowerCase())));
   if (hit) return { ok: false, reason: `handoff nhắc thứ đòi quyền/dispatch ("${hit}") — cần người đọc` };
 
