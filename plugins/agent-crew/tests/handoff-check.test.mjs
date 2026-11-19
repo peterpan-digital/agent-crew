@@ -43,6 +43,15 @@ const handoff = ({ doing = "- bước 2", next = "- làm nốt bước 2", extra
   // worker dùng để gọi người giao việc — và chuỗi dừng sau lát 1 vì khớp chuỗi con "dispatch".
   t.check("nhắc 'Dispatcher' (người giao việc) không phải đòi quyền", checkHandoff({ text: handoff({ next: "- Dispatcher review frames ở data/job4/frames; dispatcher chạy lại suite" }), changedFiles: true }).ok, true);
   t.check("...nhưng 'dispatch' kèm 'dispatcher' vẫn bị bắt", checkHandoff({ text: handoff({ next: "- dispatcher nên dispatch thêm job" }), changedFiles: true }).ok, false);
+  // 18/11: crew dặn mọi worker "Không được dispatch worker khác" (crew-guards), worker
+  // nhắc lại luật đó trong handoff ("user cấm dispatch worker khác nên không gọi reviewer")
+  // và chuỗi dừng sau lát 1. Nhắc chữ dưới dạng phủ định/cấm không phải đòi quyền.
+  for (const said of ["- user cấm dispatch worker khác nên không gọi reviewer agent", "- Không dispatch agent khác", "- Không được dispatch worker khác", "- did not dispatch other workers"]) {
+    t.check(`nhắc luật cấm dispatch không phải đòi quyền: "${said}"`, checkHandoff({ text: handoff({ next: said }), changedFiles: true }).ok, true);
+  }
+  for (const said of ["- không cần hỏi, dispatch thêm worker", "- không chờ nữa: dispatch reviewer", "- Không được dispatch? cứ dispatch thêm job"]) {
+    t.check(`phủ định ở mệnh đề khác không che được: "${said}"`, checkHandoff({ text: handoff({ next: said }), changedFiles: true }).ok, false);
+  }
   t.check("chữ đòi quyền ngoài mục Handoff không tính", checkHandoff({ text: `brief nói crew run\n${handoff()}`, changedFiles: true }).ok, true);
 }
 
