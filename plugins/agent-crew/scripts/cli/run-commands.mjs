@@ -53,6 +53,44 @@ export function workspaceRoot(cwd) {
   }
 }
 
+/**
+ * Workspace ngoài khai `workspace` là repo lồng (`nestedRepos` trong crew.config.json
+ * của nó), hoặc null. `workspaceRoot` lấy gốc git của cwd, nên đứng trong repo lồng thì
+ * crew im lặng dùng layout mặc định của repo con. Đo 19/11/2026: session đứng ở `tasks/`
+ * của mwg-ai-worker, run rơi vào `tasks/.crew/runs/` thay vì thư mục task theo layout cha.
+ * Chỉ cảnh báo, không tự đổi workspace: `--workspace` vẫn là cách chọn tường minh.
+ */
+export function outerWorkspaceClaiming(workspace) {
+  let dir = dirname(resolve(workspace));
+  // Vài tầng là đủ: repo lồng khai ở nestedRepos luôn nằm ngay trong workspace ngoài.
+  for (let hop = 0; hop < 4; hop += 1) {
+    let outer;
+    try {
+      outer = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      return null;
+    }
+    if (!outer || outer === resolve(workspace)) return null;
+    try {
+      const rel = relative(outer, workspace).split(sep).join("/");
+      const nested = (loadLayout(outer).nestedRepos ?? []).map((n) => n.replace(/\/+$/, ""));
+      if (existsSync(join(outer, "crew.config.json")) && nested.includes(rel)) return outer;
+    } catch { /* config hỏng của repo ngoài: không phải việc của lệnh này */ }
+    const up = dirname(outer);
+    if (up === outer) return null;
+    dir = up;
+  }
+  return null;
+}
+
+/** Một dòng cảnh báo cho doctor và new-run, hoặc null. */
+export function nestedRepoWarning(workspace) {
+  const outer = outerWorkspaceClaiming(workspace);
+  if (!outer) return null;
+  return `${workspace} là repo lồng (nestedRepos) của ${outer} — crew.config.json của repo đó không áp dụng ở đây. `
+    + `Chạy crew từ ${outer}, hoặc thêm --workspace "${outer}"`;
+}
+
 /** yymmdd-HHMM theo giờ máy: cùng dạng runId mọi run cũ đã dùng. */
 export function runStamp(now = new Date()) {
   const p = (n) => String(n).padStart(2, "0");
@@ -69,6 +107,10 @@ export function newRun(argv, { cwd }) {
     const { flags } = parseFlags(argv, ["task", "run", "workspace", "depth"]);
     const workspace = flags.workspace ? resolve(flags.workspace) : workspaceRoot(cwd);
     const layout = loadLayout(workspace);
+    if (!flags.workspace) {
+      const warn = nestedRepoWarning(workspace);
+      if (warn) process.stderr.write(`CẢNH BÁO: ${warn}\n`);
+    }
     if (usesTask(layout) && !flags.task) throw new CliError(`layout của workspace này cần --task (thư mục task: ${layout.taskDir})`);
     const run = flags.run ?? runStamp();
     if (!/^[\w.-]+$/.test(run)) throw new CliError(`--run chỉ nhận chữ, số, ".", "_", "-": "${run}"`);

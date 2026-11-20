@@ -6,7 +6,7 @@ when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, 
 category: agent-ops
 keywords: [crew, dispatch, multi-agent, song-song, codex, antigravity, worker]
 metadata:
-  version: "2.8.3"
+  version: "2.8.4"
 ---
 
 # agent-crew
@@ -136,7 +136,10 @@ gợi ý; job list có `next_run` thì đó là lô sau, **không tự chạy n�
 
 ## Bước 1 — Run thuộc về đâu
 
-`crew doctor` in dòng `layout`. Hai trường hợp:
+`crew doctor` in dòng `layout` và dòng `task` — dòng `task` nói thẳng `new-run` cần hay
+không cần `--task`; làm đúng theo dòng đó. Doctor báo "repo lồng (nestedRepos)" nghĩa là
+cwd đang ở repo con mà repo cha đã khai: `cd` về repo cha (hoặc `--workspace <repo cha>`)
+rồi mới tạo run, không thì run rơi vào layout mặc định của repo con. Hai trường hợp:
 
 - **Layout không có task** (mặc định): run nằm ở `.crew/runs/{run}`. Không cần tạo gì.
 - **Layout có task** (`taskDir` trong config, ví dụ `tasks/{task}`): mọi run phải thuộc

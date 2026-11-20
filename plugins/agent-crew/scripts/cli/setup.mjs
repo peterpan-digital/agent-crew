@@ -14,8 +14,8 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DELEGATE_MODES, loadCrewConfig } from "../lib/crew-config.mjs";
 import { TIERS, TierError, codexConfigModel, liveCodexModels, parseAgyModels, resolveTier } from "../lib/model-tiers.mjs";
-import { CONFIG_NAME, DEFAULT_LAYOUT, loadLayout } from "../lib/crew-layout.mjs";
-import { CliError, parseFlags, workspaceRoot } from "./run-commands.mjs";
+import { CONFIG_NAME, DEFAULT_LAYOUT, loadLayout, usesTask } from "../lib/crew-layout.mjs";
+import { CliError, nestedRepoWarning, parseFlags, workspaceRoot } from "./run-commands.mjs";
 import { SHIM_MARK, pluginInstallOf, readShim, shimPath, shimScript, stableNode } from "./crew-shim.mjs";
 
 export { shimPath, shimScript, stableNode };
@@ -89,6 +89,13 @@ export async function doctor(argv, { cwd }) {
     modelTiers = rules.modelTiers;
     const custom = existsSync(join(workspace, CONFIG_NAME));
     say("layout", `${custom ? CONFIG_NAME : "mặc định (chưa có crew.config.json)"} — run ở ${layout.runDir}, evidence trong ${layout.evidenceRoot}/`);
+    // Nói thẳng có cần --task không. Đo 19/11/2026: session chạy doctor ngay trước rồi vẫn
+    // gõ `crew new-run --task …` ở layout không task, lần thứ 3 trong một tuần.
+    say("task", usesTask(layout)
+      ? `cần --task: crew new-run --task <tên> (thư mục task: ${layout.taskDir})`
+      : "layout không task — crew new-run không --task");
+    const nestedWarn = nestedRepoWarning(workspace);
+    if (nestedWarn) problems.push(nestedWarn);
     say("routing", routingTriggers.length
       ? `${routingTriggers.length} trigger (${[...new Set(routingTriggers.map((t) => t.kind))].join(", ")})${routingLog ? `, log ${routingLog}` : ""}`
       : "không khai trigger — hook chỉ nói khi owner gõ @anti/@codex");
