@@ -751,7 +751,12 @@ function report(r) {
     for (const p of r.scope.suspect) console.log(`  ${p.path} (có thể của job ${p.seqs.join("/")})`);
   }
   if (r.scope.unattributable.length) {
-    console.log(`\nkhông quy được cho job nào (file đã xoá hoặc không stat được), tự đọc: ${r.scope.unattributable.join(", ")}`);
+    // Có trần: đo 19/11/2026 repo task dọn 487 thư mục sang _archive trước run (chưa
+    // commit), collect in cả 487 đường trên một dòng 41KB và session chỉ thấy bản cắt.
+    const un = r.scope.unattributable;
+    console.log(`\nkhông quy được cho job nào (file đã xoá hoặc không stat được) — ${un.length} file, tự đọc:`);
+    for (const p of un.slice(0, 10)) console.log(`  ${p}`);
+    if (un.length > 10) console.log(`  … và ${un.length - 10} file nữa (đủ danh sách: git status --porcelain | grep '^ D')`);
   }
   console.log(`\nphạm vi ghi: ${r.scope.inScope.length} file trong phạm vi, ${r.scope.outsideWindow.length} file thay đổi ngoài khoảng job chạy (không tính)`);
   // Job chạy dưới sandbox ghi: hệ điều hành đã chặn worker ghi ra ngoài vùng, nên
@@ -760,7 +765,7 @@ function report(r) {
     const ex = r.scope.sandboxExcluded;
     console.log(`  ${ex.length} file đổi trong lúc job chạy nhưng ngoài vùng ghi của job đã sandbox (worker không ghi được tới đó) — không tính:`);
     for (const x of ex.slice(0, 10)) console.log(`    ${x.path} (job ${x.seqs.join("/")})`);
-    if (ex.length > 10) console.log(`    … và ${ex.length - 10} file nữa (đủ danh sách trong --json)`);
+    if (ex.length > 10) console.log(`    … và ${ex.length - 10} file nữa (đủ danh sách: git status --porcelain)`);
   }
   console.log("  Lưu ý: chỉ đọc working tree — file đã commit thì không thấy.");
   if (!r.head.known) {

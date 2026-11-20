@@ -15,7 +15,7 @@ Một cửa vào cho mọi script. Cài shim một lần (ghi `~/.local/bin/crew
 
 ```bash
 node plugins/agent-crew/bin/crew.mjs install
-crew doctor          # node, git, layout, agy/codex, tên model còn sống, bậc --tier, delegate
+crew doctor          # node, git, layout (+ có cần --task, cảnh báo repo lồng), agy/codex, tên model còn sống, bậc --tier, delegate
 crew quota           # quota còn lại của Codex/Anti (5h, tuần, giờ hồi), không tốn token
 crew init            # .crew/ + .gitignore cho log thô; --state on để bật file trạng thái phiên;
                      # --delegate aggressive để gate gợi ý giao việc code/research chủ động

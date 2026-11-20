@@ -1819,4 +1819,22 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   t.check("...into the task's own reports folder", rep.path, join("tasks", TASK, "reports", "261009-0002-crew-test.md"));
 }
 
+// --- Hàng trăm file đã xoá từ trước run không được đổ thành một dòng khổng lồ ------
+// Đo 19/11/2026: repo task dọn 487 thư mục sang _archive trước run (chưa commit), collect
+// in cả 487 đường trên một dòng 41KB — session chỉ thấy bản cắt, phần phán quyết bị đẩy khuất.
+{
+  const { ws, manifestPath } = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE, status: "done" }] });
+  const doomed = [];
+  for (let i = 0; i < 60; i += 1) doomed.push(writeFile(join(ws, "old", `task-${String(i).padStart(2, "0")}`, "README.md"), "x\n"));
+  execFileSync("git", ["add", "-A"], { cwd: ws });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"], { cwd: ws });
+  for (const f of doomed) rmSync(f);
+  const p = spawnSync(process.execPath, [join(MODULE_ROOT, "scripts", "crew-collect.mjs"), manifestPath, "--dry-run"], { cwd: ws, encoding: "utf8" });
+  const out = p.stdout ?? "";
+  const longest = Math.max(...out.split("\n").map((l) => l.length));
+  t.check("60 file đã xoá: không dòng nào dài quá 400 ký tự", longest <= 400, true);
+  t.check("...vẫn nói tổng số file không quy được", /60 file/.test(out), true);
+  t.check("...và chỉ chỗ xem đủ danh sách", out.includes("git status"), true);
+}
+
 process.exit(t.finish() ? 0 : 1);

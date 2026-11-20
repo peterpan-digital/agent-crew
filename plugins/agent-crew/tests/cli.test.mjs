@@ -4,7 +4,7 @@
  * tối thiểu (`/usr/bin:/bin`, không có node).
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { readManifest } from "../scripts/crew-manifest.mjs";
@@ -268,6 +268,30 @@ const gitRepo = (prefix) => {
   const noWorker = crew(["doctor"], { cwd: gitRepo("cli-doc-nowork-"), env: { ...env, PATH: [dirname(process.execPath), BARE_PATH].join(delimiter) } });
   t.check("doctor: không có agy lẫn codex → exit 1", noWorker.code, 1);
   t.check("đọc tên model từ `agy models`", parseAgyModels("Fetching available models...\ngemini-3.8-flash-low\tGemini\nclaude-sonnet-4-6\tClaude\n").join(","), "gemini-3.8-flash-low,claude-sonnet-4-6");
+}
+
+// ---- doctor nói thẳng layout có cần --task không, và nhận ra repo lồng ----
+// Đo 19/11/2026: session chạy doctor ngay trước rồi vẫn gõ `crew new-run --task …` ở
+// layout không task (lần 3); và một session đứng trong `tasks/` — repo lồng mà repo cha
+// khai ở `nestedRepos` — chạy crew bằng layout mặc định, bỏ qua layout task của repo cha.
+{
+  const home = mkdtempSync(join(tmpdir(), "cli-home-"));
+  const env = { ...process.env, HOME: home, PATH: [FIXTURE_BIN, dirname(process.execPath), BARE_PATH].join(delimiter) };
+  const plain = crew(["doctor"], { cwd: gitRepo("cli-doc-task0-"), env });
+  t.check("doctor layout không task: dặn new-run không --task", /không --task|bỏ --task/.test(plain.out), true);
+  const tws = gitRepo("cli-doc-task1-");
+  writeFileSync(join(tws, "crew.config.json"), JSON.stringify({
+    runDir: "tasks/{task}/reports/crew-{run}", taskDir: "tasks/{task}", reportDir: "tasks/{task}/reports",
+    logDir: "tasks/{task}/data/crew-logs/crew-{run}", evidenceRoot: "tasks", nestedRepos: ["tasks"],
+  }));
+  const tasked = crew(["doctor"], { cwd: tws, env });
+  t.check("doctor layout có task: dặn new-run cần --task", /cần --task/.test(tasked.out), true);
+  mkdirSync(join(tws, "tasks"));
+  execFileSync("git", ["init", "-q"], { cwd: join(tws, "tasks") });
+  const nested = crew(["doctor"], { cwd: join(tws, "tasks"), env });
+  t.check("doctor trong repo lồng: chỉ ra repo cha có crew.config.json", nested.out.includes(tws) && /nestedRepos|repo lồng/.test(nested.out), true);
+  const nr = crew(["new-run"], { cwd: join(tws, "tasks"), env });
+  t.check("new-run trong repo lồng: cảnh báo ở stderr", /repo lồng|nestedRepos/.test(nr.err), true);
 }
 
 // ---- install + shim dưới PATH tối thiểu ----
