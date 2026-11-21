@@ -6,7 +6,7 @@ when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, 
 category: agent-ops
 keywords: [crew, dispatch, multi-agent, song-song, codex, antigravity, worker]
 metadata:
-  version: "2.8.4"
+  version: "2.8.5"
 ---
 
 # agent-crew
@@ -445,6 +445,11 @@ mọi lát trừ lát cuối ra `CHAINED`, verdict của chuỗi là verdict lá
 
 `--abandon` chỉ bỏ job `STALE`. Job `failed` đã có job sau cùng worker làm lại và
 PASS: đọc evidence job đó rồi `--replaced {hỏng}={thay}`.
+
+Job đã thêm mà quyết không bắn nữa (hết quota, bị run khác thay) cũng là `STALE`:
+`--abandon` nó rồi collect lại tới exit 0, đừng bỏ run dở. `--ack-runtime`/`--not-ours`/
+`--replaced` đi chung `--dry-run` thì **chưa ghi** — dòng cuối output nhắc; chạy lại bỏ
+`--dry-run`.
 
 ### Việc chờ owner quyết: `crew hold`
 

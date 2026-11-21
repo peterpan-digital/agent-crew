@@ -853,8 +853,20 @@ function report(r) {
     console.log(`\nJob CONTINUE: ${continuing.map((x) => x.seq).join(", ")}. Chưa xong, dừng có handoff — làm tiếp bằng job mới`);
     console.log("  `crew add-job` rồi `crew run <worker> --resume <conversationId của job đó>`; job đó chạy xong thì dòng này thành CHAINED.");
   }
+  // Job treo/đang chạy/hỏng cũng phải có mặt ở dòng cuối: đo 20/11, dòng này in
+  // "2/3 job đạt, 1 job cần đọc mắt (WARN)" cho run có 1 job STALE — WARN nằm trong
+  // số đạt nên job STALE biến mất, và session đọc đuôi output không thấy `--abandon`.
+  const stale = r.rows.filter((x) => x.verdict === "STALE");
+  if (stale.length) {
+    console.log(`\nJob STALE: ${stale.map((x) => x.seq).join(", ")}. Treo không evidence — bắn lại, hoặc bỏ bằng`);
+    console.log(`  ${stale.map((x) => `crew collect <manifest> --abandon ${x.seq}`).join("; ")} (chưa bắn mà không định bắn nữa cũng bỏ như vậy).`);
+  }
+  const named = new Set(["PASS", "CANCELLED", "WAIVED", "COVERED", "REPLACED", "CHAINED", "STALE"]);
+  const others = {};
+  for (const x of r.rows) if (!named.has(x.verdict)) others[x.verdict] = (others[x.verdict] ?? 0) + 1;
+  const otherText = Object.entries(others).map(([v, n]) => `, ${n} job ${v}`).join("");
   const counted = r.rows.length - cancelled;
-  console.log(`\n${pass}/${counted} job đạt${cancelled ? `, ${cancelled} job bỏ có chủ ý` : ""}${waived ? `, ${waived} job owner bỏ (WAIVED)` : ""}${covered ? `, ${covered} job được lượt resume làm tiếp (COVERED)` : ""}${replaced ? `, ${replaced} job hỏng có job khác làm thay (REPLACED)` : ""}${chained ? `, ${chained} job dừng có handoff đã được làm tiếp (CHAINED)` : ""}${warn ? `, ${warn} job cần đọc mắt (WARN)` : ""} — exit ${r.exitCode}`);
+  console.log(`\n${pass}/${counted} job đạt${stale.length ? `, ${stale.length} job treo (STALE)` : ""}${otherText}${cancelled ? `, ${cancelled} job bỏ có chủ ý` : ""}${waived ? `, ${waived} job owner bỏ (WAIVED)` : ""}${covered ? `, ${covered} job được lượt resume làm tiếp (COVERED)` : ""}${replaced ? `, ${replaced} job hỏng có job khác làm thay (REPLACED)` : ""}${chained ? `, ${chained} job dừng có handoff đã được làm tiếp (CHAINED)` : ""}${warn ? `, ${warn} job cần đọc mắt (WARN)` : ""} — exit ${r.exitCode}`);
   if (r.exitCode === 1) console.log("Chưa được viết report tổng: còn job chưa xong, đang chờ quyết định, runtime lệch evidence, hoặc evidence đổi sau khi xong mà chưa ai đọc.");
   if (r.exitCode === 2) console.log("Chưa được viết report tổng: có vi phạm phạm vi ghi, trùng evidence, kho credential bị đổi hoặc holds bị sửa.");
   if (r.exitCode === 3) {
@@ -1108,6 +1120,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       graceMs, dryRun, notOurs, ackRuntime, replaced, reason: opts.values.get("--reason") ?? null,
     });
     report(r);
+    // Dry-run không ghi sổ người đọc (đúng thiết kế) nhưng dòng "(--dry-run: …)" nằm
+    // tít trên bảng. Đo 20/11: session gõ `--ack-runtime 1 … --dry-run | tail -3`, tưởng
+    // đã ack rồi bỏ đi, run kẹt exit 1. Nhắc lại ở dòng cuối cùng.
+    const ledgerFlags = [notOurs.length && "--not-ours", ackRuntime.length && "--ack-runtime", replaced.length && "--replaced"].filter(Boolean);
+    if (dryRun && ledgerFlags.length) {
+      console.log(`(--dry-run: ${ledgerFlags.join(", ")} CHƯA ghi vào manifest — chạy lại đúng lệnh này bỏ --dry-run để ghi)`);
+    }
     if (opts.values.has("--report")) {
       // After report(), so the table is on screen either way, and inside the
       // same try so a refusal exits 2 rather than pretending the run is clean.
