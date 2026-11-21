@@ -1837,4 +1837,37 @@ const DONE = "work\n\nStatus: DONE\nSummary: ok\n";
   t.check("...và chỉ chỗ xem đủ danh sách", out.includes("git status"), true);
 }
 
+// --- dòng tổng kết phải đếm đủ mọi job, kể cả job treo ----------------------
+{
+  // Đo 20/11 (run Digital Project 261120-2109): 3 job, job 2 pending chưa bắn
+  // (STALE), dòng cuối in "2/3 job đạt, 1 job cần đọc mắt (WARN)" — WARN là job 1
+  // nằm trong số đạt, job 2 biến mất. Session đọc `tail -3` nên không thấy lời
+  // chỉ `--abandon 2` trong bảng và bỏ run dở.
+  const { ws, manifestPath } = newRun({
+    jobs: [
+      { evidence: join(RUN_REL, "w1.md"), body: DONE },
+      { evidence: join(RUN_REL, "w2.md"), startedAt: null, endedAt: null },
+    ],
+    at: Date.now() - 3 * 3600_000,
+  });
+  const cli = runCli(manifestPath, ["--dry-run"]);
+  const last = cli.out.trim().split("\n").filter((l) => /job đạt/.test(l)).pop() ?? "";
+  t.check("dòng tổng kết đếm job STALE", /1 job treo \(STALE\)/.test(last), true);
+  t.check("...và chỉ lệnh bỏ ngay dưới", cli.out.includes("Job STALE: 2") && cli.out.includes("--abandon 2"), true);
+  void ws;
+}
+
+// --- --ack-runtime/--not-ours đi với --dry-run: nói rõ là chưa ghi ----------
+{
+  // Đo 20/11 (cùng run): session gõ `--ack-runtime 1 --reason … --dry-run | tail -3`,
+  // ack không được ghi (đúng thiết kế dry-run) nhưng phần đuôi không nói, và session
+  // không chạy lại lần thật.
+  const { ws, manifestPath } = newRun({ jobs: [{ evidence: join(RUN_REL, "w1.md"), body: DONE }] });
+  const cli = runCli(manifestPath, ["--dry-run", "--not-ours", "x.txt", "--reason", "đọc rồi"]);
+  const tail = cli.out.trim().split("\n").slice(-3).join("\n");
+  t.check("dry-run kèm cờ sổ người đọc: đuôi output nói chưa ghi", /--dry-run: --not-ours CHƯA ghi/.test(tail), true);
+  t.check("...và sổ đúng là chưa ghi", (readManifest(manifestPath).dismissedPaths ?? []).length, 0);
+  void ws;
+}
+
 process.exit(t.finish() ? 0 : 1);

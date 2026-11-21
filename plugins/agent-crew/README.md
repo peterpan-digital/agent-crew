@@ -645,6 +645,12 @@ evidence). Job mà adapter đã ghi `failed` + `failure` thì **từ chối** �
 một cờ duy nhất biến exit 1 thành exit 0 và job chết biến khỏi mẫu số. `--dry-run`
 phủ luôn `--abandon`, vì cờ an toàn mà không phủ cờ ghi thì vô nghĩa.
 
+Dòng tổng kết cuối luôn đếm đủ: job `STALE` có số riêng ("1 job treo (STALE)") và dòng
+`Job STALE: …` chỉ lệnh `--abandon` — đo 20/11, dòng cuối từng in "2/3 job đạt, 1 job cần
+đọc mắt (WARN)" và job STALE biến mất với người chỉ đọc đuôi output. Cờ sổ người đọc
+(`--ack-runtime`, `--not-ours`, `--replaced`) đi chung `--dry-run` thì dòng cuối cùng nói rõ
+là chưa ghi.
+
 Job `failed` đã được làm lại thì có đường riêng, và nó không xoá gì: `--replaced 1=3
 --reason "..."` ghi vào `replacedJobs` rằng job 3 (cùng worker, seq lớn hơn, tự `PASS`)
 làm thay job 1. Job 1 thành `REPLACED`, vẫn nằm trong bảng và report. Một job thay chỉ
@@ -670,7 +676,7 @@ nội dung manifest — nên một runner spawn được process và so được
 | File | Đo gì |
 | --- | --- |
 | `tests/judge-verdict.test.mjs` | 9 ca của bảng phán quyết `judgeJob()`: đủ tổ hợp evidence có/rỗng/thiếu × runtime ok/fail × có/không dòng `Status:`. |
-| `tests/collect-gate.test.mjs` | Cổng nghiệm thu trên các run dựng sẵn để sai đúng 1 kiểu: trùng evidence sau khi resolve, ghi ngoài phạm vi, ghi vào file được bảo vệ, ghi vào prefix bị gitignore đã khai, biên prefix, khoảng suy đoán, xoá file, `--abandon` job đã fail, `--dry-run` phủ `--abandon`, `--grace` không phải số, chạy từ cwd khác, echo template brief, provenance evidence, WARN bền qua 2 lần collect, cost gate chỉ nằm trong evidence. |
+| `tests/collect-gate.test.mjs` | Cổng nghiệm thu trên các run dựng sẵn để sai đúng 1 kiểu: trùng evidence sau khi resolve, ghi ngoài phạm vi, ghi vào file được bảo vệ, ghi vào prefix bị gitignore đã khai, biên prefix, khoảng suy đoán, xoá file, `--abandon` job đã fail, `--dry-run` phủ `--abandon`, dòng tổng kết đếm job STALE, dry-run nhắc cờ sổ chưa ghi, `--grace` không phải số, chạy từ cwd khác, echo template brief, provenance evidence, WARN bền qua 2 lần collect, cost gate chỉ nằm trong evidence. |
 | `tests/codex-lifecycle.test.mjs` | Vòng đời `codex-run.mjs` qua `codex` giả: grandchild giữ stdout, brief 200KB vào child không đọc stdin, watchdog trước stderr rác, retry đè sidecar cũ, log dir sai quyền, `BLOCKED` phải exit 3, và manifest phải ghi được ca bị giết. |
 | `tests/anti-headless-stop.test.mjs` | SIGTERM vào adapter Anti headless giết cả agy lẫn lệnh nó sinh ra (file ghi muộn không xuất hiện), sổ ghi `failed`, exit 1. Chạy trên code cũ thì 5/7 check đỏ. |
 | `tests/codex-failure-quota-and-reconcile-time.test.mjs` | Lý do lỗi Codex lấy từ `turn.failed` trong stream (không phải log MCP ở stderr), hết credit thì chỉ `crew quota` + `--resume`; cổng quota cảnh báo job lớn từ 30%; reconcile lấy giờ kết thúc theo mtime evidence. |
