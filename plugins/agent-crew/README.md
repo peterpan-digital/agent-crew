@@ -383,7 +383,11 @@ dùng crew — tức là chỗ ghi hợp lệ mà tài liệu vẫn đang chỉ 
 `filesMayModify` lại là chỗ git mù hoàn toàn. Nên gate stat thêm 2 nhóm ngoài
 `git status`: mọi prefix có khai `filesMayModify`, và danh sách file bảo vệ
 lấy từ Protected Files của `CLAUDE.md`. Ghi vào file được bảo vệ là exit 2, không
-có đường khai để hợp lệ hoá.
+có đường khai `filesMayModify` để hợp lệ hoá, và không được loại theo sandbox ghi của job
+(nếu sandbox có đường không che thì đây là chỗ đắt nhất). Session khác sửa thì bác từng
+path bằng `--not-ours <path> --reason`; collect ghi chú dòng nào job đã sandbox không ghi
+được tới (đo 21/11: ba file `.claude|.agents|.codex/skills` của session khác bị tính cho
+job Codex chỉ ghi được `listing-kit/`).
 
 **Runtime tự khai thì thắng đồng hồ — nhưng chỉ theo một chiều.** Job nào có
 `touchedFiles` (Codex headless đọc từ event `file_change`, Codex app từ `result` của
@@ -649,7 +653,10 @@ Dòng tổng kết cuối luôn đếm đủ: job `STALE` có số riêng ("1 jo
 `Job STALE: …` chỉ lệnh `--abandon` — đo 20/11, dòng cuối từng in "2/3 job đạt, 1 job cần
 đọc mắt (WARN)" và job STALE biến mất với người chỉ đọc đuôi output. Cờ sổ người đọc
 (`--ack-runtime`, `--not-ours`, `--replaced`) đi chung `--dry-run` thì dòng cuối cùng nói rõ
-là chưa ghi.
+là chưa ghi. Exit 2/3 thì đuôi output nêu đúng loại vi phạm (file bảo vệ, SCOPE_VIOLATION,
+trùng evidence, kho credential, holds), tối đa 3 path mỗi loại và lệnh gỡ (`--not-ours`,
+`crew amend --allow`) — đo 21/11, dòng cuối chỉ nói chung chung và session đọc `| tail -15`
+báo owner "mọi bước kiểm đều qua" trong khi run kẹt exit 2.
 
 Job `failed` đã được làm lại thì có đường riêng, và nó không xoá gì: `--replaced 1=3
 --reason "..."` ghi vào `replacedJobs` rằng job 3 (cùng worker, seq lớn hơn, tự `PASS`)
@@ -688,6 +695,7 @@ nội dung manifest — nên một runner spawn được process và so được
 | `tests/holds.test.mjs` | Hold từ đầu tới cuối: tạo hold cổng chi phí khi run hết job chạy, đọc tên API (kể cả dòng luật brief đứng trước dòng `Concerns`), `answer`/`defer`/`cover`, supersede khi claim lại, từ chối dưới vai worker và khi còn job chạy, và vân tay `holds` lệch qua `codex-run.mjs` thật phải ra exit 2. |
 | `tests/crew-digest.test.mjs` | Bảng đầu phiên: thứ tự hold → job kẹt → run chưa nghiệm thu, trần 15 dòng, run trước mốc không hiện vì "chưa nghiệm thu", câu hỏi bị lọc trước khi vào ngữ cảnh, manifest hỏng không làm chết hook. |
 | `tests/anti-stall.test.mjs` | Báo im của job Anti app với đồng hồ giả: ghi manifest, log dispatch hay evidence job khác không reset được đồng hồ; mtime file riêng của job chỉ hoãn; `conversationId` ghi trước vòng poll; và SIGTERM thật vào một job app giả đang đợi phải ra `failed`. |
+| `tests/collect-exit2-tail-guidance.test.mjs` | Exit 2 vì file bảo vệ do session khác sửa lúc job sandbox chạy: vẫn chặn, khối file bảo vệ ghi chú job không ghi được tới đó, 6 dòng cuối nêu loại vi phạm + path + lệnh `--not-ours`; bác xong ra exit 0; job không sandbox thì không khẳng định gì về sandbox. |
 | `tests/write-sandbox.test.mjs` | Sandbox ghi: vùng ghi = đúng `allowedFor` của collect; seatbelt thật chặn shell/python ngoài vùng và `readOnly` trong vùng; Codex (fake, `FAKE_SANDBOX=enforce`) nhận profile thay `--sandbox`, profile đứng sau `resume`; tự thử không đạt / `danger-full-access` / `writeSandbox: false` → chạy như cũ, sổ ghi lý do; agy giả dưới seatbelt bị chặn ghi ngoài vùng, sổ ghi `sandboxDenied`; collect không tính file ngoài vùng của job đã sandbox. |
 | `tests/fixtures/fake-codex` | `codex` giả, chọn hình dạng lỗi bằng `FAKE_MODE`. `tests/fixtures/bin/codex` là symlink trỏ vào nó — phải đúng tên `codex`, không thì PATH rơi xuống CLI thật và bộ test không đo gì cả. |
 
