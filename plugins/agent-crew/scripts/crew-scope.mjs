@@ -573,7 +573,13 @@ export function collectWriteScope(manifest, { workspace, graceMs = DEFAULT_GRACE
       continue;
     }
     if (protectedHit) {
-      result.protectedHits.push(entry);
+      // Vẫn chặn (file bảo vệ không loại theo sandbox), nhưng ghi lại việc mọi job khớp
+      // giờ đều đã sandbox không ghi tới đây — để collect nói cho dispatcher biết đây
+      // gần như chắc là session khác. Đo 21/11/2026: ba file `.claude|.agents|.codex/skills`
+      // do session khác sửa bị tính cho job Codex chỉ ghi được `listing-kit/`.
+      const outsideSandbox = !mine && inWindow.length > 0
+        && inWindow.every((i) => sandboxOf.has(i.seq) && !sandboxAllows(sandboxOf.get(i.seq), path));
+      result.protectedHits.push(outsideSandbox ? { ...entry, outsideSandbox: true } : entry);
       continue;
     }
     if (entry.bounded) {

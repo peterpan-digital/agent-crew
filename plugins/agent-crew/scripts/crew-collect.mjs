@@ -717,7 +717,13 @@ function report(r) {
   }
   if (r.scope.protectedHits.length) {
     console.log("\nGHI VÀO FILE ĐƯỢC BẢO VỆ — không worker nào được phép:");
-    for (const h of r.scope.protectedHits) console.log(`  ${h.path} — ${why(h)}`);
+    for (const h of r.scope.protectedHits) {
+      console.log(`  ${h.path} — ${why(h)}${h.outsideSandbox ? " (job đã chạy dưới sandbox ghi, không ghi được tới đây — nhiều khả năng của session khác)" : ""}`);
+    }
+    if (r.scope.protectedHits.some((h) => h.source === "inferred")) {
+      console.log("  Dòng `theo thời gian` là suy đoán từ mtime. Kiểm `git diff -- <path>` / `git log`; của session khác thì bác bằng:");
+      console.log("    --not-ours <path> --reason \"<vì sao>\"");
+    }
   }
   if (r.scope.outOfScope.length) {
     console.log("\nSCOPE_VIOLATION — file bị ghi ngoài phạm vi run:");
@@ -868,13 +874,48 @@ function report(r) {
   const counted = r.rows.length - cancelled;
   console.log(`\n${pass}/${counted} job đạt${stale.length ? `, ${stale.length} job treo (STALE)` : ""}${otherText}${cancelled ? `, ${cancelled} job bỏ có chủ ý` : ""}${waived ? `, ${waived} job owner bỏ (WAIVED)` : ""}${covered ? `, ${covered} job được lượt resume làm tiếp (COVERED)` : ""}${replaced ? `, ${replaced} job hỏng có job khác làm thay (REPLACED)` : ""}${chained ? `, ${chained} job dừng có handoff đã được làm tiếp (CHAINED)` : ""}${warn ? `, ${warn} job cần đọc mắt (WARN)` : ""} — exit ${r.exitCode}`);
   if (r.exitCode === 1) console.log("Chưa được viết report tổng: còn job chưa xong, đang chờ quyết định, runtime lệch evidence, hoặc evidence đổi sau khi xong mà chưa ai đọc.");
-  if (r.exitCode === 2) console.log("Chưa được viết report tổng: có vi phạm phạm vi ghi, trùng evidence, kho credential bị đổi hoặc holds bị sửa.");
+  if (r.exitCode === 2) {
+    console.log("Chưa được viết report tổng: có vi phạm —");
+    for (const line of violationTail(r)) console.log(`  ${line}`);
+  }
   if (r.exitCode === 3) {
     console.log("Chưa được viết report tổng: vướng CẢ HAI —");
     console.log("  (1) còn job chưa xong hoặc đang chờ quyết định;");
-    console.log("  (2) có vi phạm phạm vi ghi, trùng evidence, kho credential bị đổi hoặc holds bị sửa.");
+    console.log("  (2) có vi phạm:");
+    for (const line of violationTail(r)) console.log(`    ${line}`);
     console.log("  Sửa xong một bên vẫn ra exit khác 0; xử cả hai rồi chạy lại.");
   }
+}
+
+/**
+ * Vi phạm nào làm exit 2, nói cụ thể ở cuối output kèm lệnh gỡ. Đo 21/11/2026: dòng
+ * cuối chỉ nói chung "có vi phạm phạm vi ghi, trùng evidence, kho credential…", session
+ * đọc `| tail -15` thấy toàn file "không tính", báo owner mọi bước kiểm đều qua và bỏ
+ * run kẹt exit 2. Mỗi loại tối đa 3 path; đủ chi tiết ở các khối phía trên.
+ */
+function violationTail(r) {
+  const lines = [];
+  const few = (list) => list.slice(0, 3).map((x) => x.path).join(", ") + (list.length > 3 ? ` … (+${list.length - 3})` : "");
+  const notOurs = (list) => {
+    const inferred = list.filter((x) => x.source === "inferred");
+    if (inferred.length) lines.push(`  của session khác thì: crew collect <manifest> ${inferred.slice(0, 3).map((x) => `--not-ours ${x.path}`).join(" ")} --reason "<vì sao>"`);
+  };
+  const ph = r.scope.protectedHits;
+  if (ph.length) {
+    const fenced = ph.filter((x) => x.outsideSandbox).length;
+    lines.push(`ghi vào file bảo vệ: ${ph.length} file — ${few(ph)}${fenced ? ` (${fenced} file job đã sandbox không ghi được tới — nhiều khả năng session khác)` : ""}`);
+    notOurs(ph);
+  }
+  const oos = r.scope.outOfScope;
+  if (oos.length) {
+    lines.push(`SCOPE_VIOLATION: ${oos.length} file ngoài phạm vi — ${few(oos)}`);
+    notOurs(oos);
+    lines.push("  ghi hợp lệ thì khai lại phạm vi: crew amend <manifest> --job N --allow <prefix> --note \"…\"");
+  }
+  if (r.dupes.length) lines.push(`trùng evidence: ${r.dupes.map((d) => `${d.path} (job ${d.seqs.join("/")})`).join(", ")} — mỗi job một file evidence riêng`);
+  if (r.credentialTamper?.length) lines.push(`kho credential bị đổi (job ${r.credentialTamper.map((c) => c.seq).join(", ")}) — xem khối KHO CREDENTIAL ở trên, kiểm kho trước khi chạy tiếp`);
+  if (r.holdsTamper?.length) lines.push(`holds bị sửa (job ${r.holdsTamper.map((h) => h.seq).join(", ")}) — xem khối HOLDS BỊ SỬA ở trên`);
+  return lines;
 }
 
 /**

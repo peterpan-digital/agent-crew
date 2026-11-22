@@ -6,7 +6,7 @@ when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, 
 category: agent-ops
 keywords: [crew, dispatch, multi-agent, song-song, codex, antigravity, worker]
 metadata:
-  version: "2.8.5"
+  version: "2.8.6"
 ---
 
 # agent-crew
@@ -438,7 +438,8 @@ crew collect "$MP" --ack-runtime 2 --reason "đọc evidence rồi, agy báo ERR
 đầy đủ). Hay gặp: `PASS + WARN` đọc evidence bằng mắt; `RUNNING` chờ rồi collect lại;
 `SCOPE_VIOLATION` khai `--allow` lúc `add-job` hoặc `--not-ours <path> --reason "..."` — chỉ còn
 gặp ở job **không** có sandbox ghi (sổ `writeSandbox.kind` null), bác **từng path** sau khi đọc,
-không bác hàng loạt bằng script;
+không bác hàng loạt bằng script; `GHI VÀO FILE ĐƯỢC BẢO VỆ` (`.claude/skills/`, `.env`…) chặn
+cả job đã sandbox — `git diff`/`git log` path đó, của session khác thì `--not-ours` từng path;
 `CONTINUE` bắn job mới `--resume <conversationId>` của job đó — job đó chạy xong thì dòng cũ
 thành `CHAINED` (không chặn) và job mới tự chịu verdict của nó. Chuỗi `--chain` cũng vậy:
 mọi lát trừ lát cuối ra `CHAINED`, verdict của chuỗi là verdict lát cuối.
@@ -449,7 +450,8 @@ PASS: đọc evidence job đó rồi `--replaced {hỏng}={thay}`.
 Job đã thêm mà quyết không bắn nữa (hết quota, bị run khác thay) cũng là `STALE`:
 `--abandon` nó rồi collect lại tới exit 0, đừng bỏ run dở. `--ack-runtime`/`--not-ours`/
 `--replaced` đi chung `--dry-run` thì **chưa ghi** — dòng cuối output nhắc; chạy lại bỏ
-`--dry-run`.
+`--dry-run`. Exit 2 thì đuôi output nêu loại vi phạm + lệnh gỡ; đừng `| tail` rồi báo owner
+"đã qua" — exit khác 0 là chưa nghiệm thu.
 
 ### Việc chờ owner quyết: `crew hold`
 
