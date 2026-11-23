@@ -237,7 +237,13 @@ async function runHeadless({ promptText, workspace, evidenceAbs, model, timeout,
   const proc = await spawnAgy({ promptText, workspace, model, timeout, agyMode, resumeId, sandboxProfile });
   let endedAt = new Date().toISOString();
 
-  if (proc.error) {
+  // ETIMEDOUT/ENOBUFS là chính crew cắt một agy ĐÃ chạy (spawnAgy.kill), không phải
+  // spawn hỏng. 22/11 (Digital Project): agy treo quá --print-timeout 20m, crew cắt
+  // ở 1558s, mà adapter báo "check that agy is on PATH" — session đi kiểm PATH, và
+  // evidence không được chấm vì lỗi ném trước judgeJob. Nên chỉ lỗi spawn thật mới
+  // ném ở đây; bị cắt thì thành runtimeDetail và evidence vẫn quyết như mọi job.
+  const killedByCrew = proc.error && (proc.error.code === "ETIMEDOUT" || proc.error.code === "ENOBUFS");
+  if (proc.error && !killedByCrew) {
     throw new AntiRunError(`could not run agy: ${proc.error.message}`, "check that agy is on PATH");
   }
   const stdout = (proc.stdout ?? "").trim();
@@ -254,7 +260,13 @@ async function runHeadless({ promptText, workspace, evidenceAbs, model, timeout,
   // still prints the conversation id (measured 06/11), and that id is the only
   // way to continue the job. Exit status still decides runtimeDetail below.
   const parsed = lastJson(stdout);
-  if (proc.status !== 0) {
+  if (killedByCrew) {
+    const ranSec = Math.round((Date.parse(endedAt) - started.getTime()) / 1000);
+    runtimeDetail = proc.error.code === "ETIMEDOUT"
+      ? `agy chạy quá --print-timeout ${timeout} mà không tự dừng — crew đã cắt sau ${ranSec}s (ngưỡng: timeout + 30s).`
+        + " agy không kịp in conversation_id nên không --resume được: evidence trống thì thêm job mới, brief nhỏ hơn"
+      : `agy in quá 64MB ra stdout/stderr — crew đã cắt sau ${ranSec}s`;
+  } else if (proc.status !== 0) {
     runtimeDetail = `agy exited ${proc.status}: ${stderrTail || stdout.slice(0, 300)}`;
   } else if (!parsed) {
     runtimeDetail = "agy output is not JSON";

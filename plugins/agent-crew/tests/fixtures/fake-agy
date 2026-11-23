@@ -88,5 +88,14 @@ case "$FAKE_MODE" in
     echo $$ > "${FAKE_PID_FILE:-/dev/null}"
     sleep 60
     exit 0 ;;
+  hang_past_timeout|hang_past_timeout_done)
+    # agy không tự dừng ở --print-timeout của nó (22/11, Digital Project: job chạy
+    # 1558s với --timeout 20m): crew phải tự cắt. Bản _done đã ghi xong evidence
+    # trước khi treo — evidence đó vẫn phải được chấm.
+    if [ "$FAKE_MODE" = "hang_past_timeout_done" ]; then
+      printf 'kết quả\n\nStatus: DONE\nSummary: ok\n' > "$EV"
+    fi
+    sleep 120
+    exit 0 ;;
   *) echo "fake-agy: unknown FAKE_MODE '$FAKE_MODE'" >&2; exit 99 ;;
 esac
