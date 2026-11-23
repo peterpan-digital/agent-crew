@@ -47,14 +47,25 @@ export const EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
  * không dành cho Codex.
  */
 const SOL = "^gpt-[\\d.]+-sol$";
+/*
+ * Anti headless, từ agy 1.5.x tên model là `<dòng>-<effort>` (đo 23/11:
+ * gemini-4-hydrogen-medium, gemini-4-neon-high, claude-sonnet-5-5-high). Mỗi regex
+ * chỉ khớp ĐÚNG MỘT mức effort: `versionOf` chỉ đọc cụm số, nên neon-high và
+ * neon-xhigh cùng là [4] và hoà nhau — khi hoà, `pickModel` giữ tên in trước trong
+ * `agy models`, tức là một regex nhiều effort sẽ âm thầm chọn effort theo thứ tự in.
+ * Dòng Gemini 4 xếp trước Flash 3.8: Hydrogen là model thi hành nhanh (Executor của
+ * Orchestrator), Neon cho việc cần suy luận. Argon không vào bậc nào ở đây: nó tiêu
+ * một nhóm quota riêng chỉ hồi theo tuần. Regex tên cũ giữ lại làm dự phòng cho máy
+ * còn agy bản trước.
+ */
 export const DEFAULT_TIER_MAP = Object.freeze({
-  light: { agy: ["^gemini-[\\d.]+-flash-lite$", "^gemini-[\\d.]+-flash-low$"], app: "flash_lite", codex: ["^gpt-[\\d.]+-luna$"], effort: "low" },
-  standard: { agy: ["^gemini-[\\d.]+-flash-medium$"], app: "flash", codex: ["^gpt-[\\d.]+-terra$"], effort: "medium" },
-  deep: { agy: ["^gemini-[\\d.]+-pro-high$", "^gemini-[\\d.]+-pro$", "^gemini-[\\d.]+-flash-high$"], app: "pro", codex: [SOL], effort: "xhigh" },
+  light: { agy: ["^gemini-[\\d.]+-hydrogen-low$", "^gemini-[\\d.]+-flash-lite$", "^gemini-[\\d.]+-flash-low$"], app: "flash_lite", codex: ["^gpt-[\\d.]+-luna$"], effort: "low" },
+  standard: { agy: ["^gemini-[\\d.]+-hydrogen-medium$", "^gemini-[\\d.]+-flash-medium$"], app: "flash", codex: ["^gpt-[\\d.]+-terra$"], effort: "medium" },
+  deep: { agy: ["^gemini-[\\d.]+-neon-high$", "^gemini-[\\d.]+-pro-high$", "^gemini-[\\d.]+-pro$", "^gemini-[\\d.]+-flash-high$"], app: "pro", codex: [SOL], effort: "xhigh" },
   code: { agy: null, app: null, codex: [SOL], effort: "high" },
   max: { agy: null, app: null, codex: ["^gpt-[\\d.]+-astra$"], effort: "max" },
-  claude: { agy: ["^claude-sonnet-[\\d-]+$"], app: null, codex: null, effort: null },
-  "claude-max": { agy: ["^claude-opus-[\\d-]+(-thinking)?$"], app: null, codex: null, effort: null },
+  claude: { agy: ["^claude-sonnet-[\\d-]+-high$", "^claude-sonnet-[\\d-]+$"], app: null, codex: null, effort: null },
+  "claude-max": { agy: ["^claude-opus-[\\d-]+-high$", "^claude-opus-[\\d-]+(-thinking)?$"], app: null, codex: null, effort: null },
 });
 
 /**

@@ -38,6 +38,30 @@ t.check("...và không ghi effort cho Anti", `${anti("claude").effort}`, "null")
 t.check("code ở Anti → lỗi chỉ Codex", err(() => anti("code")), "tier code chỉ cho Codex");
 t.check("gpt-oss không vào bậc nào", TIERS.some((tier) => { try { return /gpt-oss/.test(anti(tier).model); } catch { return false; } }), false);
 
+// --- Anti headless, list 23/11 (agy 1.5.15): tên `<dòng>-<effort>` ----------------
+// Trước bản vá, list này cho mọi bậc ra Flash 3.8 và hai bậc claude* không khớp gì.
+const LIST_1123 = [
+  "gemini-4-neon-high", "gemini-4-neon-xhigh", "gemini-4-neon-medium", "gemini-4-neon-low",
+  "gemini-4-argon-medium", "gemini-4-argon-high", "gemini-4-argon-low",
+  "gemini-4-hydrogen-high", "gemini-4-hydrogen-xhigh", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low",
+  "gemini-pro-orchestrator-neon", "gemini-pro-orchestrator-g1-pro",
+  "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+  "claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
+  "claude-sonnet-5-5-low", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high", "gpt-oss-120b-medium",
+];
+t.check("1123 light → hydrogen-low", anti("light", LIST_1123).model, "gemini-4-hydrogen-low");
+t.check("1123 standard → hydrogen-medium", anti("standard", LIST_1123).model, "gemini-4-hydrogen-medium");
+t.check("1123 deep → neon-high", anti("deep", LIST_1123).model, "gemini-4-neon-high");
+t.check("1123 claude → sonnet-5-5-high", anti("claude", LIST_1123).model, "claude-sonnet-5-5-high");
+t.check("1123 claude-max → opus-5-5-high", anti("claude-max", LIST_1123).model, "claude-opus-5-5-high");
+t.check("1123 không bậc nào ra Argon (nhóm quota riêng) hay Orchestrator",
+  TIERS.some((tier) => { try { return /argon|orchestrator/.test(anti(tier, LIST_1123).model); } catch { return false; } }), false);
+// Effort không được chọn theo thứ tự in: xhigh in trước high vẫn ra high.
+t.check("deep: neon-xhigh in trước neon-high vẫn ra high", anti("deep", ["gemini-4-neon-xhigh", "gemini-4-neon-high"]).model, "gemini-4-neon-high");
+t.check("deep: chỉ có neon-xhigh → rơi sang flash-high, không lấy xhigh", anti("deep", ["gemini-4-neon-xhigh", "gemini-3.8-flash-high"]).model, "gemini-3.8-flash-high");
+t.check("claude: chỉ có sonnet-medium → lỗi, không tự đổi effort", err(() => anti("claude", ["claude-sonnet-5-5-medium"])).startsWith("tier claude không khớp"), true);
+t.check("claude: 5-5-high thắng 4-6-high", anti("claude", ["claude-sonnet-4-6-high", "claude-sonnet-5-5-high"]).model, "claude-sonnet-5-5-high");
+
 // --- không fallback chéo bậc ------------------------------------------------
 {
   const noLow = ["gemini-3.8-flash-high", "gemini-3.8-flash-medium"];

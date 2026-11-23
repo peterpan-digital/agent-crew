@@ -86,13 +86,13 @@ const gitRepo = (prefix) => {
   const job = (seq) => readManifest(mp).jobs.find((j) => j.seq === seq);
 
   t.check("--tier standard cho anti: exit 0", add(["--worker", "anti", "--tier", "standard"]).code, 0);
-  t.check("...sổ ghi tier và model còn sống", `${job(1).tier}|${job(1).model}`, "standard|gemini-3.8-flash-medium");
-  t.check("--tier claude cho anti → model Claude qua agy", (add(["--worker", "anti", "--tier", "claude"]), job(2).model), "claude-sonnet-4-6");
+  t.check("...sổ ghi tier và model còn sống", `${job(1).tier}|${job(1).model}`, "standard|gemini-4-hydrogen-medium");
+  t.check("--tier claude cho anti → model Claude qua agy", (add(["--worker", "anti", "--tier", "claude"]), job(2).model), "claude-sonnet-5-5-high");
   t.check("--tier code cho codex → Sol mới nhất trong catalog (bỏ model ẩn), effort high", (add(["--worker", "codex", "--tier", "code"]), `${job(3).tier}|${job(3).effort}|${job(3).model}`), "code|high|gpt-7-sol");
 
   const bumped = add(["--worker", "anti", "--bump-from", "1"]);
   t.check("--bump-from 1: exit 0", bumped.code, 0);
-  t.check("...nâng đúng 1 bậc", `${job(4).tier}|${job(4).model}`, "deep|gemini-3.8-flash-high");
+  t.check("...nâng đúng 1 bậc", `${job(4).tier}|${job(4).model}`, "deep|gemini-4-neon-high");
   t.check("...note ghi nâng từ job nào", job(4).notes.includes("nâng bậc từ job 1 (standard → deep)"), true);
   t.check("--bump-from job deep → giữ deep, có note", (add(["--worker", "anti", "--bump-from", "4"]), `${job(5).tier}|${job(5).notes[0]}`), "deep|nâng bậc từ job 4: deep không có bậc trên, giữ nguyên");
   t.check("--bump-from job không ghi tier → exit 2", (crew(["add-job", mp, "--worker", "anti", "--role", "assist", "--title", "m", "--model", "gemini-3.8-flash-low"], { cwd: ws }), add(["--worker", "anti", "--bump-from", "6"]).code), 2);
@@ -140,7 +140,7 @@ const gitRepo = (prefix) => {
   // Job resume vẫn ghi tier/model vào sổ, nhưng crew run không truyền --model.
   const resumed = expandRunArgs(["--manifest", mp, "--job", "1", "--resume", "conv-1"], { cwd: ws });
   t.check("run job có tier + --resume → không thêm --model", resumed.includes("--model"), false);
-  t.check("run job có tier, không resume → --model từ sổ", (() => { const a = expandRunArgs(["--manifest", mp, "--job", "1"], { cwd: ws }); return a[a.indexOf("--model") + 1]; })(), "gemini-3.8-flash-medium");
+  t.check("run job có tier, không resume → --model từ sổ", (() => { const a = expandRunArgs(["--manifest", mp, "--job", "1"], { cwd: ws }); return a[a.indexOf("--model") + 1]; })(), "gemini-4-hydrogen-medium");
 }
 
 // ---- new-run / add-job / digest ở layout mặc định ----

@@ -67,12 +67,28 @@ export function normalizeCodexQuota(result) {
 }
 
 /** Kết quả JSON của `agy -p /quota` → hình chung; thiếu `command.data` thì đọc dòng TSV trong `response`. */
+/**
+ * Tên hiển thị của các model trong một nhóm quota agy. JSON `/quota` không có
+ * trường model: danh sách nằm trong câu `Models within this group: Gemini 4 Neon,
+ * Orchestrator (Neon), …` của `description` (đo 23/11). Nhóm không có câu đó (nhóm
+ * "Gemini 4 Argon") thì chính tên nhóm là tên model.
+ */
+export function agyGroupLabels(g) {
+  const desc = typeof g.description === "string" ? g.description : "";
+  const at = desc.indexOf("Models within this group:");
+  if (at === -1) return g.name ? [String(g.name)] : [];
+  const rest = desc.slice(at + "Models within this group:".length);
+  const end = rest.search(/[.!?](\s|$)|\n/);
+  return (end === -1 ? rest : rest.slice(0, end)).split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 export function normalizeAgyQuota(json) {
   const fromData = json?.command?.data?.groups;
   let groups;
   if (Array.isArray(fromData)) {
     groups = fromData.map((g) => ({
       name: String(g.name ?? "?"),
+      labels: agyGroupLabels(g),
       buckets: (g.buckets ?? [])
         .filter((b) => Number.isFinite(b.remaining_fraction))
         .map((b) => ({ window: b.window === "weekly" ? "tuần" : String(b.window ?? "?"), remaining: clamp01(b.remaining_fraction), resetsAt: asDate(b.reset_time) })),
