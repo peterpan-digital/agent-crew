@@ -9,6 +9,7 @@ Verdict cần đọc kỹ:
 
 | Verdict | Nghĩa | Xử |
 | --- | --- | --- |
+| `PASS` (cột ghi chú `ACCEPT OK`) | job có `--accept-cmd` và lệnh nghiệm thu exit 0 (dùng lại kết quả đã lưu khi `cmd`, `cwd` và sha256 evidence lúc collect không đổi) | đạt thật theo lệnh kiểm |
 | `PASS + WARN` | evidence đạt nhưng có chỗ ghi lỗi, hoặc **không ai bảo lãnh evidence** (manifest thiếu `exitCode`/`conversationId` → file không do runtime giao; chỉ hỏi với manifest version ≥ 2) | **đọc evidence bằng mắt** rồi mới kết luận — không cho đậu im lặng, cũng không đánh fail theo runtime |
 | `PASS + WARN` **kèm exit 1** | runtime (hoặc manifest) báo fail mà evidence phán DONE. Job vẫn đạt — evidence outrank runtime — nhưng run chưa được viết report khi chưa ai đọc | đọc evidence, rồi `--ack-runtime {seq} --reason "..."`. Không có `--reason` là bị từ chối |
 | `PASS + EVIDENCE-ĐỔI` **kèm exit 1** | evidence bị ghi lại sau khi adapter chấm xong (adapter lưu `evidenceSha256`, gate so lại). Bản đang đọc không phải bản đã chấm; có thể lật một job hỏng thành đạt | đọc bản hiện tại, rồi `--ack-runtime {seq}@{sha} --reason "..."` (gate in sẵn dòng này). Không ghim sha, hoặc file đã đổi lại từ lúc gate in, là bị từ chối; đổi tiếp sau ack là chặn lại. Phiên chat (`CHAT`) và job owner đã bỏ vẫn có thể dính cờ này: worker chat ghi evidence nhiều lần là bình thường, vẫn đọc rồi ack |
@@ -22,9 +23,9 @@ Verdict cần đọc kỹ:
 | `COVERED` | job `BLOCKED` vì `COST_GATE`, owner cho chạy tiếp và job cover đã `PASS` | tính như đạt; liếc evidence job cover nếu là Anti app (xem mục hold) |
 | `DEFERRED` | owner hoãn quyết định tới một ngày | **vẫn chặn**; tới ngày thì hỏi lại |
 | `REPLACED` | job `FAIL` có job sau cùng worker làm lại và `PASS`, người đọc đã ghi `--replaced {hỏng}={thay} --reason` | không chặn; report ghi câu lý do. Job thay hết `PASS` thì đỏ lại |
-| `FAIL` | adapter ghi `failed`, hoặc evidence rỗng/thiếu | đọc `failure`; permission thì sửa brief, lý do khác retry tối đa 1 lần. Retry `PASS` thì `--replaced` (dưới bảng) |
+| `FAIL` | adapter ghi `failed`, evidence rỗng/thiếu, hoặc lệnh nghiệm thu không đạt (ghi chú bắt đầu bằng `lệnh nghiệm thu exit <n>` kèm dòng output cuối không rỗng, hoặc `lệnh nghiệm thu quá hạn <dur>`) | đọc `failure` hoặc `job.acceptance.tail`; permission thì sửa brief, lý do khác retry tối đa 1 lần. Retry `PASS` thì `--replaced` (dưới bảng) |
 | `BLOCKED` | evidence phán `BLOCKED` | có dòng `COST_GATE` thì xử bằng `crew hold`; không thì đọc evidence, xử nguyên nhân, chạy job mới làm lại rồi `--replaced` như job `FAIL` |
-| `NEEDS_HUMAN` | evidence phán `NEEDS_CONTEXT` | đọc evidence, bổ sung thứ worker thiếu vào brief rồi chạy lại |
+| `NEEDS_HUMAN` | evidence phán `NEEDS_CONTEXT`, hoặc job có `--accept-cmd` nhưng **không có sandbox ghi** (`writeSandbox.kind` rỗng — worker đã có thể sửa lệnh trong sổ nên gate không tự chạy) | với `NEEDS_CONTEXT`: đọc evidence, bổ sung thứ worker thiếu vào brief rồi chạy lại; với lệnh nghiệm thu: đọc lệnh nguyên văn trong cột ghi chú, xác nhận an toàn rồi chạy lại với `--accept-run <seq>` |
 | `CONTINUE` | evidence phán `CONTINUE`: chưa xong, worker dừng ở hạn mềm hoặc qua lượt cứu handoff | **chặn**. Đọc `## Handoff`, rồi `crew add-job` job mới cùng worker và `crew run <worker> --resume <conversationId của job đó>` (brief: "tiếp việc job N, handoff ở <evidence>"). Không phải `FAIL`: đừng `--replaced` |
 | `CONTINUE + HANDOFF THIẾU` | phán `CONTINUE` mà evidence không có mục `## Handoff` | như trên, nhưng brief job làm tiếp phải tự nói việc còn lại — worker đã không ghi |
 | `CHAINED` | job `CONTINUE` mà một job sau trong run đã resume đúng thread (`resumedFrom` = `conversationId` của nó, không `resumeMismatch`) | không chặn; job làm tiếp tự chịu verdict của nó. Chỉ có `resumedFrom` sau khi job đó chạy, nên lúc nó còn `pending` thì dòng cũ vẫn `CONTINUE` |

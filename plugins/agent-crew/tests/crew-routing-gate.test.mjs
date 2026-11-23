@@ -80,7 +80,8 @@ function fire(prompt, { ws = WS, event = "UserPromptSubmit", env = {} } = {}) {
   const AGG = repo("gate-agg-", { delegate: "aggressive", costGate: COST_GATE });
   const code = fire("refactor module parser cho gọn", { ws: AGG });
   t.check("aggressive + 1 việc code → nhánh delegate", /giao việc chủ động/.test(code.stdout) && /default-code/.test(code.stdout), true);
-  t.check("...gợi ý Codex --tier code và --chain", /Codex \(`--tier code`/.test(code.stdout) && /`--chain`/.test(code.stdout), true);
+  t.check("...gợi ý Codex hoặc Anti --tier code và --chain", /Codex hoặc Anti \(`--tier code`/.test(code.stdout) && /`--chain`/.test(code.stdout), true);
+  t.check("...nói Anti nhận build khi có lệnh kiểm --accept-cmd", /`--accept-cmd`/.test(code.stdout), true);
   t.check("...có ngưỡng tự làm ~10 tool call / 3 file", /~10 lượt gọi tool/.test(code.stdout) && /3 file/.test(code.stdout), true);
   t.check("...vẫn nói rõ không phải lệnh", /không phải lệnh/.test(code.stdout), true);
   t.check("...không in tên script", /anti-run|codex-run|\.mjs/.test(code.stdout), false);

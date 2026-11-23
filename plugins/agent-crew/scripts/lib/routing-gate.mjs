@@ -89,8 +89,9 @@ export const DECISION_LABEL = "Định tuyến:";
 const CONSIDER_BODY = [
   "Trước khi bắt đầu, **tách việc thành các phần** rồi hỏi từng phần — đừng chọn một tuyến",
   "cho cả việc. Áp cho mọi loại việc: code, làm hình/video, dữ liệu, tài liệu.",
-  "- Codex (`--tier code`, > 30 phút thì `--chain`): sửa/viết code nhiều file, script dựng",
-  "  hình/video, xử lý ảnh hay dữ liệu hàng loạt, chạy test, đổi theo một quy tắc đã rõ;",
+  "- Codex hoặc Anti (`--tier code`, > 30 phút thì `--chain`): sửa/viết code nhiều file, script",
+  "  dựng hình/video, xử lý ảnh hay dữ liệu hàng loạt, đổi theo một quy tắc đã rõ. Có spec và",
+  "  lệnh kiểm (`--accept-cmd`) thì Anti nhận được, chọn bên còn quota; việc còn mở thì Codex;",
   "- Anti (`--tier standard`): research, tra cứu, tổng hợp, việc theo rule có sẵn;",
   "- session con: phần đáng thành task riêng (nhánh/PR riêng, chạy song song lâu);",
   "- Claude giữ: phần cần nhìn và phán đoán (chọn ý, duyệt hình, quyết thiết kế, nghiệp vụ),",

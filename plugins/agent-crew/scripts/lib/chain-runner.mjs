@@ -246,6 +246,8 @@ export async function runChain(workerArg, argv, { cwd }) {
           ...(state.root.model ? { model: state.root.model } : {}),
           ...(state.root.effort ? { effort: state.root.effort } : {}),
           ...(state.root.tier ? { tier: state.root.tier } : {}),
+          ...(state.root.acceptCmd != null ? { acceptCmd: state.root.acceptCmd } : {}),
+          ...(state.root.acceptCwd != null ? { acceptCwd: state.root.acceptCwd } : {}),
           note: `lát ${k + 1} của chuỗi job ${rootSeq}, nối từ job ${last.seq} (conversation ${last.conversationId})`,
         });
       } catch (err) {

@@ -446,6 +446,7 @@ const SEALED_JOB_FIELDS = new Set([
   "holdsFingerprint", "holdsTamper", ...Object.values(READER_LEDGERS),
   "tier", "chainOf", "slice", "chainStartedAt", "chainSlices", "chainElapsedMs",
   "chainCheckpointAt", "chainCheckpointSlice", "chainStoppedFor",
+  "acceptCmd", "acceptCwd",
 ]);
 
 /**
@@ -521,6 +522,29 @@ function assertFilesMayModify(list, workspace, layout = null) {
   }
 }
 
+/** Lệnh nghiệm thu (`--accept-cmd`) và thư mục chạy tương đối (`--accept-cwd`). */
+function assertAcceptFields(acceptCmd, acceptCwd) {
+  const hasCmd = acceptCmd !== undefined && acceptCmd !== null;
+  const hasCwd = acceptCwd !== undefined && acceptCwd !== null;
+  if (hasCmd && (typeof acceptCmd !== "string" || !acceptCmd.trim())) {
+    throw new ManifestError(`acceptCmd phải là chuỗi khác rỗng, nhận ${JSON.stringify(acceptCmd)}`);
+  }
+  if (hasCwd) {
+    if (!hasCmd) {
+      throw new ManifestError("khai acceptCwd phải đi kèm acceptCmd");
+    }
+    if (typeof acceptCwd !== "string") {
+      throw new ManifestError(`acceptCwd phải là chuỗi, nhận ${JSON.stringify(acceptCwd)}`);
+    }
+    if (isAbsolute(acceptCwd)) {
+      throw new ManifestError(`acceptCwd phải là đường dẫn tương đối trong workspace, nhận đường tuyệt đối ${acceptCwd}`);
+    }
+    if (normalize(acceptCwd).split(sep).includes("..") || acceptCwd.split(/[\\/]/).includes("..")) {
+      throw new ManifestError(`acceptCwd không được chứa "..", nhận ${acceptCwd}`);
+    }
+  }
+}
+
 export function addJob(manifestPath, job) {
   let added;
   updateManifest(manifestPath, (m) => {
@@ -543,6 +567,7 @@ export function addJob(manifestPath, job) {
     const { role, transport } = resolveRouting(job);
     assertEvidencePath(job.evidence, layoutOf(m));
     assertFilesMayModify(job.filesMayModify, m.workspace, layoutOf(m));
+    assertAcceptFields(job.acceptCmd, job.acceptCwd);
     const extra = { ...job.extra };
     for (const field of SEALED_JOB_FIELDS) {
       if (field in extra) {
@@ -566,6 +591,8 @@ export function addJob(manifestPath, job) {
       tier: job.tier ?? null,
       // Lát k của chuỗi job `chainOf` (lát 1 là chính job gốc, không có field này).
       ...(isSlice ? { chainOf: job.chainOf, slice: job.slice } : {}),
+      ...(job.acceptCmd != null ? { acceptCmd: job.acceptCmd } : {}),
+      ...(job.acceptCwd != null ? { acceptCwd: job.acceptCwd } : {}),
       title: job.title,
       evidence: job.evidence,
       // Path prefixes this job is allowed to write outside tasks/{task}/. Some
@@ -666,7 +693,7 @@ export function updateJob(manifestPath, seq, patch) {
     // transport makes `assertTransport` stop checking; a rewritten evidence
     // path re-points the proof after the fact. Progress fields are patchable,
     // identity is not.
-    for (const field of ["seq", "worker", "role", "transport", "evidence"]) {
+    for (const field of ["seq", "worker", "role", "transport", "evidence", "acceptCmd", "acceptCwd"]) {
       if (field in patch && patch[field] !== job[field]) {
         throw new ManifestError(
           `updateJob không được đổi "${field}" của job ${seq}\n` +
@@ -786,6 +813,7 @@ export function claimRunSlot(manifestPath, seq, { startedAt, timeoutMs, resumeId
     delete job.writeSandbox;
     delete job.sandboxBypass;
     delete job.sandboxDenied;
+    delete job.acceptance;
     // Conversation của lượt trước không thuộc lượt này: để lại thì guard ở trên coi nó
     // là đang bận suốt lượt mới, và `crew-session latest` trả nó như conversation mới
     // nhất. Id cũ vào note để vẫn resume được. Ghi `resumedFrom` trong khoá để adapter

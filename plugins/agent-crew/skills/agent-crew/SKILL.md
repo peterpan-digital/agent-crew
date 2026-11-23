@@ -1,6 +1,6 @@
 ---
 name: agent-crew
-description: "Điều phối nhiều worker làm việc song song: Claude làm việc cần phán đoán, Codex làm code/pipeline, Antigravity làm việc đã có rule sẵn. Nghiệm thu bằng file bằng chứng trên đĩa, không tin lời worker tự khai. Dùng khi 1 request có nhiều đầu việc khác loại, owner gõ @anti/@codex, hoặc repo bật giao việc chủ động (delegate: aggressive) và có việc code lớn / research."
+description: "Điều phối nhiều worker làm việc song song: Claude làm việc cần phán đoán, Codex làm code/pipeline còn mở, Antigravity làm việc đã có rule hoặc spec sẵn (cả build có lệnh kiểm). Nghiệm thu bằng file bằng chứng trên đĩa, không tin lời worker tự khai. Dùng khi 1 request có nhiều đầu việc khác loại, owner gõ @anti/@codex, hoặc repo bật giao việc chủ động (delegate: aggressive) và có việc code lớn / research."
 user-invocable: true
 when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, nhờ Anti, nhờ Antigravity, @anti, @codex, crew, dispatch, làm nhiều việc cùng lúc, giao việc chủ động, việc code lớn, research, task dài, --chain."
 category: agent-ops
@@ -107,7 +107,7 @@ BRIEF        = mềm 2 KB (vẫn chạy, cờ BRIEF DÀI) / cứng 8 KB (adapter
 | Câu hỏi | Nếu đúng |
 | --- | --- |
 | Owner gõ `@anti`/`@codex`, hay chat với worker? | Miễn luật ≥2 đầu việc; đọc `references/phoi-hop-owner.md`. |
-| Repo khai `delegate: "aggressive"` (`crew doctor` dòng `delegate`)? | Miễn luật ≥2 đầu việc. **Tách việc thành phần, hỏi từng phần** — mọi loại việc, cả làm hình/video: phần code/script/xử lý hàng loạt → Codex `--role owner --tier code` (ước > 30m thì `--chain`); research/việc có rule → Anti `--tier standard`; Claude giữ phần cần nhìn và phán đoán, phần cần công cụ worker không có, và nghiệm thu — chạy song song với job. Tự làm hết chỉ khi cả việc < ~10 lượt gọi tool **và** < 3 file, hoặc không phần nào tách được — nói lý do một câu. Worker từng lỗi không phải lý do bỏ giao. |
+| Repo khai `delegate: "aggressive"` (`crew doctor` dòng `delegate`)? | Miễn luật ≥2 đầu việc. **Tách việc thành phần, hỏi từng phần** — mọi loại việc, cả làm hình/video: phần code/script/xử lý hàng loạt → Codex hoặc Anti `--role owner --tier code` theo Bước 3 (ước > 30m thì `--chain`); research/việc có rule → Anti `--tier standard`; Claude giữ phần cần nhìn và phán đoán, phần cần công cụ worker không có, và nghiệm thu — chạy song song với job. Tự làm hết chỉ khi cả việc < ~10 lượt gọi tool **và** < 3 file, hoặc không phần nào tách được — nói lý do một câu. Worker từng lỗi không phải lý do bỏ giao. |
 | Định giao nhiều job hoặc job dài cho một worker? | `crew quota` trước (~5s, không tốn token). Nhóm quota của bậc định dùng còn < 10% → chia sang worker kia, bậc khác (Anti: Gemini và Claude/GPT là hai nhóm riêng), hoặc tự làm. |
 | Request chỉ có 1 đầu việc? | Làm trực tiếp. Không tạo run. |
 | Mỗi đầu việc xử lý dưới ~30s? | Gom lại thành 1 job. Mở `agy` tốn 5.5s/lần. |
@@ -171,9 +171,21 @@ Tiêu chí duy nhất, theo `references/routing-table.md` — **không** phân t
 | Điều kiện | Worker |
 | --- | --- |
 | Rule đã thành văn trong một `SKILL.md`, chỉ cần thi hành đúng và nhanh | Antigravity |
+| Build có spec rõ **và** lệnh kiểm chạy được (test, script so khớp) | Anti hoặc Codex `--tier code`, kèm `--accept-cmd` — chọn theo quota (dưới bảng) |
 | Cần phán đoán ngoài văn bản: đọc số, chọn hướng, quyết nghiệp vụ | Claude |
-| Code, pipeline, logic nhiều bước, refactor | Codex |
+| Code chưa viết nổi spec/lệnh kiểm trước, refactor lớn chưa rõ hướng, sửa bug chưa rõ nguyên nhân | Codex |
+| Job cần `--workspace-cli on` hoặc `--sandbox-mode danger-full-access` | Codex (hai cờ này chỉ có ở Codex) |
 | Suy luận nhiều bước / sửa bug khó / thiết kế lớn mà muốn đỡ token Claude | Codex `--tier deep` hoặc `max` |
+
+Build có spec mà cả hai worker đều nhận được: `crew quota` rồi chọn bên còn nhiều hơn; ngang
+nhau thì **Anti**, để dành Codex cho việc còn mở. Một bên cạn (< 10%) thì bên kia nhận, kể cả
+việc code mà bình thường giao bên cạn — miễn viết nổi spec và lệnh kiểm. Đo 24/11: Anti
+`gemini-4-neon-high` làm đúng một thay đổi 6 file của chính crew theo spec, qua 28 ca test ẩn
+và toàn bộ bộ test (`routing-table.md` mục *Build có spec*).
+
+Job build giao đi (Anti hay Codex) **luôn** khai `--accept-cmd` khi có lệnh kiểm: gate tự chạy
+lệnh, không tin dòng `Status:` worker tự khai. Lệnh chạm guard vai worker (test của chính
+crew) thì brief thêm `## Lệnh được cấp sẵn` (`references/dispatch-playbook.md`).
 
 `CLAUDE.md` của repo có bảng skill → worker thì bảng đó thắng bảng trên.
 
@@ -227,6 +239,7 @@ hai job không bao giờ trùng file.
 | `--effort` | Ép tay mức Codex (`low\|medium\|high\|xhigh\|max\|ultra`), chỉ đè effort của `--tier`, model vẫn theo bậc |
 | `--transport app --note "..."` | Chỉ Anti, chỉ trong 3 ca ở Bước 3; thiếu `--note` là bị từ chối. Codex bị từ chối dù có `--note` |
 | `--allow <prefix>` | Job được ghi ngoài thư mục của run (lặp được). Control plane và file bảo vệ không khai được. **Khai đủ từ đầu**: hệ điều hành khoá đúng vùng này (sandbox ghi), ghi chỗ chưa khai là worker bị chặn, không còn "để collect bắt sau" |
+| `--accept-cmd "<lệnh>"` / `--accept-cwd <thư mục>` | Dùng cho job build có lệnh kiểm được (test, script): `crew collect` tự chạy lệnh này khi job đạt `PASS`. `--accept-cwd` tương đối so với workspace (không khai = workspace, phải đi cùng `--accept-cmd`); `--chain` tự chép sang các lát sau |
 
 Job Claude **không** có transport: không process nào được bắn, bạn tự làm.
 
@@ -415,7 +428,7 @@ Worker tự nói xong **không được tính**. Chạy gate (`--dry-run` để 
 crew collect "$MP"
 ```
 
-Gate reconcile sổ theo evidence, phán từng job, kiểm trùng evidence và phạm vi ghi.
+Gate reconcile sổ theo evidence, phán từng job, kiểm trùng evidence và phạm vi ghi. Job có `--accept-cmd` và đang `PASS` thì gate tự chạy lệnh nghiệm thu (hạn mặc định 15m, đổi bằng `--accept-timeout`, bỏ `CREW_ROLE`/`MWG_CREW_ROLE`); job không có sandbox ghi thì ra `NEEDS_HUMAN` kèm lệnh nguyên văn — đọc kỹ rồi chạy lại với `--accept-run <seq>`.
 
 Gate ra exit 1 vì **runtime lệch evidence** hoặc **`EVIDENCE-ĐỔI`** (evidence bị ghi lại sau
 khi chấm; chép đúng dòng `--ack-runtime {seq}@{sha}` gate in) thì đọc evidence rồi nhận

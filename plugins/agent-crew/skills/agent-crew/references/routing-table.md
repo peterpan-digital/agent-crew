@@ -2,13 +2,14 @@
 
 ## Tiêu chí phân việc
 
-Không phân theo "dễ / khó". Phân theo **rule đã thành văn hay chưa**:
+Không phân theo "dễ / khó". Phân theo **rule/spec đã thành văn hay chưa**:
 
 | Điều kiện | Worker |
 | --- | --- |
 | Rule đã viết thành văn trong `SKILL.md`, chỉ cần thi hành đúng và nhanh | **Antigravity** |
+| Build có spec rõ và lệnh kiểm chạy được (`--accept-cmd`) | **Antigravity** hoặc **Codex** `--tier code`, chọn theo quota |
 | Cần phán đoán ngoài văn bản: đọc số, chọn hướng, quyết định nghiệp vụ | **Claude** |
-| Code, pipeline, logic nhiều bước, refactor | **Codex** |
+| Code chưa viết nổi spec trước, refactor lớn chưa rõ hướng, sửa bug chưa rõ nguyên nhân, job cần `--workspace-cli`/`danger-full-access` | **Codex** |
 
 Lý do Antigravity được nhiều việc hơn cảm giác trực quan: nó nhanh và làm rất gọn khi
 bộ case đã ràng kỹ. Điểm yếu của nó là suy luận mở, không phải tốc độ hay độ chính xác
@@ -21,8 +22,8 @@ Chia theo **rule đã thành văn hay chưa**, không theo dễ/khó:
 | Worker | Loại việc |
 | --- | --- |
 | **Claude** | Việc cần phán đoán ngoài văn bản: đọc số rồi kết luận, xếp ưu tiên, viết report chính thức, audit trạng thái, quyết định đánh đổi |
-| **Codex** | Code và pipeline: viết/refactor tool, workflow, dedup/clustering, transform dữ liệu phức tạp, chạy theo lô |
-| **Antigravity** | Việc đã có rule viết sẵn trong một skill: lọc theo tiêu chí, readback/export, chuẩn hoá bảng, điền metadata theo mẫu, audit nhiều URL, việc cần browser tools |
+| **Codex** | Code và pipeline còn mở: viết/refactor tool khi hướng chưa chốt, workflow, dedup/clustering, transform dữ liệu phức tạp, chạy theo lô, việc cần Workspace CLI hoặc full access |
+| **Antigravity** | Việc đã có rule viết sẵn trong một skill: lọc theo tiêu chí, readback/export, chuẩn hoá bảng, điền metadata theo mẫu, audit nhiều URL, việc cần browser tools. **Và** build có spec + lệnh kiểm (`--tier code`) |
 
 Tên skill cụ thể của từng repo nằm ở `CLAUDE.md` của repo đó, không ở đây. Repo có bảng
 skill → worker thì bảng đó thắng; không có thì route theo loại việc ở trên.
@@ -30,6 +31,28 @@ skill → worker thì bảng đó thắng; không có thì route theo loại vi�
 Bảng này chỉ trả lời **ai làm**. Nó không có cột transport: transport không phải thuộc
 tính của loại việc. Cùng một việc có thể là owner hay assist tuỳ ai chịu trách nhiệm về
 đầu ra — và cả hai đều chạy `headless` trừ khi có lý do viết ra.
+
+## Build có spec: Anti hay Codex
+
+Tới 23/11 mọi việc code đi Codex. Từ 24/11 Anti nhận được việc build, với hai điều kiện
+viết ra được **trước** khi bắn: spec nói rõ hành vi cần có, và một lệnh kiểm chạy được
+(test, script so khớp) để khai `--accept-cmd`. Thiếu một trong hai thì vẫn Codex — điểm yếu
+của Anti là suy luận mở, và không có lệnh kiểm thì không ai bắt được chỗ nó đoán sai.
+
+Chọn bên nào: `crew quota`, bên còn nhiều quota hơn nhận; ngang nhau thì Anti (để Codex cho
+việc còn mở). Một bên cạn thì bên kia nhận. Mỗi job build khai `--accept-cmd`: gate tự chạy
+lệnh, nên worker tự khai `DONE` mà lệnh đỏ vẫn ra `FAIL`.
+
+Số đo (run `261123-2334`, `261124-0030`, n=1 mỗi ô):
+
+| Bài | Model | Kết quả |
+| --- | --- | --- |
+| 1 module + test, spec rõ (17 ca ẩn) | Hydrogen high / Neon high / Argon high / Flash 3.8 high | cả 4 qua 17/17; Hydrogen nhanh nhất (105s), Flash 3.8 chậm nhất (281s) |
+| 6 file của chính crew: code, CLI, test, tài liệu (28 ca ẩn + toàn bộ test) | Neon high | 28/28, toàn bộ test xanh — bản được lấy |
+| như trên | Argon high | 28/28 nhưng một test tự viết sai, worker không chạy được nên không thấy, vẫn tự báo `DONE_WITH_CONCERNS` |
+
+Ca Argon là lý do `--accept-cmd` bắt buộc với job build: không có nó gate đã cho bản hỏng `PASS`.
+Chưa có số đo Anti so với Codex trên cùng bài (Codex cạn quota ngày đo).
 
 ## Transport
 

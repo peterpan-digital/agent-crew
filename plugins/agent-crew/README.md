@@ -658,6 +658,13 @@ trùng evidence, kho credential, holds), tối đa 3 path mỗi loại và lện
 `crew amend --allow`) — đo 21/11, dòng cuối chỉ nói chung chung và session đọc `| tail -15`
 báo owner "mọi bước kiểm đều qua" trong khi run kẹt exit 2.
 
+**Lệnh nghiệm thu (`--accept-cmd`).** Job build khai lệnh kiểm lúc `add-job` (`--accept-cmd "node tests/run.mjs"`,
+`--accept-cwd <thư mục>`); job nào đạt `PASS` theo evidence thì collect tự chạy lệnh đó (`/bin/sh -c`, bỏ
+`CREW_ROLE`/`MWG_CREW_ROLE`, hạn 15m hoặc `--accept-timeout`) và ghi `acceptance` vào sổ, dùng lại khi
+evidence không đổi. Lệnh đỏ hay quá hạn là `FAIL`; job không có sandbox ghi thì `NEEDS_HUMAN` tới khi người
+đọc lệnh rồi `--accept-run <seq>`. Đo 24/11: hai job build cùng spec, gate cũ cho bản có test hỏng `PASS`
+(worker tự khai `DONE_WITH_CONCERNS`) và bản đúng `BLOCKED` — gate chỉ đọc dòng `Status:`.
+
 Job `failed` đã được làm lại thì có đường riêng, và nó không xoá gì: `--replaced 1=3
 --reason "..."` ghi vào `replacedJobs` rằng job 3 (cùng worker, seq lớn hơn, tự `PASS`)
 làm thay job 1. Job 1 thành `REPLACED`, vẫn nằm trong bảng và report. Một job thay chỉ
