@@ -128,8 +128,8 @@ giác việc nặng hay nhẹ. Ghi bằng `crew add-job --tier <bậc>`; crew đ
 | Điền theo mẫu, chuẩn hoá bảng, readback/export | `light` | hydrogen-low, không có thì flash-lite → flash-low | `flash_lite` | Luna mới nhất, `low` |
 | Thi hành skill nhiều case, crawl + phân loại theo whitelist | `standard` | hydrogen-medium, không có thì flash-medium | `flash` | Terra mới nhất, `medium` |
 | Suy luận từ dữ liệu sang output chưa có mẫu sẵn; sửa bug khó | `deep` | neon-high, không có thì pro-high → pro → flash-high | `pro` | Sol mới nhất, `xhigh` |
-| Code/pipeline nhiều bước, refactor tool | `code` | — | — | Sol mới nhất, `high` |
-| Việc khó nhất: kiến trúc lớn, bài toán `deep`/`code` chưa giải được | `max` | — | — | Astra mới nhất, `max` |
+| Code/pipeline nhiều bước, refactor tool | `code` | neon-high | — | Sol mới nhất, `high` |
+| Việc khó nhất: kiến trúc lớn, bài toán `deep`/`code` chưa giải được | `max` | argon-high, không có thì neon-xhigh | — | Astra mới nhất, `max` |
 | Phán đoán sâu muốn giao đi để đỡ token Claude; viết/tổng hợp cần giọng tốt | `claude` | claude-sonnet bản mới nhất, mức `high` | — | — |
 | Như trên, việc khó nhất (suy luận nhiều bước, review thiết kế) | `claude-max` | claude-opus bản mới nhất, mức `high` | — | — |
 
@@ -144,8 +144,8 @@ Nhà cung cấp đổi lược đặt tên thì repo ghi đè bằng `modelTiers
 **Anti từ agy 1.5.x (đo 23/11):** tên model là `<dòng>-<effort>` (`gemini-4-hydrogen-medium`,
 `claude-sonnet-5-5-high`). Mỗi regex của bảng chỉ khớp **một** mức effort: `pickModel` so phiên bản
 bằng cụm số nên `neon-high` và `neon-xhigh` hoà nhau, và khi hoà thì tên in trước trong `agy models`
-thắng — một regex nhiều effort là âm thầm đổi giá. Gemini 4 Argon không vào bậc nào: nó tiêu một
-nhóm quota riêng chỉ hồi theo tuần (`crew quota` in riêng dòng `Gemini 4 Argon`). Cần thì `--model` tay.
+thắng — một regex nhiều effort là âm thầm đổi giá. Gemini 4 Argon vào bậc `max` (không có thì rơi sang
+`neon-xhigh`); lưu ý nó tiêu một nhóm quota riêng chỉ hồi theo tuần (`crew quota` in riêng dòng `Gemini 4 Argon`).
 
 **Codex làm được việc khó**, không chỉ việc code thường: `deep` (Sol `xhigh`) và `max`
 (Astra `max`) là chỗ giao suy luận nhiều bước, sửa bug khó, thiết kế lớn khi muốn đỡ token
@@ -160,7 +160,7 @@ Claude của owner (đo 06/11: chạy headless như Gemini, JSON cùng hình d�
 headless. Credit Antigravity mỗi lượt chưa đo được từ CLI.
 
 Bậc chỉ là điểm khởi đầu. Job fail vì model yếu thì **nâng đúng 1 bậc**:
-`crew add-job --bump-from <seq>` (`light→standard→deep`, Codex thêm `deep`/`code→max`;
+`crew add-job --bump-from <seq>` (`light→standard→deep→max`, `code→max`; Anti app dừng ở `deep` vì không có bậc `max`;
 tự ghi note), không nhảy thẳng
 lên bậc cao nhất cho mọi thứ — làm vậy thì lần sau không ai biết việc nào thật sự cần
 bậc cao. `deep` không tự nâng lên `claude`: đổi nhà cung cấp là quyết định có chủ ý,

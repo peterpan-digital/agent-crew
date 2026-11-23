@@ -93,6 +93,25 @@ Kèm theo:
 
 Bài thử hôm nay quá dễ. Bài tiếp theo nên là việc thật, sửa nhiều file trong repo này. Ví dụ chính là phần A: giao cùng một brief cho Anti `neon-high` và Codex `sol high`, mỗi bên làm trong worktree riêng, chấm bằng `npm test` cùng một bộ test ẩn. Nếu Anti đạt ngang Codex thì chốt phần B. Còn nếu Anti trượt thì giữ Anti ở việc build có spec gói trong 1–2 file.
 
+## C'. Bài thử build thật — đã chạy 24/11 (run `.crew/runs/261124-0030`), chỉ Anti vì Codex cạn quota 5h
+
+Việc giao: mở bậc `code`/`max` cho Anti headless. Đây là thay đổi 6 file (code, CLI, test, `SKILL.md`, `routing-table.md`), làm theo spec rõ, trên bản sao riêng của plugin. Chấm bằng 28 ca test ẩn mà worker không thấy, cộng toàn bộ 40 file test, và đọc diff.
+
+| | Neon high | Argon high |
+| --- | --- | --- |
+| Test ẩn | 28/28 | 28/28 |
+| Toàn bộ test | 40/40 | 39/40 (`cli.test.mjs`: test do chính worker viết sai thứ tự note) |
+| Thời gian agent / tổng token | 499s / 211k | 565s / 163k |
+| Trạng thái tự báo | `BLOCKED` (đúng: không chạy được toàn bộ test) | `DONE_WITH_CONCERNS` (nói quá: test của chính nó hỏng mà không biết) |
+
+Đã lấy bản Neon: diff gọn, đúng phạm vi. Mỗi model chạy một lần (n=1), hai job chạy song song.
+
+Rút ra:
+- **Anti làm được việc build nhiều file trong code thật**, khi có spec rõ và test chấm được.
+- **Brief việc build phải có mục `## Lệnh được cấp sẵn`** với đúng lệnh test. Thiếu mục này thì worker không tự kiểm được, và bản Argon lọt một test sai.
+- **Gate `crew collect` chấm theo trạng thái worker tự khai.** Ở run này nó cho bản hỏng (Argon) `PASS` và bản đúng (Neon) `BLOCKED`. Nếu phần B mở việc build cho Anti, nên cho gate tự chạy lệnh acceptance của job (ví dụ khai `--accept-cmd` lúc `add-job`), thay vì tin dòng `Status:`.
+- Chưa so với Codex. Khi Codex hồi quota, giao cùng spec cho Codex `--tier code` để có mốc so.
+
 ## Câu hỏi còn treo
 
 - Bậc `deep` đã chọn Neon (Planner mặc định, dùng nhóm quota chính có hồi 5h). Argon để cho `max` ở phần B — tài liệu chính thức ủng hộ hướng này nhưng chưa có số đo trên việc khó.

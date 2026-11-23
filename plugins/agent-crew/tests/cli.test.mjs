@@ -94,15 +94,17 @@ const gitRepo = (prefix) => {
   t.check("--bump-from 1: exit 0", bumped.code, 0);
   t.check("...nâng đúng 1 bậc", `${job(4).tier}|${job(4).model}`, "deep|gemini-4-neon-high");
   t.check("...note ghi nâng từ job nào", job(4).notes.includes("nâng bậc từ job 1 (standard → deep)"), true);
-  t.check("--bump-from job deep → giữ deep, có note", (add(["--worker", "anti", "--bump-from", "4"]), `${job(5).tier}|${job(5).notes[0]}`), "deep|nâng bậc từ job 4: deep không có bậc trên, giữ nguyên");
+  t.check("--bump-from job deep (Anti headless) → nâng lên max (argon-high)", (add(["--worker", "anti", "--bump-from", "4"]), `${job(5).tier}|${job(5).model}|${job(5).notes[0]}`), "max|gemini-4-argon-high|nâng bậc từ job 4 (deep → max)");
   t.check("--bump-from job không ghi tier → exit 2", (crew(["add-job", mp, "--worker", "anti", "--role", "assist", "--title", "m", "--model", "gemini-3.8-flash-low"], { cwd: ws }), add(["--worker", "anti", "--bump-from", "6"]).code), 2);
   t.check("--tier và --bump-from cùng lúc → exit 2", add(["--worker", "anti", "--tier", "light", "--bump-from", "1"]).code, 2);
   t.check("--bump-from job không có → exit 2", add(["--worker", "anti", "--bump-from", "99"]).code, 2);
 
   const before = readManifest(mp).jobs.length;
-  const codeAnti = add(["--worker", "anti", "--tier", "code"]);
-  t.check("--tier code cho anti → exit khác 0", codeAnti.code !== 0, true);
-  t.check("...nói tier code chỉ cho Codex", codeAnti.err.includes("tier code chỉ cho Codex"), true);
+  const codeAntiApp = add(["--worker", "anti", "--tier", "code", "--transport", "app", "--note", "cần người trả prompt permission"]);
+  t.check("--tier code cho anti app → exit khác 0", codeAntiApp.code !== 0, true);
+  t.check("...nói tier code không dùng được ở Anti app", codeAntiApp.err.includes("tier code không dùng được ở Anti app"), true);
+  const maxAntiApp = add(["--worker", "anti", "--tier", "max", "--transport", "app", "--note", "cần người trả prompt permission"]);
+  t.check("--tier max cho anti app → exit khác 0, nói không dùng được ở Anti app", maxAntiApp.code !== 0 && maxAntiApp.err.includes("tier max không dùng được ở Anti app"), true);
   t.check("--tier claude cho codex → exit khác 0", add(["--worker", "codex", "--tier", "claude"]).code !== 0, true);
   t.check("--tier lạ → exit khác 0", add(["--worker", "anti", "--tier", "huge"]).code !== 0, true);
   const dead = add(["--worker", "anti", "--tier", "light"], { FAKE_AGY_MODELS: "gemini-3.8-flash-high" });
@@ -135,7 +137,27 @@ const gitRepo = (prefix) => {
   t.check("không có cache thì hỏi `codex debug models`", `${viaCmd.code}|${last2().model}`, "0|gpt-7-sol");
   t.check("anti app --tier deep → bậc agentapi pro",
     (add2(["--worker", "anti", "--tier", "deep", "--transport", "app", "--note", "cần người trả prompt permission"]), last2().model), "pro");
-  t.check("thiếu cả --tier lẫn --model → exit 2, gợi --tier", (() => { const r = add2(["--worker", "anti"]); return r.code === 2 && r.err.includes("--tier"); })(), true);
+  t.check("thiếu cả --tier lẫn --model → exit 2, gợi đủ các bậc kể cả code|max",
+    (() => { const r = add2(["--worker", "anti"]); return r.code === 2 && r.err.includes("light|standard|deep|code|max|claude|claude-max"); })(), true);
+
+  // Run thứ ba: bậc code/max cho Anti headless và ngoại lệ bumpTier ở Anti app.
+  const mp3 = crew(["new-run", "--run", "261106-0902"], { cwd: ws }).out;
+  const add3 = (args, extra) => crew(["add-job", mp3, "--role", "assist", "--title", "t", ...args], { cwd: ws, env: env(extra) });
+  const job3 = (seq) => readManifest(mp3).jobs.find((j) => j.seq === seq);
+  t.check("anti headless --tier code → neon-high", `${add3(["--worker", "anti", "--tier", "code"]).code}|${job3(1).tier}|${job3(1).model}`, "0|code|gemini-4-neon-high");
+  t.check("anti headless --bump-from code → max (argon-high)",
+    `${add3(["--worker", "anti", "--bump-from", "1"]).code}|${job3(2).tier}|${job3(2).model}|${job3(2).notes[0]}`,
+    "0|max|gemini-4-argon-high|nâng bậc từ job 1 (code → max)");
+  t.check("anti headless --bump-from max → giữ max, có note",
+    `${add3(["--worker", "anti", "--bump-from", "2"]).code}|${job3(3).tier}|${job3(3).notes[0]}`,
+    "0|max|nâng bậc từ job 2: max không có bậc trên, giữ nguyên");
+  t.check("anti headless --tier max thiếu Argon → rơi sang neon-xhigh",
+    `${add3(["--worker", "anti", "--tier", "max"], { FAKE_AGY_MODELS: "gemini-4-neon-xhigh gemini-4-neon-high" }).code}|${job3(4).model}`,
+    "0|gemini-4-neon-xhigh");
+  add3(["--worker", "anti", "--tier", "deep", "--transport", "app", "--note", "cần người trả prompt permission"]);
+  t.check("anti app --bump-from deep → giữ deep (không có bậc max), có note",
+    `${add3(["--worker", "anti", "--bump-from", "5", "--transport", "app", "--note", "cần người trả prompt permission"]).code}|${job3(6).tier}|${job3(6).model}|${job3(6).notes.includes("nâng bậc từ job 5: deep không có bậc trên, giữ nguyên")}`,
+    "0|deep|pro|true");
 
   // Job resume vẫn ghi tier/model vào sổ, nhưng crew run không truyền --model.
   const resumed = expandRunArgs(["--manifest", mp, "--job", "1", "--resume", "conv-1"], { cwd: ws });

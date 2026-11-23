@@ -35,7 +35,8 @@ t.check("deep → flash-high (không có Pro: regex thứ 3 của chính bậc d
 t.check("claude → claude-sonnet-4-6", anti("claude").model, "claude-sonnet-4-6");
 t.check("claude-max → claude-opus-4-6-thinking", anti("claude-max").model, "claude-opus-4-6-thinking");
 t.check("...và không ghi effort cho Anti", `${anti("claude").effort}`, "null");
-t.check("code ở Anti → lỗi chỉ Codex", err(() => anti("code")), "tier code chỉ cho Codex");
+t.check("code ở Anti với list 06/11 (không có neon-high) → lỗi không khớp", err(() => anti("code")).startsWith("tier code không khớp"), true);
+t.check("max ở Anti với list 06/11 (không có argon-high/neon-xhigh) → lỗi không khớp", err(() => anti("max")).startsWith("tier max không khớp"), true);
 t.check("gpt-oss không vào bậc nào", TIERS.some((tier) => { try { return /gpt-oss/.test(anti(tier).model); } catch { return false; } }), false);
 
 // --- Anti headless, list 23/11 (agy 1.5.15): tên `<dòng>-<effort>` ----------------
@@ -52,10 +53,20 @@ const LIST_1123 = [
 t.check("1123 light → hydrogen-low", anti("light", LIST_1123).model, "gemini-4-hydrogen-low");
 t.check("1123 standard → hydrogen-medium", anti("standard", LIST_1123).model, "gemini-4-hydrogen-medium");
 t.check("1123 deep → neon-high", anti("deep", LIST_1123).model, "gemini-4-neon-high");
+t.check("1123 code → neon-high, effort null", `${anti("code", LIST_1123).model}|${anti("code", LIST_1123).effort}`, "gemini-4-neon-high|null");
+t.check("1123 max → argon-high (ưu tiên trước neon-xhigh), effort null", `${anti("max", LIST_1123).model}|${anti("max", LIST_1123).effort}`, "gemini-4-argon-high|null");
+t.check("1123 max: không có argon-high → rơi sang neon-xhigh", anti("max", LIST_1123.filter((m) => !m.includes("argon"))).model, "gemini-4-neon-xhigh");
+t.check("1123 max: neon-xhigh in trước argon-high vẫn chọn argon-high", anti("max", ["gemini-4-neon-xhigh", "gemini-4-argon-high"]).model, "gemini-4-argon-high");
+t.check("1123 code: thiếu neon-high → lỗi không khớp, không trượt sang neon-xhigh/flash-high",
+  err(() => anti("code", ["gemini-4-neon-xhigh", "gemini-3.8-flash-high"])).startsWith("tier code không khớp"), true);
+t.check("1123 max: thiếu cả argon-high và neon-xhigh → lỗi không khớp",
+  err(() => anti("max", ["gemini-4-neon-high", "gemini-4-argon-medium"])).startsWith("tier max không khớp"), true);
 t.check("1123 claude → sonnet-5-5-high", anti("claude", LIST_1123).model, "claude-sonnet-5-5-high");
 t.check("1123 claude-max → opus-5-5-high", anti("claude-max", LIST_1123).model, "claude-opus-5-5-high");
-t.check("1123 không bậc nào ra Argon (nhóm quota riêng) hay Orchestrator",
-  TIERS.some((tier) => { try { return /argon|orchestrator/.test(anti(tier, LIST_1123).model); } catch { return false; } }), false);
+t.check("1123 không bậc nào ra Orchestrator",
+  TIERS.some((tier) => { try { return /orchestrator/.test(anti(tier, LIST_1123).model); } catch { return false; } }), false);
+t.check("1123 Argon chỉ vào bậc max",
+  TIERS.filter((tier) => tier !== "max").some((tier) => { try { return /argon/.test(anti(tier, LIST_1123).model); } catch { return false; } }), false);
 // Effort không được chọn theo thứ tự in: xhigh in trước high vẫn ra high.
 t.check("deep: neon-xhigh in trước neon-high vẫn ra high", anti("deep", ["gemini-4-neon-xhigh", "gemini-4-neon-high"]).model, "gemini-4-neon-high");
 t.check("deep: chỉ có neon-xhigh → rơi sang flash-high, không lấy xhigh", anti("deep", ["gemini-4-neon-xhigh", "gemini-3.8-flash-high"]).model, "gemini-3.8-flash-high");
@@ -85,6 +96,8 @@ t.check("claude-max nhận cả opus không -thinking", anti("claude-max", ["cla
 // --- Anti app, Codex, Claude ------------------------------------------------
 t.check("anti app standard → flash", anti("standard", [], { transport: "app" }).model, "flash");
 t.check("anti app deep → pro", anti("deep", [], { transport: "app" }).model, "pro");
+t.check("anti app code → lỗi", err(() => anti("code", [], { transport: "app" })).startsWith("tier code không dùng được ở Anti app"), true);
+t.check("anti app max → lỗi", err(() => anti("max", [], { transport: "app" })).startsWith("tier max không dùng được ở Anti app"), true);
 t.check("anti app claude → lỗi agentapi", err(() => anti("claude", [], { transport: "app" })).includes("agentapi chỉ nhận flash_lite|flash|pro"), true);
 t.check("anti app claude-max → lỗi", err(() => anti("claude-max", [], { transport: "app" })).startsWith("tier claude-max không dùng được ở Anti app"), true);
 // Catalog Codex đo 07/11 (`codex debug models`, bỏ model ẩn).
@@ -105,19 +118,28 @@ t.check("không có dòng của bậc → lỗi liệt kê model còn sống, kh
   err(() => codex("max", CODEX_1107.filter((m) => !m.slug.includes("astra")))).includes("model Codex còn liệt kê: gpt-6.1-sol"), true);
 t.check("model không nhận effort của bậc → lỗi", err(() => codex("light", [{ slug: "gpt-6-luna", efforts: ["low"] }], { overrides: { light: { effort: "max" } } })).includes("không nhận effort max"), true);
 t.check("liveCodexModels null chỉ kiểm, không chọn", `${codex("code", null).model}`, "null");
-t.check("anti max → lỗi, chỉ cho Codex", err(() => anti("max")), "tier max chỉ cho Codex");
+t.check("overrides đặt agy: null cho code/max → lỗi không có model cho Anti headless",
+  `${err(() => anti("code", LIST_1123, { overrides: { code: { agy: null } } }))}|${err(() => anti("max", LIST_1123, { overrides: { max: { agy: null } } }))}`,
+  "tier code không có model cho Anti headless|tier max không có model cho Anti headless");
 t.check("codex claude → lỗi", err(() => codex("claude")).startsWith("tier claude chỉ cho Anti headless"), true);
 t.check("codex claude-max → lỗi", err(() => codex("claude-max")).startsWith("tier claude-max chỉ cho Anti headless"), true);
 t.check("job Claude không nhận --tier", err(() => resolveTier({ worker: "claude", tier: "deep" })).includes("job Claude không nhận --tier"), true);
 t.check("tier lạ → lỗi liệt kê bậc", err(() => anti("huge")).includes("light|standard|deep|code|max|claude|claude-max"), true);
-t.check("liveAgyModels null chỉ kiểm, không chọn", `${anti("standard", null).model}`, "null");
-t.check("...nhưng vẫn chặn bậc sai worker", err(() => anti("code", null)), "tier code chỉ cho Codex");
+t.check("liveAgyModels null chỉ kiểm, không chọn", `${anti("standard", null).model}|${anti("code", null).model}|${anti("max", null).model}`, "null|null|null");
+t.check("...nhưng vẫn chặn bậc sai transport (Anti app)", err(() => anti("code", null, { transport: "app" })).startsWith("tier code không dùng được ở Anti app"), true);
 
 // --- nâng bậc ---------------------------------------------------------------
-t.check("bumpTier light → standard", bumpTier("light"), "standard");
-t.check("bumpTier standard → deep", bumpTier("standard"), "deep");
-t.check("bumpTier deep đứng yên với Anti (không tự sang claude)", bumpTier("deep", "antigravity"), "deep");
-t.check("bumpTier code/claude/claude-max đứng yên với Anti", ["code", "claude", "claude-max"].map((x) => bumpTier(x, "antigravity")).join(","), "code,claude,claude-max");
+t.check("bumpTier mặc định (không truyền transport): light→standard→deep→max, code→max",
+  ["light", "standard", "deep", "code", "max", "claude", "claude-max"].map((x) => bumpTier(x)).join(","),
+  "standard,deep,max,max,max,claude,claude-max");
+t.check("Anti headless (bỏ qua transport): deep → max, code → max",
+  `${bumpTier("deep", "antigravity")},${bumpTier("code", "antigravity")}`, "max,max");
+t.check("Anti headless (truyền rõ transport): light→standard→deep→max, code→max",
+  ["light", "standard", "deep", "code", "max", "claude", "claude-max"].map((x) => bumpTier(x, "antigravity", "headless")).join(","),
+  "standard,deep,max,max,max,claude,claude-max");
+t.check("Anti app: light→standard→deep, nhưng deep đứng yên (không có bậc max)",
+  ["light", "standard", "deep"].map((x) => bumpTier(x, "antigravity", "app")).join(","),
+  "standard,deep,deep");
 t.check("Codex: deep → max, code → max (Astra)", `${bumpTier("deep", "codex")},${bumpTier("code", "codex")}`, "max,max");
 t.check("Codex: light → standard → deep như Anti", `${bumpTier("light", "codex")},${bumpTier("standard", "codex")}`, "standard,deep");
 t.check("Codex: max là đỉnh, đứng yên", bumpTier("max", "codex"), "max");

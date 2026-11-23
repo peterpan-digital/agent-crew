@@ -20,6 +20,7 @@ import { CliError } from "./run-commands.mjs";
  */
 export function tierFields({ worker, flags, manifest, fetchAgyModels = liveAgyModels, fetchCodexModels = liveCodexModels }) {
   const notes = [];
+  const transport = flags.transport ?? "headless";
   let tier = flags.tier ?? null;
   const bumpFrom = flags["bump-from"];
   if (bumpFrom !== undefined) {
@@ -27,7 +28,7 @@ export function tierFields({ worker, flags, manifest, fetchAgyModels = liveAgyMo
     const src = manifest.jobs.find((j) => String(j.seq) === String(bumpFrom));
     if (!src) throw new CliError(`--bump-from: sổ không có job ${bumpFrom}`);
     if (!src.tier) throw new CliError(`--bump-from: job ${bumpFrom} không ghi tier (chọn model/effort tay) — truyền --tier`);
-    tier = bumpTier(src.tier, worker);
+    tier = bumpTier(src.tier, worker, transport);
     notes.push(tier === src.tier
       ? `nâng bậc từ job ${bumpFrom}: ${src.tier} không có bậc trên, giữ nguyên`
       : `nâng bậc từ job ${bumpFrom} (${src.tier} → ${tier})`);
@@ -39,11 +40,10 @@ export function tierFields({ worker, flags, manifest, fetchAgyModels = liveAgyMo
         ? "job Codex cần --tier (light|standard|deep|code|max) hoặc --effort (model theo ~/.codex/config.toml)"
         : worker === "claude"
           ? "thiếu --model (job Claude dùng model của phiên)"
-          : "thiếu --tier (light|standard|deep|claude|claude-max) hoặc --model (crew doctor in tên còn sống)");
+          : "thiếu --tier (light|standard|deep|code|max|claude|claude-max) hoặc --model (crew doctor in tên còn sống)");
     }
     return { tier: null, notes };
   }
-  const transport = flags.transport ?? "headless";
   const { modelTiers } = loadCrewConfig(manifest.workspace);
   const allManual = worker === "codex" ? manualKeys.length === 2 : manualKeys.length === 1;
   const resolved = resolveTier({
