@@ -13,6 +13,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { awakeDeadline, createAwakeClock, sleepNote, sleptSuffix } from "./lib/awake-clock.mjs";
 import { codexTurnUsage, evidenceHasStatus, readWorkerStatus, workerEnv } from "./crew-guards.mjs";
 
 export { evidenceHasStatus };
@@ -25,7 +26,7 @@ const DRAIN_MS = 2_000;
  * gốc. Không bao giờ reject: lượt cứu hỏng thì job được chấm như chưa từng cứu.
  * → `{ran, ok, durationSec, killedFor?, usage?}`; `ok` = evidence giờ đọc ra CONTINUE.
  */
-export function runHandoffRescue({ args, prompt, workspace, evidenceAbs, stream, hardMs, idleMs }) {
+export function runHandoffRescue({ args, prompt, workspace, evidenceAbs, stream, hardMs, idleMs, now, sleepTickMs }) {
   const started = Date.now();
   stream.note(`handoff rescue: resume thread để worker ghi handoff, tối đa ${Math.round(hardMs / 1000)}s`);
   return new Promise((resolveRescue) => {
@@ -58,7 +59,8 @@ export function runHandoffRescue({ args, prompt, workspace, evidenceAbs, stream,
     const end = () => {
       if (done) return;
       done = true;
-      for (const t of [idle, hard, drain, overall]) if (t) clearTimeout(t);
+      for (const t of [idle, hard, drain]) if (t) clearTimeout(t);
+      overall.clear();
       child.stdout.destroy();
       child.stderr.destroy();
       let ok = false;
@@ -66,11 +68,30 @@ export function runHandoffRescue({ args, prompt, workspace, evidenceAbs, stream,
       stream.note(`handoff rescue ${ok ? "ghi được handoff" : "không ra Status: CONTINUE"}`);
       resolveRescue({ ran: true, ok, durationSec: Math.round((Date.now() - started) / 1000), ...(killedFor ? { killedFor } : {}), ...(usage ? { usage } : {}) });
     };
-    const armIdle = () => {
-      if (idle) clearTimeout(idle);
-      idle = setTimeout(() => kill(`no stdout event for ${Math.round(idleMs / 1000)}s`), idleMs);
+    // Giờ máy thức như lượt chính (lib/awake-clock.mjs): 24/11 lượt cứu trần
+    // 180s bị cắt sau 1044s vì máy ngủ 17 phút giữa chừng.
+    const clock = createAwakeClock({
+      now,
+      tickMs: sleepTickMs,
+      onSleep: (gap) => {
+        stream.note(sleepNote(gap));
+        if (!killedFor) armIdle();
+      },
+    });
+    const onIdle = () => {
+      if (clock.poll() > 0) return; // vừa thức: onSleep đã hẹn lại từ đầu
+      kill(`no stdout event for ${Math.round(idleMs / 1000)}s${sleptSuffix(clock)}`);
     };
-    const overall = setTimeout(() => kill(`exceeded ${Math.round(hardMs / 1000)}s`), hardMs);
+    function armIdle() {
+      if (idle) clearTimeout(idle);
+      idle = setTimeout(onIdle, idleMs);
+    }
+    const overall = awakeDeadline({
+      ms: hardMs,
+      clock,
+      tickMs: sleepTickMs,
+      onExpire: () => kill(`exceeded ${Math.round(hardMs / 1000)}s${sleptSuffix(clock)}`),
+    });
     armIdle();
 
     child.stdout.on("data", (chunk) => {

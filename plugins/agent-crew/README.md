@@ -504,6 +504,17 @@ worker Codex rà lại và tìm thêm hai đường lách, cả hai đã bịt:
 
 Còn `existsSync` để làm gì: để có câu báo lỗi tử tế. Cái bảo đảm là `wx`.
 
+### Máy ngủ không tính vào --timeout (Codex headless)
+
+Watchdog của `codex-run.mjs` và lượt cứu handoff đếm **giờ máy thức**, không phải giờ
+tường (`scripts/lib/awake-clock.mjs`). Đo 24/11: Mac gập nắp ngủ giữa job, setTimeout
+của Node trên macOS vẫn chạy trong lúc ngủ, nên lúc máy thức tạm crew cắt ngay
+"exceeded 30m" dù job mới được ~22 phút thức, rồi cắt luôn lượt cứu. Giờ mỗi 5s crew
+đọc đồng hồ; hai lần đọc cách nhau quá 35s thì khoảng dư là máy ngủ: không tính vào
+`--timeout`, không tính là im, sidecar ghi `máy ngủ Ns (gập nắp/sleep)…`. Job vẫn bị cắt
+khi đủ giờ thức thì lý do kèm `(máy ngủ thêm Ns, không tính)`. Hạn cắt trễ tối đa 5s.
+Anti headless chưa áp (agy tự giữ print-timeout của nó).
+
 ### Job im lặng bao lâu thì coi là chết
 
 Ngưỡng lấy từ `timeoutMs` mà chính adapter ghi vào manifest lúc bắt đầu job, cộng
@@ -684,6 +695,7 @@ nội dung manifest — nên một runner spawn được process và so được
 | --- | --- |
 | `tests/judge-verdict.test.mjs` | 9 ca của bảng phán quyết `judgeJob()`: đủ tổ hợp evidence có/rỗng/thiếu × runtime ok/fail × có/không dòng `Status:`. |
 | `tests/collect-gate.test.mjs` | Cổng nghiệm thu trên các run dựng sẵn để sai đúng 1 kiểu: trùng evidence sau khi resolve, ghi ngoài phạm vi, ghi vào file được bảo vệ, ghi vào prefix bị gitignore đã khai, biên prefix, khoảng suy đoán, xoá file, `--abandon` job đã fail, `--dry-run` phủ `--abandon`, dòng tổng kết đếm job STALE, dry-run nhắc cờ sổ chưa ghi, `--grace` không phải số, chạy từ cwd khác, echo template brief, provenance evidence, WARN bền qua 2 lần collect, cost gate chỉ nằm trong evidence. |
+| `tests/watchdog-sleep-not-counted.test.mjs` | Đồng hồ thức với đồng hồ giả: nhảy 20–40 phút (máy ngủ) không tính vào hạn; `codex-run` thật với fake codex ngủ 40 phút giữa job hạn 30s vẫn xong DONE, sidecar ghi giấc ngủ. |
 | `tests/codex-lifecycle.test.mjs` | Vòng đời `codex-run.mjs` qua `codex` giả: grandchild giữ stdout, brief 200KB vào child không đọc stdin, watchdog trước stderr rác, retry đè sidecar cũ, log dir sai quyền, `BLOCKED` phải exit 3, và manifest phải ghi được ca bị giết. |
 | `tests/anti-headless-stop.test.mjs` | SIGTERM vào adapter Anti headless giết cả agy lẫn lệnh nó sinh ra (file ghi muộn không xuất hiện), sổ ghi `failed`, exit 1. Chạy trên code cũ thì 5/7 check đỏ. |
 | `tests/codex-failure-quota-and-reconcile-time.test.mjs` | Lý do lỗi Codex lấy từ `turn.failed` trong stream (không phải log MCP ở stderr), hết credit thì chỉ `crew quota` + `--resume`; cổng quota cảnh báo job lớn từ 30%; reconcile lấy giờ kết thúc theo mtime evidence. |

@@ -59,6 +59,7 @@ import {
 } from "./crew-guards.mjs";
 import { evidenceHasStatus, runHandoffRescue } from "./codex-handoff-rescue.mjs";
 import { LIVENESS_RECHECK_MS, createLivenessProbe } from "./lib/codex-liveness.mjs";
+import { awakeDeadline, createAwakeClock, sleepNote, sleptSuffix } from "./lib/awake-clock.mjs";
 import { codexExitDetail, collectCodexError } from "./lib/codex-failure.mjs";
 import { loadCrewConfig } from "./lib/crew-config.mjs";
 import { codexProfileArgs, denialHint, planWriteSandbox, probeCodexProfile, sandboxDenials } from "./lib/write-sandbox.mjs";
@@ -684,7 +685,8 @@ export async function codexRun(options) {
     };
 
     const clearTimers = () => {
-      for (const t of [idleTimer, drainTimer, hardTimer, overall]) if (t) clearTimeout(t);
+      for (const t of [idleTimer, drainTimer, hardTimer]) if (t) clearTimeout(t);
+      overall?.clear();
     };
 
     const finish = async () => {
@@ -714,6 +716,8 @@ export async function codexRun(options) {
           stream,
           hardMs: Math.min(HANDOFF_RESCUE_MS, timeoutMs),
           idleMs: Math.min(HANDOFF_RESCUE_IDLE_MS, idleMs),
+          now: options.clock,
+          sleepTickMs: options.sleepTickMs,
         });
       }
 
@@ -813,14 +817,30 @@ export async function codexRun(options) {
     // open (capped). Alive → note it, look again later.
     const liveness = options.liveness ?? createLivenessProbe(child.pid);
     const recheckMs = options.livenessRecheckMs ?? LIVENESS_RECHECK_MS;
-    let lastEventAt = Date.now();
+    // Giờ máy thức, không phải giờ tường: máy ngủ (gập nắp) không tính vào
+    // --timeout lẫn giờ im. Xem lib/awake-clock.mjs (đo 24/11).
+    const clock = createAwakeClock({
+      now: options.clock ?? Date.now,
+      tickMs: options.sleepTickMs,
+      onSleep: (gap) => {
+        lastEventAt += gap;
+        heartbeat(sleepNote(gap));
+        stream.note(sleepNote(gap));
+        if (killedFor || settled) return;
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(onIdle, Math.max(0, idleMs - (clock.now() - lastEventAt)));
+      },
+    });
+    let lastEventAt = clock.now();
     let aliveKind = null;           // what kept the current silent stretch alive, noted once per kind
     const onIdle = async () => {
       if (killedFor || settled) return;
-      const verdict = await liveness.check({ silentMs: Date.now() - lastEventAt });
+      // Máy vừa thức: onSleep đã dời mốc im và hẹn lại, đừng cắt theo giờ ngủ.
+      if (clock.poll() > 0) return;
+      const verdict = await liveness.check({ silentMs: clock.now() - lastEventAt });
       // An event may have arrived during the check: armIdle has already re-armed.
-      if (killedFor || settled || Date.now() - lastEventAt < idleMs) return;
-      const silentSec = Math.round((Date.now() - lastEventAt) / 1000);
+      if (killedFor || settled || clock.now() - lastEventAt < idleMs) return;
+      const silentSec = Math.round((clock.now() - lastEventAt) / 1000);
       if (verdict.alive) {
         if (verdict.kind !== aliveKind) {
           aliveKind = verdict.kind;
@@ -833,16 +853,21 @@ export async function codexRun(options) {
       kill(`no stdout event for ${silentSec}s — ${verdict.reason}`);
     };
     const armIdle = () => {
-      lastEventAt = Date.now();
+      lastEventAt = clock.now();
       aliveKind = null;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(onIdle, idleMs);
     };
 
-    const overall = setTimeout(() => {
-      timedOut = true;
-      kill(`exceeded ${timeout}`);
-    }, timeoutMs);
+    const overall = awakeDeadline({
+      ms: timeoutMs,
+      clock,
+      tickMs: options.sleepTickMs,
+      onExpire: () => {
+        timedOut = true;
+        kill(`exceeded ${timeout}${sleptSuffix(clock)}`);
+      },
+    });
     armIdle();
 
     child.stdout.on("data", (chunk) => {
