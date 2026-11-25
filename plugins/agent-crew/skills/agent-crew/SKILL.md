@@ -6,7 +6,7 @@ when_to_use: "Trigger: giao việc, chia việc, chạy song song, nhờ Codex, 
 category: agent-ops
 keywords: [crew, dispatch, multi-agent, song-song, codex, antigravity, worker]
 metadata:
-  version: "2.8.7"
+  version: "2.8.8"
 ---
 
 # agent-crew
@@ -345,7 +345,9 @@ mềm** (còn `max(5m, 15%)` trước timeout): tới đó mà chưa xong thì w
 Worker không tự dừng mà bị cắt ở hard timeout thì adapter **cứu một lượt** (≤ 3m, cùng
 thread, cùng quyền) để ghi handoff — Codex headless, Anti headless, Anti app (không áp cho
 phiên chat, không áp khi job bị giết vì im lặng). Sổ ghi `handoffRescue`. Lượt cứu cũng hỏng
-thì job `failed` như cũ, `conversationId` vẫn ghi để resume tay.
+thì job `failed` như cũ, `conversationId` vẫn ghi để resume tay. Codex headless đếm **giờ máy
+thức**: máy ngủ (gập nắp) không tính vào `--timeout`/giờ im, sidecar ghi `máy ngủ Ns`; lý do cắt
+có `(máy ngủ thêm Ns…)` là máy đã ngủ giữa job — resume, đừng đọc thành worker chậm.
 
 **Task dài hơn một job: `--chain`.** Việc ước trên 30m (trần một job) mà chẻ trước không
 được — refactor nhiều bước, crawl dài — thì bắn job gốc bằng `--chain` thay vì tự resume tay:
