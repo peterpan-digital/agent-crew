@@ -11,11 +11,12 @@
 # FAKE_MODE picks the shape. FAKE_EVIDENCE is where the "worker" writes.
 [ "$1" = "--version" ] && { echo "fake-agy 0.0.1"; exit 0; }
 # `agy models`: FAKE_AGY_MODELS (tên cách nhau bằng dấu cách) thay list mặc định,
-# FAKE_AGY_MODELS=fail làm lệnh chết. Mặc định là list thật đo 06/11.
+# FAKE_AGY_MODELS=fail làm lệnh chết. Mặc định là list thật đo 23/11 (agy 1.5.15):
+# tên `<dòng>-<effort>`, có Gemini 4 và Claude 5.5.
 if [ "$1" = "models" ]; then
   [ "$FAKE_AGY_MODELS" = "fail" ] && { echo "agy: not signed in" >&2; exit 1; }
   echo "Fetching available models..."
-  for m in ${FAKE_AGY_MODELS:-gemini-3.8-flash-high gemini-3.8-flash-medium gemini-3.8-flash-low claude-sonnet-4-6 claude-opus-4-6-thinking gpt-oss-120b-medium}; do
+  for m in ${FAKE_AGY_MODELS:-gemini-4-neon-high gemini-4-neon-xhigh gemini-4-neon-medium gemini-4-neon-low gemini-4-argon-medium gemini-4-argon-high gemini-4-argon-low gemini-4-hydrogen-high gemini-4-hydrogen-xhigh gemini-4-hydrogen-medium gemini-4-hydrogen-low gemini-pro-orchestrator-neon gemini-pro-orchestrator-g1-pro gemini-3.8-flash-high gemini-3.8-flash-medium gemini-3.8-flash-low claude-opus-5-5-low claude-opus-5-5-medium claude-opus-5-5-high claude-sonnet-5-5-low claude-sonnet-5-5-medium claude-sonnet-5-5-high gpt-oss-120b-medium}; do
     printf '%s\t%s\n' "$m" "$m"
   done
   exit 0

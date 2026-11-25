@@ -83,7 +83,7 @@ function message({ tools, files, nudges }) {
     `## Định tuyến crew — giữa lượt${nudges > 1 ? " (lần cuối)" : ""}`,
     "",
     `Lượt này đã ${tools} lượt gọi tool, sửa ${files.length} file, chưa giao phần nào.`,
-    "Dừng một nhịp: phần **còn lại** có mảng nào Codex làm được (code, script, sửa nhiều file,",
+    "Dừng một nhịp: phần **còn lại** có mảng nào Codex hay Anti làm được (code, script, sửa nhiều file,",
     "chạy test, xử lý hàng loạt) hay Anti làm được (tra cứu, việc theo rule)? Có thì giao qua",
     "skill `agent-crew` rồi làm phần cần phán đoán song song. Không thì ghi",
     `\`${DECISION_LABEL} vẫn tự làm — <vì sao phần còn lại không tách được>\` và làm tiếp.`,

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addJob, createRun, readManifest } from "../scripts/crew-manifest.mjs";
 import { normalizeAgyQuota, normalizeCodexQuota } from "../scripts/lib/worker-quota-readers.mjs";
-import { QUOTA_EXIT, antiFamily, formatReset, quotaVerdict } from "../scripts/lib/worker-quota-verdict.mjs";
+import { QUOTA_EXIT, antiFamily, formatReset, labelMatchesModel, quotaVerdict } from "../scripts/lib/worker-quota-verdict.mjs";
 import { takeQuotaFlag } from "../scripts/cli/quota-command.mjs";
 import { FIXTURE_BIN, MODULE_ROOT, makeChecker, tmpWorkspace, writeFile } from "./helpers.mjs";
 
@@ -117,6 +117,26 @@ t.check("họ model: inherit không biết", antiFamily("inherit"), null);
   t.check("anti: Gemini cạn, không rõ model → chỉ cảnh báo", quotaVerdict(q, { model: null, now: NOW }).level, "low");
   const both = normalizeAgyQuota(agyJson(0, 0.5, 0, 0.5));
   t.check("anti: mọi nhóm cạn, không rõ model → cạn", quotaVerdict(both, { model: null, now: NOW }).level, "empty");
+}
+{
+  // Hình JSON thật đo 23/11: danh sách model nằm trong description, nhóm Argon riêng.
+  const g = (name, description, rem) => ({ name, description, buckets: [
+    { id: `${name}-w`, window: "weekly", remaining_fraction: rem, reset_time: new Date(IN_7D * 1000).toISOString() },
+  ] });
+  const q = normalizeAgyQuota({ command: { data: { groups: [
+    g("Gemini Models", "Models within this group: Gemini 4 Neon, Gemini 4 Hydrogen, Orchestrator (Neon), Gemini 3.8 Flash", 0.9),
+    g("Claude and GPT models", "Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B", 0.9),
+    g("Gemini 4 Argon", "For paid Pro plans, Argon quota is separate. Higher Argon quota is available on Ultra plans.", 0),
+  ] } } });
+  t.check("anti: nhãn nhóm lấy từ description", q.groups[0].labels.join("|"), "Gemini 4 Neon|Gemini 4 Hydrogen|Orchestrator (Neon)|Gemini 3.8 Flash");
+  t.check("anti: nhóm không có danh sách → tên nhóm là nhãn", q.groups[2].labels.join("|"), "Gemini 4 Argon");
+  t.check("anti: Argon cạn, job Hydrogen → ok (không bị nhóm Argon chặn)", quotaVerdict(q, { model: "gemini-4-hydrogen-medium", now: NOW }).level, "ok");
+  t.check("anti: Argon cạn, job Flash 3.8 → ok", quotaVerdict(q, { model: "gemini-3.8-flash-low", now: NOW }).level, "ok");
+  t.check("anti: Argon cạn, job Argon → cạn", quotaVerdict(q, { model: "gemini-4-argon-high", now: NOW }).level, "empty");
+  t.check("anti: Orchestrator (Neon) thuộc nhóm Gemini", quotaVerdict(q, { model: "gemini-pro-orchestrator-neon", now: NOW }).lines.join("|").startsWith("Gemini Models:"), true);
+  t.check("anti: Claude 5.5 thuộc nhóm Claude/GPT", quotaVerdict(q, { model: "claude-opus-5-5-high", now: NOW }).lines.join("|").startsWith("Claude and GPT models:"), true);
+  t.check("anti: gpt-oss thuộc nhóm Claude/GPT", quotaVerdict(q, { model: "gpt-oss-120b-medium", now: NOW }).lines.length, 1);
+  t.check("nhãn khớp theo ranh giới chữ: Gemini 4 Neon không khớp gemini-4-neonx-high", labelMatchesModel("Gemini 4 Neon", "gemini-4-neonx-high"), false);
 }
 t.check("giờ hồi trong ngày chỉ in giờ", formatReset(new Date(IN_3H * 1000), NOW), "06:30");
 t.check("giờ hồi khác ngày in cả ngày", formatReset(new Date(IN_7D * 1000), NOW), "14/11 03:30");

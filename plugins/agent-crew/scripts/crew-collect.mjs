@@ -24,6 +24,12 @@ import { collectWriteScope, headMovement } from "./crew-scope.mjs";
 import { costGateKind, ensureCostGateHold, failedHoldFor, failedHoldVerdict, quotaApiName, extractCostGateApi, holdFor, holdVerdict, liveJobs } from "./lib/holds.mjs";
 import { buildReplacements, cleanReason, mergeReplacements, parseReplaceSpec, replacedVerdict } from "./lib/replaced-jobs.mjs";
 import { assertReaderLedgersWritable } from "./lib/reader-ledgers.mjs";
+import {
+  DEFAULT_ACCEPT_TIMEOUT,
+  applyCachedAcceptance,
+  evaluateJobAcceptance,
+  parseAcceptTimeout,
+} from "./lib/accept-command.mjs";
 
 /** Report language matches the rest of the gate's output, which is Vietnamese. */
 const VI_CHANGE = { modified: "bị sửa", deleted: "bị XOÁ", created: "bị tạo mới", unreadable: "không đọc được nữa" };
@@ -345,7 +351,19 @@ function costGateReason(job, workspace) {
   return { api: extractCostGateApi(text), kind: costGateKind(text) };
 }
 
-export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, now = Date.now(), notOurs = [], ackRuntime = [], replaced = [], reason = null } = {}) {
+export function collectRun(manifestPath, {
+  workspace, graceMs, dryRun = false, now = Date.now(),
+  notOurs = [], ackRuntime = [], replaced = [], reason = null,
+  acceptRun = [], acceptTimeout = DEFAULT_ACCEPT_TIMEOUT,
+} = {}) {
+  const acceptTimeoutLabel = String(acceptTimeout).trim();
+  const acceptTimeoutMs = parseAcceptTimeout(acceptTimeoutLabel);
+  const acceptRunSet = new Set(acceptRun.map((v) => {
+    const seq = Number(v);
+    if (!Number.isInteger(seq) || seq < 1) throw new Error(`--accept-run cần số seq, nhận "${v}"`);
+    return seq;
+  }));
+
   const abs = resolve(manifestPath);
   // Reconcile first: evidence on disk outranks the manifest, and a gate that
   // judged a stale manifest would fail jobs that had already finished.
@@ -369,21 +387,14 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
     try { text = path ? readFileSync(path, "utf8") : ""; } catch { /* không đọc được: coi như có gate */ return v; }
     return extractCostGateApi(text) ? v : "BLOCKED_NO_GATE";
   };
-  if (replaced.length) {
-    const pre = readManifest(abs);
-    const w = workspace ?? pre.workspace;
-    const preJudged = new Map(pre.jobs.map((j) => [j.seq, judgeOne(j, w, now, pre.version).verdict]));
-    buildReplacements(pre, replaced, reason, forReplace(pre, w, (seq) => preJudged.get(seq)), digestFor(pre, w), new Date(now));
-  }
   // Cùng luật với --replaced: sổ của người đọc không ghi khi run còn job sống, vì worker
   // ghi được manifest và adapter chỉ bắt được dòng giả nếu giữa claim và thoát không có
-  // lần ghi hợp lệ nào (lib/reader-ledgers.mjs). Kiểm cả hai cờ trước lần ghi đầu tiên,
-  // để lệnh bị từ chối không để lại nửa phần đã ghi. Dry-run không ghi nên không chặn.
+  // lần ghi hợp lệ nào (lib/reader-ledgers.mjs). Kiểm trước khi chạy lệnh nghiệm thu để
+  // fail-fast nếu lệnh bị từ chối. Dry-run không ghi nên không chặn.
   if (!dryRun && (notOurs.length || ackRuntime.length)) {
     assertReaderLedgersWritable(readManifest(abs), notOurs.length ? "--not-ours" : "--ack-runtime");
   }
-  if (notOurs.length && !dryRun) recordDismissals(abs, notOurs, reason);
-  if (ackRuntime.length && !dryRun) recordRuntimeAcks(abs, ackRuntime, reason, workspace);
+
   let manifest = readManifest(abs);
   const ws = workspace ?? manifest.workspace;
 
@@ -393,9 +404,44 @@ export function collectRun(manifestPath, { workspace, graceMs, dryRun = false, n
   // Dismissals carried over from earlier invocations too: a path someone already
   // explained, with the explanation on the record, does not need re-explaining
   // every time the gate runs.
+  // Chạy kiểm phạm vi TRƯỚC lệnh nghiệm thu để file tạm sinh lúc test không bị tính cho worker.
   const waived = [...notOurs, ...(manifest.dismissedPaths ?? []).map((d) => d.path)];
   const scope = collectWriteScope(manifest, { workspace: ws, graceMs, notOurs: waived });
   const head = headMovement(manifest, ws);
+
+  // Chạy lệnh nghiệm thu (`--accept-cmd`) cho mọi job đã ra PASS theo logic trên.
+  const acceptanceUpdates = [];
+  for (const row of rows) {
+    if (row.verdict !== "PASS") continue;
+    const job = manifest.jobs.find((j) => j.seq === row.seq);
+    if (!job?.acceptCmd) continue;
+    const res = evaluateJobAcceptance(job, row, {
+      workspace: ws,
+      acceptRunSet,
+      acceptTimeoutMs,
+      acceptTimeoutLabel,
+    });
+    if (res.ran && res.acceptance) acceptanceUpdates.push({ seq: job.seq, acceptance: res.acceptance });
+  }
+
+  if (replaced.length) {
+    const preJudged = new Map(rows.map((r) => [r.seq, r.verdict]));
+    buildReplacements(manifest, replaced, reason, forReplace(manifest, ws, (seq) => preJudged.get(seq)), digestFor(manifest, ws), new Date(now));
+  }
+  if (notOurs.length && !dryRun) recordDismissals(abs, notOurs, reason);
+  if (ackRuntime.length && !dryRun) recordRuntimeAcks(abs, ackRuntime, reason, workspace);
+  if (acceptanceUpdates.length && !dryRun) {
+    updateManifest(abs, (m) => {
+      for (const { seq, acceptance } of acceptanceUpdates) {
+        const j = m.jobs.find((x) => x.seq === seq);
+        if (j) j.acceptance = acceptance;
+      }
+      return m;
+    });
+  }
+  if (!dryRun && (notOurs.length || ackRuntime.length || acceptanceUpdates.length)) {
+    manifest = readManifest(abs);
+  }
   const costGates = manifest.jobs
     .filter((j) => rows.find((r) => r.seq === j.seq)?.verdict === "BLOCKED")
     .map((j) => ({ seq: j.seq, ...costGateReason(j, ws) }))
@@ -636,7 +682,10 @@ function recordDismissals(abs, paths, reason) {
 export function verdictOfJob(manifestPath, seq, now = Date.now()) {
   const manifest = readManifest(resolve(manifestPath));
   const job = manifest.jobs.find((j) => j.seq === seq);
-  return job ? judgeOne(job, manifest.workspace, now, manifest.version).verdict : null;
+  if (!job) return null;
+  const row = judgeOne(job, manifest.workspace, now, manifest.version);
+  applyCachedAcceptance(job, row, manifest.workspace);
+  return row.verdict;
 }
 
 export function abandonJob(manifestPath, seq, { now = Date.now() } = {}) {
@@ -1105,10 +1154,10 @@ function recordCollectMark(manifestPath, { dryRun, exitCode, report = null }) {
 }
 
 function parseArgs(argv) {
-  const withValue = new Set(["--abandon", "--grace", "--reason", "--report"]);
+  const withValue = new Set(["--abandon", "--grace", "--reason", "--report", "--accept-timeout"]);
   // Repeatable, because dismissing four files from one stray sync should be one
   // command with one reason, not four runs of the gate.
-  const repeatable = new Set(["--not-ours", "--ack-runtime", "--replaced"]);
+  const repeatable = new Set(["--not-ours", "--ack-runtime", "--replaced", "--accept-run"]);
   const opts = { flags: new Set(), values: new Map(), lists: new Map(), positional: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -1131,6 +1180,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (!manifestPath || opts.positional.length > 1) {
       console.error(
         "usage: crew collect <manifest.json> [--abandon <seq>] [--grace <ms>] [--dry-run]\n" +
+        "                            [--accept-run <seq>]... [--accept-timeout <dur>]\n" +
         "                            [--not-ours <path>]... [--ack-runtime <seq>[@sha]]...\n" +
         "                            [--replaced <seq hỏng>=<seq làm thay>]... --reason \"<vì sao>\"\n" +
         "                            [--report <reportDir của layout>/{yymmdd-hhmm}-{type}-{slug}.md]\n" +
@@ -1139,6 +1189,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       process.exit(2);
     }
     const dryRun = opts.flags.has("--dry-run");
+    const acceptRun = (opts.lists.get("--accept-run") ?? []).map((v) => {
+      const seq = Number(v);
+      if (!Number.isInteger(seq) || seq < 1) throw new Error(`--accept-run cần số seq, nhận "${v}"`);
+      return seq;
+    });
+    const acceptTimeout = opts.values.get("--accept-timeout") ?? DEFAULT_ACCEPT_TIMEOUT;
+    parseAcceptTimeout(acceptTimeout);
     if (opts.values.has("--abandon") && opts.lists.has("--replaced")) {
       // --abandon ghi trước khi gate chạy; đi chung thì một --replaced sai vẫn để lại job đã bỏ.
       throw new Error("--abandon và --replaced chạy riêng hai lệnh: --abandon trước, rồi collect lại với --replaced");
@@ -1159,6 +1216,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const replaced = (opts.lists.get("--replaced") ?? []).map(parseReplaceSpec);
     const r = collectRun(manifestPath, {
       graceMs, dryRun, notOurs, ackRuntime, replaced, reason: opts.values.get("--reason") ?? null,
+      acceptRun, acceptTimeout,
     });
     report(r);
     // Dry-run không ghi sổ người đọc (đúng thiết kế) nhưng dòng "(--dry-run: …)" nằm

@@ -22,7 +22,9 @@ không phải dễ/khó:
 - Có `SKILL.md` ràng đủ case, chỉ cần thi hành → **Antigravity**. Nó nhanh và rất gọn
   khi có mẫu; điểm yếu là suy luận mở, không phải tốc độ hay độ chính xác.
 - Phải đọc số rồi quyết hướng, hoặc viết report chính thức → **Claude**.
-- Code, pipeline, transform nhiều bước, refactor tool → **Codex**.
+- Build có spec rõ và lệnh kiểm chạy được → **Antigravity** hoặc **Codex** `--tier code` theo
+  quota, kèm `--accept-cmd` (`routing-table.md` mục *Build có spec*).
+- Code chưa viết nổi spec trước, refactor lớn chưa rõ hướng, transform nhiều bước còn mở → **Codex**.
 
 ## Chọn `role`
 
@@ -179,7 +181,7 @@ cần dặn session con "nhớ dùng crew" — dặn thêm chỉ thành lời nh
 | Giao | Không giao (tự làm, nói lý do một câu) |
 | --- | --- |
 | "Refactor module parser, tách 3 file, giữ test xanh" → Codex `--tier code` | "Đổi tên biến này cho rõ" — 1 file, vài lượt tool |
-| "Viết test cho toàn bộ `scripts/lib/`" → Codex `--tier code`, ước > 30m thì `--chain` | "Sửa lỗi chính tả trong README" |
+| "Viết test cho toàn bộ `scripts/lib/`" → Anti hoặc Codex `--tier code` + `--accept-cmd "node tests/run.mjs"`, ước > 30m thì `--chain` | "Sửa lỗi chính tả trong README" |
 | "So sánh 4 thư viện queue, có nguồn" → Anti `--tier standard` | "Giải thích hàm này chạy sao" — cần đọc code và phán đoán ngay |
 | "Migrate 40 file sang API mới" → Codex `--chain --budget 4h` | "Sửa lỗi này nhưng chưa rõ owner muốn hành vi nào" — cần quyết nghiệp vụ |
 

@@ -146,7 +146,7 @@ const SHORT = { antigravity: "anti", codex: "codex", claude: "claude" };
 export function addJobCli(argv, { cwd }) {
   try {
     const { pos, flags } = parseFlags(argv,
-      ["worker", "role", "title", "evidence", "model", "effort", "transport", "note", "allow", "tier", "bump-from"],
+      ["worker", "role", "title", "evidence", "model", "effort", "transport", "note", "allow", "tier", "bump-from", "accept-cmd", "accept-cwd"],
       { positional: 1, repeatable: ["allow"] });
     const manifestPath = resolve(cwd, pos[0]);
     const worker = WORKER_NAMES[flags.worker];
@@ -166,6 +166,8 @@ export function addJobCli(argv, { cwd }) {
       ...(flags.transport ? { transport: flags.transport } : {}),
       ...(flags.note ? { note: flags.note } : {}),
       ...(flags.allow ? { filesMayModify: flags.allow } : {}),
+      ...(flags["accept-cmd"] !== undefined ? { acceptCmd: flags["accept-cmd"] } : {}),
+      ...(flags["accept-cwd"] !== undefined ? { acceptCwd: flags["accept-cwd"] } : {}),
     });
     for (const note of tiered.notes) appendNote(manifestPath, job.seq, note);
     process.stdout.write(`${job.seq}\t${job.evidence}\n`);

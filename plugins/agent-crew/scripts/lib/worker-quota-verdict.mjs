@@ -42,6 +42,22 @@ export function antiFamily(model) {
   return null;
 }
 
+const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+/**
+ * Tên hiển thị trong nhóm quota agy có khớp ID model không. So theo slug:
+ * "Gemini 4 Neon" ↔ gemini-4-neon-high, "Gemini 3.8 Flash" ↔ gemini-3.8-flash-low,
+ * "Claude Opus 5.5" ↔ claude-opus-5-5-high (ID = tên + hậu tố effort), và
+ * "Orchestrator (Neon)" ↔ gemini-pro-orchestrator-neon (ID kết thúc bằng tên).
+ * Cần khớp đúng: so theo họ thì /gemini/ ăn cả nhóm "Gemini 4 Argon", nên nhóm
+ * Argon cạn là chặn luôn job Hydrogen tiêu nhóm Gemini chung.
+ */
+export function labelMatchesModel(label, model) {
+  const l = slug(label);
+  const id = slug(model);
+  return Boolean(l) && (id === l || id.startsWith(`${l}-`) || id.endsWith(`-${l}`));
+}
+
 /** Nhóm quota mà job sẽ tiêu, và job có biết chắc nhóm đó không. */
 export function relevantGroups(quota, model) {
   if (quota.worker === "codex") {
@@ -50,6 +66,9 @@ export function relevantGroups(quota, model) {
     const dflt = quota.groups.filter((g) => g.isDefault);
     return dflt.length ? { groups: dflt, known: true } : { groups: quota.groups, known: false };
   }
+  const exact = model ? quota.groups.filter((g) => g.labels?.some((l) => labelMatchesModel(l, model))) : [];
+  if (exact.length) return { groups: exact, known: true };
+  // Không khớp tên nào (bản TSV cũ, model chưa liệt kê): đoán theo họ model.
   const family = antiFamily(model);
   const match = { gemini: /gemini/i, "claude-gpt": /claude|gpt/i }[family];
   const own = match ? quota.groups.filter((g) => match.test(g.name)) : [];

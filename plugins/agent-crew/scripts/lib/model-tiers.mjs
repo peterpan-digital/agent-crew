@@ -47,27 +47,38 @@ export const EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
  * không dành cho Codex.
  */
 const SOL = "^gpt-[\\d.]+-sol$";
+/*
+ * Anti headless, từ agy 1.5.x tên model là `<dòng>-<effort>` (đo 23/11:
+ * gemini-4-hydrogen-medium, gemini-4-neon-high, claude-sonnet-5-5-high). Mỗi regex
+ * chỉ khớp ĐÚNG MỘT mức effort: `versionOf` chỉ đọc cụm số, nên neon-high và
+ * neon-xhigh cùng là [4] và hoà nhau — khi hoà, `pickModel` giữ tên in trước trong
+ * `agy models`, tức là một regex nhiều effort sẽ âm thầm chọn effort theo thứ tự in.
+ * Dòng Gemini 4 xếp trước Flash 3.8: Hydrogen là model thi hành nhanh (Executor của
+ * Orchestrator), Neon cho việc cần suy luận và build (`deep`/`code`), Argon vào bậc
+ * `max` (không có thì rơi sang `neon-xhigh`; lưu ý Argon tiêu một nhóm quota riêng
+ * chỉ hồi theo tuần). Regex tên cũ giữ lại làm dự phòng cho máy còn agy bản trước.
+ */
 export const DEFAULT_TIER_MAP = Object.freeze({
-  light: { agy: ["^gemini-[\\d.]+-flash-lite$", "^gemini-[\\d.]+-flash-low$"], app: "flash_lite", codex: ["^gpt-[\\d.]+-luna$"], effort: "low" },
-  standard: { agy: ["^gemini-[\\d.]+-flash-medium$"], app: "flash", codex: ["^gpt-[\\d.]+-terra$"], effort: "medium" },
-  deep: { agy: ["^gemini-[\\d.]+-pro-high$", "^gemini-[\\d.]+-pro$", "^gemini-[\\d.]+-flash-high$"], app: "pro", codex: [SOL], effort: "xhigh" },
-  code: { agy: null, app: null, codex: [SOL], effort: "high" },
-  max: { agy: null, app: null, codex: ["^gpt-[\\d.]+-astra$"], effort: "max" },
-  claude: { agy: ["^claude-sonnet-[\\d-]+$"], app: null, codex: null, effort: null },
-  "claude-max": { agy: ["^claude-opus-[\\d-]+(-thinking)?$"], app: null, codex: null, effort: null },
+  light: { agy: ["^gemini-[\\d.]+-hydrogen-low$", "^gemini-[\\d.]+-flash-lite$", "^gemini-[\\d.]+-flash-low$"], app: "flash_lite", codex: ["^gpt-[\\d.]+-luna$"], effort: "low" },
+  standard: { agy: ["^gemini-[\\d.]+-hydrogen-medium$", "^gemini-[\\d.]+-flash-medium$"], app: "flash", codex: ["^gpt-[\\d.]+-terra$"], effort: "medium" },
+  deep: { agy: ["^gemini-[\\d.]+-neon-high$", "^gemini-[\\d.]+-pro-high$", "^gemini-[\\d.]+-pro$", "^gemini-[\\d.]+-flash-high$"], app: "pro", codex: [SOL], effort: "xhigh" },
+  code: { agy: ["^gemini-[\\d.]+-neon-high$"], app: null, codex: [SOL], effort: "high" },
+  max: { agy: ["^gemini-[\\d.]+-argon-high$", "^gemini-[\\d.]+-neon-xhigh$"], app: null, codex: ["^gpt-[\\d.]+-astra$"], effort: "max" },
+  claude: { agy: ["^claude-sonnet-[\\d-]+-high$", "^claude-sonnet-[\\d-]+$"], app: null, codex: null, effort: null },
+  "claude-max": { agy: ["^claude-opus-[\\d-]+-high$", "^claude-opus-[\\d-]+(-thinking)?$"], app: null, codex: null, effort: null },
 });
 
 /**
- * Chuỗi nâng bậc khi job trước chưa đạt: `light → standard → deep`, rồi với
- * Codex `deep`/`code → max` (Astra). Anti không có bậc `max` nên dừng ở `deep`.
- * Bậc ngoài chuỗi (`claude*`, `max`) đứng yên.
+ * Chuỗi nâng bậc khi job trước chưa đạt cho cả Anti headless và Codex:
+ * `light → standard → deep → max`, `code → max`. Ngoại lệ: Anti app không có
+ * bậc `max` nên `deep` đứng yên. Bậc ngoài chuỗi (`claude*`, `max`) đứng yên.
  */
-const BUMP = Object.freeze({ light: "standard", standard: "deep" });
-const CODEX_BUMP = Object.freeze({ ...BUMP, deep: "max", code: "max" });
+const BUMP = Object.freeze({ light: "standard", standard: "deep", deep: "max", code: "max" });
+const ANTI_APP_BUMP = Object.freeze({ light: "standard", standard: "deep" });
 
-export function bumpTier(tier, worker = null) {
+export function bumpTier(tier, worker = null, transport = "headless") {
   assertTier(tier);
-  return (worker === "codex" ? CODEX_BUMP : BUMP)[tier] ?? tier;
+  return (worker === "antigravity" && transport === "app" ? ANTI_APP_BUMP : BUMP)[tier] ?? tier;
 }
 
 function assertTier(tier) {
@@ -176,7 +187,6 @@ export function resolveTier({ worker, transport = "headless", tier, liveAgyModel
     }
     return { tier, model, effort: row.effort };
   }
-  if ((tier === "code" || tier === "max") && !row.agy && !row.app) throw new TierError(`tier ${tier} chỉ cho Codex`);
   if (transport === "app") {
     if (!row.app) throw new TierError(`tier ${tier} không dùng được ở Anti app: agentapi chỉ nhận ${APP_TIERS.join("|")}`);
     return { tier, model: row.app, effort: null };
